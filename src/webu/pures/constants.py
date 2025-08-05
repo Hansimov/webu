@@ -35,6 +35,14 @@ COMMON_REMOVE_CLASSES = [
     "offcanvas",
     "navbar",
 ]
+GOOGLE_REMOVE_CLASSES = [
+    "searchform",
+    "botstuff",
+    "S6VXfe",  # accessibility help
+    "bottomads",  # Ads
+    "rQTE8b",  # filters and topics
+    "B6fmyf",  # duplicated search result link
+]
 COM_163_REMOVE_CLASSES = [
     "(post_)((top)|(side)|(recommends)|(crumb)|(statement)|(next)|(jubao))",
     "ntes-.*nav",
@@ -65,6 +73,7 @@ AZURE_REMOVE_CLASSES = [
 REMOVE_TAGS = [*COMMON_REMOVE_TAGS, *WIKIPEDIA_REMOVE_TAGS]
 REMOVE_CLASSES = [
     *COMMON_REMOVE_CLASSES,
+    *GOOGLE_REMOVE_CLASSES,
     *COM_163_REMOVE_CLASSES,
     *WIKIPEDIA_REMOVE_CLASSES,
     *DOC_PYTHON_REMOVE_CLASSES,

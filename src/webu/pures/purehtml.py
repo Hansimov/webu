@@ -7,7 +7,7 @@ This module is evolved from my previous projects:
 import concurrent.futures
 import re
 
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, NavigableString
 from pathlib import Path
 from tclogger import logger, logstr, PathType, PathsType, norm_path
 from typing import Union, Literal
@@ -55,6 +55,7 @@ class HTMLPurifier:
         )
 
     def filter_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
+        """Filter elements by patterns of tags, classes and ids."""
         # Remove comments
         comments = soup.find_all(string=lambda text: isinstance(text, Comment))
         comment: BeautifulSoup
@@ -125,6 +126,7 @@ class HTMLPurifier:
         return soup
 
     def filter_attrs(self, soup: BeautifulSoup) -> BeautifulSoup:
+        """Filter attrs of elements."""
         element: BeautifulSoup
         for element in soup.find_all():
             if self.is_element_protected(element):
@@ -156,6 +158,36 @@ class HTMLPurifier:
             for element in soup.find_all():
                 if purifier.match(element):
                     purifier.purify(element)
+        return soup
+
+    def flatten_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
+        """Flatten nested div elements
+        If a div only contains one child, and which is also a div, then unwrap the parent div.
+        """
+        element: BeautifulSoup
+        for element in soup.find_all("div"):
+            parent: BeautifulSoup = element.parent
+            if (
+                not parent
+                or self.is_element_protected(parent)
+                or parent.attrs.get("id")
+            ):
+                continue
+            if parent.name == "div" and len(parent.find_all(recursive=False)) == 1:
+                parent.unwrap()
+        return soup
+
+    def strip_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
+        """Strip whitespaces among tags."""
+        element: BeautifulSoup
+        for element in soup.find_all(string=True):
+            if isinstance(element, NavigableString):
+                stripped_text = element.strip()
+                if stripped_text:
+                    element.replace_with(stripped_text)
+                else:
+                    element.extract()
+
         return soup
 
     def read_html_file(self, html_path: PathType) -> str:
@@ -191,6 +223,8 @@ class HTMLPurifier:
         soup = self.filter_elements(soup)
         soup = self.filter_attrs(soup)
         soup = self.apply_extra_purifiers(soup)
+        soup = self.flatten_elements(soup)
+        soup = self.strip_elements(soup)
 
         html_str = str(soup)
         if self.output_format == "markdown":
@@ -271,60 +305,60 @@ class BatchHTMLPurifier:
 
 def purify_html_str(
     html_str: str,
-    verbose: bool = False,
     output_format: Literal["markdown", "html"] = "html",
     keep_href: bool = False,
     keep_format_tags: bool = True,
     keep_group_tags: bool = True,
     math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
+    verbose: bool = False,
 ):
     purifier = HTMLPurifier(
-        verbose=verbose,
         output_format=output_format,
         keep_href=keep_href,
         keep_format_tags=keep_format_tags,
         keep_group_tags=keep_group_tags,
         math_style=math_style,
+        verbose=verbose,
     )
     return purifier.purify_str(html_str)
 
 
 def purify_html_file(
     html_path: Union[Path, str],
-    verbose: bool = False,
     output_format: Literal["markdown", "html"] = "html",
     keep_href: bool = False,
     keep_format_tags: bool = True,
     keep_group_tags: bool = True,
     math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
+    verbose: bool = False,
 ):
     purifier = HTMLPurifier(
-        verbose=verbose,
         output_format=output_format,
         keep_href=keep_href,
         keep_format_tags=keep_format_tags,
         keep_group_tags=keep_group_tags,
         math_style=math_style,
+        verbose=verbose,
     )
     return purifier.purify_file(html_path)
 
 
 def purify_html_files(
     html_paths: list[Union[Path, str]],
-    verbose: bool = False,
     output_format: Literal["markdown", "html"] = "html",
     keep_href: bool = False,
     keep_format_tags: bool = True,
     keep_group_tags: bool = True,
     math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
+    verbose: bool = False,
 ):
     purifier = HTMLPurifier(
-        verbose=verbose,
         output_format=output_format,
         keep_href=keep_href,
         keep_format_tags=keep_format_tags,
         keep_group_tags=keep_group_tags,
         math_style=math_style,
+        verbose=verbose,
     )
     batch_purifier = BatchHTMLPurifier(purifier=purifier)
     return batch_purifier.purify_files(html_paths)
@@ -337,12 +371,12 @@ def test_purify_html_files():
     html_paths = sorted(list(html_root.glob("*.html")), key=lambda x: x.name)
     html_path_and_purified_content_list = purify_html_files(
         html_paths,
-        verbose=False,
         output_format="html",
-        keep_href=False,
+        keep_href=True,
         keep_format_tags=True,
         keep_group_tags=True,
         math_style="html",
+        verbose=False,
     )
     for item in html_path_and_purified_content_list:
         html_path = item["path"]
