@@ -3,12 +3,8 @@ import requests
 from typing import TypedDict, Optional
 from tclogger import logger, logstr, brk, PathType, norm_path
 
-from ..urls import url_to_name
+from .commons import REQUESTS_HEADERS, url_to_name
 
-
-REQUESTS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36 Edg/111.0.1661.62",
-}
 
 GOOGLE_URL = "https://www.google.com/search"
 GOOGLE_HTMLS_DIR = norm_path("./data/htmls/google")
