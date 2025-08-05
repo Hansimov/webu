@@ -1,10 +1,10 @@
-from urllib.parse import urlencode
 from DrissionPage._pages.chromium_tab import ChromiumTab
 from typing import TypedDict, Optional, Literal
 from tclogger import logger, logstr, brk, PathType, norm_path
+from urllib.parse import urlencode
 
 from ..chrome import ChromeClient
-from .commons import url_to_name
+from .commons import url_to_name, CHROME_CONFIGS
 
 
 WEIBO_SEARCH_GENERAL_URL = "https://s.weibo.com/weibo"
@@ -30,13 +30,6 @@ CHANNEL_TYPE = Literal["general", "ai", "realtime", "pic"]
 CHANNEL_DEFAULT = "realtime"
 
 
-WEIBO_CHROME_CONFIGS = {
-    "uid": "1000",
-    "port": 29001,
-    "use_vdisp": False,
-}
-
-
 class WeiboSearchConfigType(TypedDict):
     proxy: Optional[str]
     chrome_port: Optional[int]
@@ -51,7 +44,7 @@ class WeiboSearcher:
 
     def init_chrome_client(self):
         if not self.chrome_client:
-            self.chrome_client = ChromeClient(**WEIBO_CHROME_CONFIGS, proxy=self.proxy)
+            self.chrome_client = ChromeClient(**CHROME_CONFIGS, proxy=self.proxy)
             self.chrome_client.start_client()
 
     def send_request(self, query: str, channel: CHANNEL_TYPE) -> ChromiumTab:
