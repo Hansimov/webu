@@ -9,7 +9,7 @@ import re
 
 from bs4 import BeautifulSoup, Comment, NavigableString
 from pathlib import Path
-from tclogger import logger, logstr, PathType, PathsType, norm_path
+from tclogger import logger, logstr, PathType, PathsType, StrsType, norm_path
 from typing import Union, Literal
 
 from .math import MathPurifier
@@ -20,10 +20,23 @@ from .constants import (
     ENV_TAGS,
     GROUP_TAGS,
     FORMAT_TAGS,
+    IMG_TAGS,
     PROTECT_TAGS,
     PROTECT_ATTRS,
 )
 from .html2md import html2md
+
+
+def is_element_has_tags(element: BeautifulSoup, tags: StrsType) -> bool:
+    if isinstance(tags, str):
+        tags = [tags]
+    for tag in tags:
+        if element.name == tag:
+            return True
+        for child in element.find_all():
+            if child.name == tag:
+                return True
+    return False
 
 
 class HTMLPurifier:
@@ -31,15 +44,17 @@ class HTMLPurifier:
         self,
         output_format: Literal["markdown", "html"] = "html",
         keep_href: bool = False,
-        keep_format_tags: bool = True,
         keep_group_tags: bool = True,
+        keep_format_tags: bool = True,
+        keep_img_tags: bool = False,
         math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
         verbose: bool = False,
     ):
         self.output_format = output_format
         self.keep_href = keep_href
-        self.keep_format_tags = keep_format_tags
         self.keep_group_tags = keep_group_tags
+        self.keep_format_tags = keep_format_tags
+        self.keep_img_tags = keep_img_tags
         self.math_style = math_style
         self.verbose = verbose
         self.init_extra_purifiers()
@@ -50,8 +65,11 @@ class HTMLPurifier:
         ]
 
     def is_element_protected(self, element: BeautifulSoup):
-        return (element.name in PROTECT_TAGS) or any(
-            parent.name in PROTECT_TAGS for parent in element.parents
+        protect_tags = PROTECT_TAGS
+        if self.keep_img_tags:
+            protect_tags.extend(IMG_TAGS)
+        return (element.name in protect_tags) or any(
+            parent.name in protect_tags for parent in element.parents
         )
 
     def filter_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
@@ -110,8 +128,11 @@ class HTMLPurifier:
                 element.unwrap()
                 unwrapped_element_count += 1
             elif not element.get_text().strip():
-                element.extract()
-                removed_element_count += 1
+                if self.keep_img_tags and is_element_has_tags(element, IMG_TAGS):
+                    pass
+                else:
+                    element.extract()
+                    removed_element_count += 1
             else:
                 pass
         remained_element_count = len(soup.find_all())
@@ -307,16 +328,18 @@ def purify_html_str(
     html_str: str,
     output_format: Literal["markdown", "html"] = "html",
     keep_href: bool = False,
-    keep_format_tags: bool = True,
     keep_group_tags: bool = True,
+    keep_format_tags: bool = True,
+    keep_img_tags: bool = False,
     math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
     verbose: bool = False,
 ):
     purifier = HTMLPurifier(
         output_format=output_format,
         keep_href=keep_href,
-        keep_format_tags=keep_format_tags,
         keep_group_tags=keep_group_tags,
+        keep_format_tags=keep_format_tags,
+        keep_img_tags=keep_img_tags,
         math_style=math_style,
         verbose=verbose,
     )
@@ -327,16 +350,18 @@ def purify_html_file(
     html_path: Union[Path, str],
     output_format: Literal["markdown", "html"] = "html",
     keep_href: bool = False,
-    keep_format_tags: bool = True,
     keep_group_tags: bool = True,
+    keep_format_tags: bool = True,
+    keep_img_tags: bool = False,
     math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
     verbose: bool = False,
 ):
     purifier = HTMLPurifier(
         output_format=output_format,
         keep_href=keep_href,
-        keep_format_tags=keep_format_tags,
         keep_group_tags=keep_group_tags,
+        keep_format_tags=keep_format_tags,
+        keep_img_tags=keep_img_tags,
         math_style=math_style,
         verbose=verbose,
     )
@@ -347,16 +372,18 @@ def purify_html_files(
     html_paths: list[Union[Path, str]],
     output_format: Literal["markdown", "html"] = "html",
     keep_href: bool = False,
-    keep_format_tags: bool = True,
     keep_group_tags: bool = True,
+    keep_format_tags: bool = True,
+    keep_img_tags: bool = False,
     math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
     verbose: bool = False,
 ):
     purifier = HTMLPurifier(
         output_format=output_format,
         keep_href=keep_href,
-        keep_format_tags=keep_format_tags,
         keep_group_tags=keep_group_tags,
+        keep_format_tags=keep_format_tags,
+        keep_img_tags=keep_img_tags,
         math_style=math_style,
         verbose=verbose,
     )
@@ -367,14 +394,15 @@ def purify_html_files(
 def test_purify_html_files():
     from ..constants import WEBU_DATA_ROOT
 
-    html_root = WEBU_DATA_ROOT / "htmls" / "google"
-    html_paths = sorted(list(html_root.glob("*.html")), key=lambda x: x.name)
+    html_root = WEBU_DATA_ROOT / "htmls" / "weibo"
+    html_paths = sorted(list(html_root.rglob("*.html")), key=lambda x: x.name)
     html_path_and_purified_content_list = purify_html_files(
         html_paths,
         output_format="html",
         keep_href=True,
-        keep_format_tags=True,
         keep_group_tags=True,
+        keep_format_tags=True,
+        keep_img_tags=False,
         math_style="html",
         verbose=False,
     )

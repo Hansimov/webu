@@ -17,6 +17,9 @@ FONT_TAGS = ["b", "strong", "em"]
 MARK_TAGS = ["a", "i", "u", "s", "strike", "mark", "ins", "del", "cite", "blockquote"]
 FORMAT_TAGS = [*POS_TAGS, *FONT_TAGS, *MARK_TAGS]
 
+# keep img tags (not unwrap)
+IMG_TAGS = ["img"]
+
 # protect tags (no preprocessing)
 PROTECT_TAGS = ["math"]
 
@@ -67,6 +70,16 @@ AZURE_REMOVE_CLASSES = [
     "feedback",
     "ms--additional-resources",
 ]
+WEIBO_REMOVE_CLASSES = [
+    "searchapps",
+    "pl_right_side",  # 右侧边栏：热搜
+    "m-main-nav",  # 左侧边栏：综合/智搜/实时...
+    "m-page",  # 第X页
+    "ai_rule_layer",  # 微博智搜使用须知
+    "menu\ss-fr",  # 帮上头条/投诉/收藏/...
+    "card-act",  # 转发/评论
+    "(wbpv-)((menu)|(open-layer-button)|(follow-area)|(hidden)|(control-bar))",  # 视频播放控件
+]
 
 # ===================================== #
 
@@ -78,4 +91,5 @@ REMOVE_CLASSES = [
     *WIKIPEDIA_REMOVE_CLASSES,
     *DOC_PYTHON_REMOVE_CLASSES,
     *AZURE_REMOVE_CLASSES,
+    *WEIBO_REMOVE_CLASSES,
 ]
