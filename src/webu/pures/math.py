@@ -1,4 +1,5 @@
 from bs4 import BeautifulSoup
+from typing import Literal
 
 from .constants import MATH_TAGS
 
@@ -33,7 +34,11 @@ class MathPurifier:
         """
         return element.name == "math"
 
-    def purify(self, element: BeautifulSoup):
+    def purify(
+        self,
+        element: BeautifulSoup,
+        math_style: Literal["html", "latex_in_tag", "latex_block"] = "html",
+    ):
         """Used by `apply_extra_purifiers()` in class `PureHtml`."""
         self._set_math_attrs(element)
         for ele in element.find_all():
@@ -51,11 +56,11 @@ class MathPurifier:
         else:
             new_tag = BeautifulSoup("<span></span>", "html.parser").span
 
-        if self.math_style == "html":
+        if math_style == "html":
             new_tag["title"] = element.get("title", "")
             element.attrs = {}
             element.wrap(new_tag)
-        else:  # self.math_style == latex*
+        else:  # math_style == latex*
             latex_str = element.get("title", "")
             latex_str = latex_str.replace("\\displaystyle", "")
 
@@ -64,7 +69,7 @@ class MathPurifier:
             else:
                 new_tag.string = f" ${latex_str}$ "
 
-            if self.math_style == "latex_in_tag":
+            if math_style == "latex_in_tag":
                 element.replace_with(new_tag)
             else:
                 element.replace_with(new_tag.string)

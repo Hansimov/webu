@@ -21,7 +21,7 @@ from .constants import (
     GROUP_TAGS,
     FORMAT_TAGS,
     PROTECT_TAGS,
-    MATH_TAGS,
+    PROTECT_ATTRS,
 )
 from .html2md import html2md
 
@@ -54,17 +54,17 @@ class HTMLPurifier:
             parent.name in PROTECT_TAGS for parent in element.parents
         )
 
-    def filter_elements(self, html_str: str):
-        soup = BeautifulSoup(html_str, "html.parser")
-
+    def filter_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
         # Remove comments
         comments = soup.find_all(string=lambda text: isinstance(text, Comment))
+        comment: BeautifulSoup
         for comment in comments:
             comment.extract()
 
         # Remove elements with patterns of classes and ids
         removed_element_count = 0
         unwrapped_element_count = 0
+        element: BeautifulSoup
         for element in soup.find_all():
             try:
                 class_attr = element.get("class", [])
@@ -102,7 +102,6 @@ class HTMLPurifier:
                 continue
 
             is_in_keep_tags = element.name in KEEP_TAGS
-
             if is_in_protect_tags:
                 continue
 
@@ -123,13 +122,18 @@ class HTMLPurifier:
             f"/ {logstr.mesg(unwrapped_element_count)} (Unwrapped)"
         )
 
-        return str(soup)
+        return soup
 
-    def filter_attrs(self, html_str: str):
-        soup = BeautifulSoup(html_str, "html.parser")
+    def filter_attrs(self, soup: BeautifulSoup) -> BeautifulSoup:
+        element: BeautifulSoup
         for element in soup.find_all():
             if self.is_element_protected(element):
                 continue
+            protected_attrs = {
+                attr_key: element.get(attr_key)
+                for attr_key in PROTECT_ATTRS
+                if element.get(attr_key)
+            }
             if element.name == "a":
                 if self.keep_href:
                     element.attrs = {"href": element.get("href")}
@@ -143,16 +147,16 @@ class HTMLPurifier:
                     element.attrs = {}
             else:
                 element.attrs = {}
+            if protected_attrs:
+                element.attrs.update(protected_attrs)
+        return soup
 
-        return str(soup)
-
-    def apply_extra_purifiers(self, html_str: str) -> str:
-        soup = BeautifulSoup(html_str, "html.parser")
+    def apply_extra_purifiers(self, soup: BeautifulSoup) -> BeautifulSoup:
         for purifier in self.extra_purifiers:
             for element in soup.find_all():
                 if purifier.match(element):
                     purifier.purify(element)
-        return str(soup)
+        return soup
 
     def read_html_file(self, html_path: PathType) -> str:
         logger.note(f"> Purifying content in: {html_path}")
@@ -176,6 +180,26 @@ class HTMLPurifier:
             warn_msg = f"No matching encodings: {html_path}"
             logger.warn(warn_msg)
             raise UnicodeDecodeError(warn_msg)
+
+    def purify_str(self, html_str: str) -> str:
+        logger.enter_quiet(not self.verbose)
+        if not html_str:
+            return ""
+
+        soup = BeautifulSoup(html_str, "html.parser")
+
+        soup = self.filter_elements(soup)
+        soup = self.filter_attrs(soup)
+        soup = self.apply_extra_purifiers(soup)
+
+        html_str = str(soup)
+        if self.output_format == "markdown":
+            html_str = html2md(html_str).strip()
+
+        html_str = html_str.strip()
+
+        logger.exit_quiet(not self.verbose)
+        return html_str
 
     def purify_file(
         self,
@@ -206,23 +230,6 @@ class HTMLPurifier:
             "output_path": output_path,
             "output": result,
         }
-
-    def purify_str(self, html_str: str):
-        logger.enter_quiet(not self.verbose)
-        if not html_str:
-            return ""
-
-        html_str = self.filter_elements(html_str)
-        html_str = self.filter_attrs(html_str)
-        html_str = self.apply_extra_purifiers(html_str)
-
-        if self.output_format == "markdown":
-            html_str = html2md(html_str)
-
-        result = html_str.strip()
-
-        logger.exit_quiet(not self.verbose)
-        return result
 
 
 class BatchHTMLPurifier:
@@ -262,26 +269,6 @@ class BatchHTMLPurifier:
         return self.html_path_and_purified_content_list
 
 
-def purify_html_file(
-    html_path: Union[Path, str],
-    verbose: bool = False,
-    output_format: Literal["markdown", "html"] = "html",
-    keep_href: bool = False,
-    keep_format_tags: bool = True,
-    keep_group_tags: bool = True,
-    math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
-):
-    purifier = HTMLPurifier(
-        verbose=verbose,
-        output_format=output_format,
-        keep_href=keep_href,
-        keep_format_tags=keep_format_tags,
-        keep_group_tags=keep_group_tags,
-        math_style=math_style,
-    )
-    return purifier.purify_file(html_path)
-
-
 def purify_html_str(
     html_str: str,
     verbose: bool = False,
@@ -300,6 +287,26 @@ def purify_html_str(
         math_style=math_style,
     )
     return purifier.purify_str(html_str)
+
+
+def purify_html_file(
+    html_path: Union[Path, str],
+    verbose: bool = False,
+    output_format: Literal["markdown", "html"] = "html",
+    keep_href: bool = False,
+    keep_format_tags: bool = True,
+    keep_group_tags: bool = True,
+    math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
+):
+    purifier = HTMLPurifier(
+        verbose=verbose,
+        output_format=output_format,
+        keep_href=keep_href,
+        keep_format_tags=keep_format_tags,
+        keep_group_tags=keep_group_tags,
+        math_style=math_style,
+    )
+    return purifier.purify_file(html_path)
 
 
 def purify_html_files(
@@ -343,7 +350,7 @@ def test_purify_html_files():
         output_path = item["output_path"]
         # logger.line(purified_content)
         # logger.file(html_path)
-        logger.file(output_path.name)
+        logger.okay(f"* {output_path.name}")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,9 @@ FORMAT_TAGS = [*POS_TAGS, *FONT_TAGS, *MARK_TAGS]
 # protect tags (no preprocessing)
 PROTECT_TAGS = ["math"]
 
+# protect attrs (skip filtering)
+PROTECT_ATTRS = ["id", "role", "data-sncf", "data-rpos"]
+
 # https://developer.mozilla.org/en-US/docs/Web/MathML/Element
 MATH_TAGS = "math maction menclose merror mfenced mfrac mi mmultiscripts mn mo mover mpadded mphantom mroot mrow ms mspace msqrt mstyle msub msubsup msup mtable mtd mtext mtr munder munderover semantics".split()
 
