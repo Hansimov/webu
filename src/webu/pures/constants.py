@@ -40,7 +40,8 @@ COMMON_REMOVE_CLASSES = [
 ]
 GOOGLE_REMOVE_CLASSES = [
     "searchform",
-    "botstuff",
+    "top_nav",
+    "botstuff",  # people also search for
     "S6VXfe",  # accessibility help
     "bottomads",  # Ads
     "rQTE8b",  # filters and topics
