@@ -3,8 +3,9 @@ from typing import TypedDict, Optional
 from tclogger import logger, logstr, brk, PathType, norm_path
 from urllib.parse import urlencode
 
-from ..chrome import ChromeClient
-from .commons import url_to_name, PROXY_CHROME_CONFIGS
+from ..browsers.chrome import ChromeClient
+from ..files.paths import url_to_name
+from .constants import PROXY_CHROME_CONFIGS
 
 
 GOOGLE_URL = "https://www.google.com/search"

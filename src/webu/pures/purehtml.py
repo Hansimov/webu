@@ -392,7 +392,7 @@ def purify_html_files(
 
 
 def test_purify_html_files():
-    from ..constants import WEBU_DATA_ROOT
+    from ..files.paths import WEBU_DATA_ROOT
 
     html_root = WEBU_DATA_ROOT / "htmls" / "weibo"
     html_paths = sorted(list(html_root.rglob("*.html")), key=lambda x: x.name)

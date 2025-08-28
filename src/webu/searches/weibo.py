@@ -3,8 +3,9 @@ from typing import TypedDict, Optional, Literal
 from tclogger import logger, logstr, brk, PathType, norm_path
 from urllib.parse import urlencode
 
-from ..chrome import ChromeClient
-from .commons import url_to_name, CHROME_CONFIGS
+from ..browsers.chrome import ChromeClient
+from ..files.paths import url_to_name
+from .constants import CHROME_CONFIGS
 
 
 WEIBO_SEARCH_GENERAL_URL = "https://s.weibo.com/weibo"
