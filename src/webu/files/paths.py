@@ -1,4 +1,5 @@
-from tclogger import norm_path, logger, logstr
+from copy import deepcopy
+from tclogger import norm_path, logger, logstr, dict_to_str
 from urllib.parse import quote, urlparse, parse_qs, urlencode
 
 
@@ -38,91 +39,78 @@ def filter_qs(
     return urlencode(filtered_dict, doseq=True)
 
 
-def url_to_name(
-    url: str,
-    keep_scheme: bool = False,
-    keep_domain: bool = False,
-    keep_ps: bool = False,
-    keep_qs: bool = False,
-    keep_anchor: bool = False,
-    keep_slash: bool = False,
-    append_html: bool = False,
-) -> str:
+URL_SEGS_DICT = {
+    "scheme": "",
+    "domain": "",
+    "paths": [],
+    "ps": "",
+    "qs": "",
+    "anchor": "",
+}
+
+
+def url_to_segs_dict(url: str) -> dict:
     """<scheme>://<netloc>/<path>;<params>?<query>#<fragment>"""
+    segs_dict = deepcopy(URL_SEGS_DICT)
     parsed = urlparse(url)
-    p = parsed.path
-    ps = parsed.params
-    qs = parsed.query
-    anchor = parsed.fragment
-    if keep_ps and ps:
-        p += ";" + ps
-    if keep_qs and qs:
-        p += "?" + qs
-    if keep_anchor and anchor:
-        p += "#" + anchor
-    if not keep_slash and p.endswith("/"):
-        p = p.rstrip("/")
-    if p.startswith("/"):
-        p = p.lstrip("/")
-    if p and append_html and not has_suffix(p):
-        p += ".html"
-    if keep_domain:
-        p = f"{parsed.netloc}/{p}"
-    if keep_scheme:
-        p = f"{parsed.scheme}://{p}"
-    return xquote(p)
+    segs_dict["scheme"] = parsed.scheme
+    segs_dict["domain"] = parsed.netloc
+    segs_dict["paths"] = [seg for seg in parsed.path.split("/") if seg]
+    segs_dict["ps"] = parsed.params
+    segs_dict["qs"] = parsed.query
+    segs_dict["anchor"] = parsed.fragment
+    segs_dict = {
+        k: xquote(v) if isinstance(v, str) else [xquote(s) for s in v]
+        for k, v in segs_dict.items()
+    }
+    return segs_dict
 
 
-def url_to_segs(
+def url_to_segs_list(
     url: str,
-    keep_scheme: bool = False,
-    keep_domain: bool = False,
-    keep_ps: bool = False,
-    keep_qs: bool = False,
-    keep_anchor: bool = False,
-    keep_slash: bool = False,
+    keep_scheme: bool = True,
+    keep_domain: bool = True,
+    keep_ps: bool = True,
+    keep_qs: bool = True,
+    keep_anchor: bool = True,
+    prefix_slash: bool = True,
+    suffix_slash: bool = True,
     append_html: bool = False,
     seg_ps: bool = False,
     seg_qs: bool = False,
     seg_anchor: bool = False,
-) -> list[str]:
-    """<scheme>://<netloc>/<path>;<params>?<query>#<fragment>"""
+    use_quote: bool = False,
+) -> list:
+    """<scheme>://<domain>/<paths>;<ps>?<qs>#<anchor>"""
+    segs_dict = url_to_segs_dict(url)
+    scheme = segs_dict["scheme"]
+    domain = segs_dict["domain"]
+    paths: list[str] = segs_dict["paths"]
+    ps = segs_dict["ps"]
+    qs = segs_dict["qs"]
+    anchor = segs_dict["anchor"]
+
     segs = []
-
-    parsed = urlparse(url)
-    p = parsed.path
-
-    scheme = parsed.scheme
-    domain = parsed.netloc
     if keep_scheme and scheme:
         segs.append(f"{scheme}://")
     if keep_domain and domain:
         segs.append(domain)
-
-    path_segs = [seg for seg in p.split("/") if seg]
-    if path_segs:
-        pseg = path_segs[-1]
-        if not keep_slash and p.endswith("/"):
-            pseg = pseg.rstrip("/")
-        if pseg.startswith("/"):
-            pseg = pseg.lstrip("/")
-        if pseg and append_html and not has_suffix(pseg):
-            pseg += ".html"
-    else:
-        pseg = ""
-    if pseg:
-        path_segs[-1] = pseg
-    segs.extend(path_segs)
-
-    ps = parsed.params
-    qs = parsed.query
-    anchor = parsed.fragment
+    if paths:
+        if append_html and not has_suffix(paths[-1]):
+            paths[-1] = paths[-1] + ".html"
+        if not suffix_slash and paths[-1].endswith("/"):
+            paths[-1] = paths[-1].rstrip("/")
+        if prefix_slash:
+            slash_paths = [f"/{p}" for p in paths]
+            segs.extend(slash_paths)
+        else:
+            segs.extend(paths)
     if keep_ps and ps:
         ps_str = ";" + ps
         if seg_ps:
-            segs.append(";" + ps_str)
+            segs.append(ps_str)
         else:
-            segs[-1] += ";" + ps_str
+            segs[-1] += ps_str
     if keep_qs and qs:
         qs_str = "?" + qs
         if seg_qs:
@@ -135,8 +123,9 @@ def url_to_segs(
             segs.append(anchor_str)
         else:
             segs[-1] += anchor_str
-
-    return [xquote(seg) for seg in segs if seg]
+    if use_quote:
+        segs = [xquote(s) for s in segs]
+    return segs
 
 
 def url_to_domain(url: str) -> str:
@@ -144,7 +133,7 @@ def url_to_domain(url: str) -> str:
     return xquote(domain)
 
 
-def test_url_to_html_name():
+def test_url_to_segs():
     urls = [
         "scheme://netloc/path;params?query#fragment",
         "https://docs.python.org/3.14/whatsnew/3.14.html#incompatible-changes",
@@ -154,30 +143,38 @@ def test_url_to_html_name():
     ]
     for url in urls:
         logger.note(f"> {url}")
+        segs_dict = url_to_segs_dict(url)
+        logger.file(dict_to_str(segs_dict), indent=4)
+        segs_params = {
+            "keep_scheme": True,
+            "keep_domain": True,
+            "keep_ps": True,
+            "keep_qs": True,
+            "keep_anchor": True,
+            "prefix_slash": True,
+            "suffix_slash": True,
+            "append_html": True,
+            "seg_ps": True,
+            "seg_qs": True,
+            "seg_anchor": True,
+        }
+        segs_list = url_to_segs_list(url, **segs_params)
+        logger.mesg(f"  * {segs_list}")
         folder = url_to_domain(url)
-        html_name = url_to_name(
-            url,
-            keep_domain=False,
-            keep_ps=True,
-            keep_qs=True,
-            keep_anchor=False,
-            keep_slash=False,
-            append_html=True,
+        name_params = deepcopy(segs_params)
+        name_params.update(
+            {
+                "keep_scheme": False,
+                "keep_domain": False,
+            }
         )
-        logger.mesg(f"  * {folder} / {logstr.okay(html_name)}")
-        segs = url_to_segs(
-            url,
-            keep_domain=True,
-            keep_qs=True,
-            keep_anchor=True,
-            seg_qs=True,
-            seg_anchor=False,
-        )
-        segs_str = " / ".join(segs)
-        logger.file(f"  * {segs_str}")
+        name_segs = url_to_segs_list(url, **name_params)
+        name = "".join(name_segs).lstrip("/")
+        name = xquote(name)
+        logger.mesg(f"  * {folder} / {logstr.okay(name)}")
 
 
 if __name__ == "__main__":
-    test_url_to_html_name()
+    test_url_to_segs()
 
     # python -m webu.files.paths
