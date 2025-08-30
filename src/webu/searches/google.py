@@ -4,7 +4,7 @@ from tclogger import logger, logstr, brk, PathType, norm_path
 from urllib.parse import urlencode
 
 from ..browsers.chrome import ChromeClient
-from ..files.paths import url_to_name
+from ..files.paths import xquote
 from .constants import PROXY_CHROME_CONFIGS
 
 
@@ -58,7 +58,7 @@ class GoogleSearcher:
         overwrite: bool = False,
     ):
         logger.note(f"Searching: [{query}]")
-        html_name = f"{url_to_name(query)}.html"
+        html_name = f"{xquote(query)}.html"
         html_path = self.htmls_dir / html_name
         if html_path.exists() and not overwrite:
             logger.okay(f"> Existed html: {logstr.okay(brk(html_path))}")
