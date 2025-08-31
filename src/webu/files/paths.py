@@ -1,6 +1,6 @@
 from copy import deepcopy
 from tclogger import norm_path, logger, logstr, dict_to_str
-from urllib.parse import quote, urlparse, parse_qs, urlencode
+from urllib.parse import quote, unquote, urlparse, urlencode
 
 
 WEBU_LIB_ROOT = norm_path(__file__).parents[1]
@@ -17,6 +17,26 @@ def has_suffix(name: str) -> bool:
     return "." in name
 
 
+def lstrip_slash(s: str) -> str:
+    return s.lstrip("/").lstrip("%252F").lstrip("%2F")
+
+
+def qs_to_kvs(qs: str, qn: str = "?", eq: str = "=", sep: str = "&") -> dict:
+    qs = qs.strip().lstrip(qn)
+    if not qs:
+        return {}
+    kv_dict = {}
+    for kv in qs.split(sep):
+        if not kv:
+            continue
+        if eq in kv:
+            k, v = kv.split(eq, 1)
+            kv_dict[k] = v
+        else:
+            kv_dict[kv] = None
+    return kv_dict
+
+
 def filter_qs(
     qs: str, include_qs: list[str] = None, exclude_qs: list[str] = None
 ) -> str:
@@ -25,7 +45,7 @@ def filter_qs(
     if not include_qs and not exclude_qs:
         return qs
 
-    qs_dict = parse_qs(qs)
+    qs_dict = qs_to_kvs(qs)
     if include_qs and exclude_qs:
         filtered_dict = {
             k: v for k, v in qs_dict.items() if k in include_qs and k not in exclude_qs
@@ -60,8 +80,7 @@ def url_to_segs_dict(url: str) -> dict:
     segs_dict["qs"] = parsed.query
     segs_dict["anchor"] = parsed.fragment
     segs_dict = {
-        k: xquote(v) if isinstance(v, str) else [xquote(s) for s in v]
-        for k, v in segs_dict.items()
+        k: v if isinstance(v, str) else [s for s in v] for k, v in segs_dict.items()
     }
     return segs_dict
 
@@ -75,7 +94,8 @@ def url_to_segs_list(
     keep_anchor: bool = True,
     prefix_slash: bool = True,
     suffix_slash: bool = True,
-    append_html: bool = False,
+    include_qs: list[str] = [],
+    exclude_qs: list[str] = [],
     seg_ps: bool = False,
     seg_qs: bool = False,
     seg_anchor: bool = False,
@@ -96,8 +116,6 @@ def url_to_segs_list(
     if keep_domain and domain:
         segs.append(domain)
     if paths:
-        if append_html and not has_suffix(paths[-1]):
-            paths[-1] = paths[-1] + ".html"
         if not suffix_slash and paths[-1].endswith("/"):
             paths[-1] = paths[-1].rstrip("/")
         if prefix_slash:
@@ -112,11 +130,13 @@ def url_to_segs_list(
         else:
             segs[-1] += ps_str
     if keep_qs and qs:
-        qs_str = "?" + qs
-        if seg_qs:
-            segs.append(qs_str)
-        else:
-            segs[-1] += qs_str
+        qs = filter_qs(qs, include_qs=include_qs, exclude_qs=exclude_qs)
+        if qs:
+            qs_str = "?" + qs
+            if seg_qs:
+                segs.append(qs_str)
+            else:
+                segs[-1] += qs_str
     if keep_anchor and anchor:
         anchor_str = "#" + anchor
         if seg_anchor:
@@ -135,7 +155,7 @@ def url_to_domain(url: str) -> str:
 
 def test_url_to_segs():
     urls = [
-        "scheme://netloc/path;params?query#fragment",
+        "scheme://netloc/path;params?q=v#fragment",
         "https://docs.python.org/3.14/whatsnew/3.14.html#incompatible-changes",
         "https://github.com/vllm-project/vllm/blob/main/docs/serving/offline_inference.md#ray-data-llm-api",
         "https://docs.vllm.ai/en/latest/examples/online_serving/api_client.html#api-client",
@@ -153,10 +173,10 @@ def test_url_to_segs():
             "keep_anchor": True,
             "prefix_slash": True,
             "suffix_slash": True,
-            "append_html": True,
             "seg_ps": True,
             "seg_qs": True,
             "seg_anchor": True,
+            "use_quote": True,
         }
         segs_list = url_to_segs_list(url, **segs_params)
         logger.mesg(f"  * {segs_list}")
@@ -166,10 +186,11 @@ def test_url_to_segs():
             {
                 "keep_scheme": False,
                 "keep_domain": False,
+                "include_qs": ["q"],
             }
         )
         name_segs = url_to_segs_list(url, **name_params)
-        name = "".join(name_segs).lstrip("/")
+        name = lstrip_slash("".join(name_segs))
         name = xquote(name)
         logger.mesg(f"  * {folder} / {logstr.okay(name)}")
 
