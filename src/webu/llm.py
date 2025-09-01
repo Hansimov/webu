@@ -8,7 +8,7 @@ from tclogger import logger, logstr, Runtimer
 from tclogger import dict_to_str, dt_to_str, obj_param, obj_params
 from typing import Literal, TypedDict
 
-API_FORMAT_TYPE = Literal["openai", "ollama"]
+API_FORMAT_TYPE = Literal["openai", "ollama", "doubao"]
 
 
 class LLMConfigsType(TypedDict):
@@ -46,7 +46,7 @@ class LLMClient:
         model: str = None,
         stream: bool = None,
         init_messages: list = [],
-        enable_thinking: bool = None,
+        enable_thinking: bool = None,  # used by qwen3 and doubao
         delta_func: callable = None,
         terminate_event: asyncio.Event = None,
         verbose_user: bool = True,
@@ -126,7 +126,15 @@ class LLMClient:
         else:
             payload.update(options)
         if enable_thinking is not None:
-            payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+            if self.api_format == "doubao":
+                # https://www.volcengine.com/docs/82379/1585128
+                if enable_thinking:
+                    thinking_type = "enabled"
+                else:
+                    thinking_type = "disabled"
+                payload["thinking"] = {"type": thinking_type}
+            else:
+                payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
         response = requests.post(
             self.endpoint, headers=headers, json=payload, stream=stream
         )
@@ -173,16 +181,18 @@ class LLMClient:
                     finish_reason = line_data["choices"][0].get("finish_reason", None)
                 if "role" in delta_data:
                     role = delta_data["role"]
-                if delta_data.get("reasoning_content", None) is not None:
+                delta_reasoning_content = delta_data.get("reasoning_content", None)
+                if delta_reasoning_content is not None:
                     self.set_think_status()
-                    delta_content = delta_data["reasoning_content"]
+                    delta_content = delta_reasoning_content
                     if delta_content:
                         response_content += delta_content
                     logger.mesg(delta_content, end="", verbose=self.verbose_content)
-                if delta_data.get("content", None) is not None:
-                    self.reset_think_status()
+                delta_content = delta_data.get("content", None)
+                if delta_content is not None:
+                    if delta_content or delta_reasoning_content is None:
+                        self.reset_think_status()
                     try:
-                        delta_content = delta_data["content"]
                         if delta_content:
                             response_content += delta_content
                     except Exception as e:
