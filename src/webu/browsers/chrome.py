@@ -1,3 +1,4 @@
+from copy import deepcopy
 from DrissionPage import Chromium, ChromiumOptions
 from pyvirtualdisplay import Display
 from tclogger import logger, logstr, dict_to_str, PathType, norm_path, strf_path, brk
@@ -59,6 +60,8 @@ class ChromeClient:
         if self.proxy:
             chrome_options.set_proxy(self.proxy)
             info_dict["proxy"] = self.proxy
+        if self.verbose:
+            info_dict["verbose"] = self.verbose
         if info_dict:
             logger.mesg(dict_to_str(info_dict), indent=2)
         self.chrome_options = chrome_options
@@ -125,7 +128,14 @@ DEFAULT_CHROME_CLIENT_CONFIG = {
     "use_vdisp": False,
     "verbose": False,
 }
-Default_Chrome_Client = ChromeClient(**DEFAULT_CHROME_CLIENT_CONFIG)
+
+
+class ChromeClientByConfig(ChromeClient):
+    def __init__(self, config: ChromeClientConfigType = None):
+        self.config = deepcopy(DEFAULT_CHROME_CLIENT_CONFIG)
+        if config:
+            self.config.update(config)
+        super().__init__(**self.config)
 
 
 def test_chrome_client():
