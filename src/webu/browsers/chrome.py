@@ -1,6 +1,6 @@
 from DrissionPage import Chromium, ChromiumOptions
 from pyvirtualdisplay import Display
-from tclogger import logger, dict_to_str, PathType, norm_path, strf_path
+from tclogger import logger, logstr, dict_to_str, PathType, norm_path, strf_path, brk
 from typing import Union, TypedDict, Optional
 
 CHROME_USER_DATA_DIR = norm_path("~/.config/google-chrome")
@@ -12,6 +12,7 @@ class ChromeClientConfigType(TypedDict):
     proxy: Optional[str]
     user_data_dir: Optional[PathType]
     use_vdisp: Optional[bool]
+    verbose: Optional[bool]
 
 
 class ChromeClient:
@@ -22,6 +23,7 @@ class ChromeClient:
         proxy: str = None,
         user_data_dir: PathType = None,
         use_vdisp: bool = False,
+        verbose: bool = False,
     ):
         self.uid = uid
         self.port = port
@@ -30,6 +32,7 @@ class ChromeClient:
         self.is_browser_opened = False
         self.use_vdisp = use_vdisp
         self.is_using_vdisp = False
+        self.verbose = verbose
 
     def open_vdisp(self):
         if self.use_vdisp and not self.is_using_vdisp:
@@ -60,6 +63,12 @@ class ChromeClient:
             logger.mesg(dict_to_str(info_dict), indent=2)
         self.chrome_options = chrome_options
 
+    def has_browser_instance(self) -> bool:
+        return hasattr(self, "browser") and isinstance(self.browser, Chromium)
+
+    def has_browser_opened(self) -> bool:
+        return self.has_browser_instance() and self.is_browser_opened
+
     def open_browser(self):
         if self.is_browser_opened:
             return
@@ -69,7 +78,7 @@ class ChromeClient:
         self.is_browser_opened = True
 
     def close_browser(self):
-        if hasattr(self, "browser") and self.is_browser_opened:
+        if self.has_browser_opened():
             logger.note(f"> Closing browser ...")
             try:
                 self.browser.quit()
@@ -86,11 +95,37 @@ class ChromeClient:
             self.close_browser()
         self.close_vdisp()
 
+    @property
+    def latest_tab(self):
+        if self.has_browser_instance():
+            return self.browser.latest_tab
+        else:
+            return None
+
     def close_other_tabs(self, create_new_tab: bool = True):
-        if hasattr(self, "browser") and isinstance(self.browser, Chromium):
+        if self.has_browser_instance():
             if create_new_tab:
                 self.browser.new_tab()
-            self.browser.latest_tab.close(others=True)
+            self.latest_tab.close(others=True)
+
+    def get_url_html(self, url: str, interval: int = 5, timeout: int = 30) -> str:
+        logger.note(f"> URL: {logstr.mesg(url)}")
+        tab = self.latest_tab
+        tab.set.load_mode.none()
+        tab.get(url, interval=interval, timeout=timeout)
+        logger.mesg(f"  ✓ Title: {brk(tab.title)}")
+        return tab.html
+
+
+DEFAULT_CHROME_CLIENT_CONFIG = {
+    "uid": "1000",
+    "port": 29001,
+    "proxy": None,
+    "user_data_dir": CHROME_USER_DATA_DIR,
+    "use_vdisp": False,
+    "verbose": False,
+}
+Default_Chrome_Client = ChromeClient(**DEFAULT_CHROME_CLIENT_CONFIG)
 
 
 def test_chrome_client():
@@ -104,7 +139,7 @@ def test_chrome_client():
         use_vdisp=False,
     )
     client.start_client()
-    tab = client.browser.latest_tab
+    tab = client.latest_tab
     sleep(2)
     client.stop_client(close_browser=False)
 
