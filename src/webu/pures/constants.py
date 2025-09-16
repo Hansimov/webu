@@ -81,6 +81,7 @@ WEIBO_REMOVE_CLASSES = [
     "card-act",  # 转发/评论
     "(wbpv-)((menu)|(open-layer-button)|(follow-area)|(hidden)|(control-bar))",  # 视频播放控件
 ]
+WEIXIN_REMOVE_CLASSES = ["mobile-links__wrp", "weui-actionsheet", "fixed-translate"]
 
 # ===================================== #
 
@@ -93,4 +94,5 @@ REMOVE_CLASSES = [
     *DOC_PYTHON_REMOVE_CLASSES,
     *AZURE_REMOVE_CLASSES,
     *WEIBO_REMOVE_CLASSES,
+    *WEIXIN_REMOVE_CLASSES,
 ]

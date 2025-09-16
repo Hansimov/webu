@@ -7,7 +7,7 @@ This module is evolved from my previous projects:
 import concurrent.futures
 import re
 
-from bs4 import BeautifulSoup, Comment, NavigableString
+from bs4 import BeautifulSoup, Comment, NavigableString, Doctype
 from pathlib import Path
 from tclogger import logger, logstr, PathType, PathsType, StrsType, norm_path
 from typing import Union, Literal
@@ -74,6 +74,11 @@ class HTMLPurifier:
 
     def filter_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
         """Filter elements by patterns of tags, classes and ids."""
+        # Remove <!DOCTYPE ...>
+        doctype_element = soup.find(string=lambda text: isinstance(text, Doctype))
+        if doctype_element:
+            doctype_element.extract()
+
         # Remove comments
         comments = soup.find_all(string=lambda text: isinstance(text, Comment))
         comment: BeautifulSoup
