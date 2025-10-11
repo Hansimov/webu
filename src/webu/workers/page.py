@@ -97,7 +97,7 @@ def cli_args_to_output_path_format(args: argparse.Namespace) -> tuple[Path, str]
         output_path=args.output_path,
         output_ext=output_ext,
     )
-    return output_format, path
+    return path, output_format
 
 
 def test_url_pager():
@@ -120,4 +120,4 @@ def run_url_pager():
 if __name__ == "__main__":
     run_url_pager()
 
-    # python -m webu.workers.page -x "http://127.0.0.1:11111" -i "https://arxiv.org/abs/1810.04805"
+    # python -m webu.workers.page -r "./data/htmls" -x "http://127.0.0.1:11111" -i "https://arxiv.org/abs/1810.04805"

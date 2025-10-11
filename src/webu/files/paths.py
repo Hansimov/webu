@@ -101,6 +101,8 @@ def url_to_segs_list(
     seg_qs: bool = False,
     seg_anchor: bool = False,
     keep_beg_slash: bool = False,
+    replace_slash: bool = False,
+    slash_repl: str = "_",
     use_quote: bool = True,
 ) -> list:
     """<scheme>://<domain>/<paths>;<ps>?<qs>#<anchor>"""
@@ -147,6 +149,11 @@ def url_to_segs_list(
             segs[-1] += anchor_str
     if not keep_beg_slash and segs:
         segs[0] = lstrip_slash(segs[0])
+    if replace_slash:
+        # "_" to "__": as "//" is impossible in url, so we can recover "__" to "_" later
+        segs = [s.replace(slash_repl, slash_repl * 2) for s in segs]
+        # "/" to "_"
+        segs = [s.replace("/", slash_repl) for s in segs]
     if use_quote:
         segs = [xquote(s) for s in segs]
     return segs
@@ -190,7 +197,11 @@ def url_to_path(
         output_name = output_name
     elif url:
         url_segs = url_to_segs_list(
-            url, keep_scheme=False, keep_domain=False, keep_anchor=False
+            url,
+            keep_scheme=False,
+            keep_domain=False,
+            keep_anchor=False,
+            replace_slash=True,
         )
         output_name = "".join(url_segs)
     else:
