@@ -167,9 +167,9 @@ def url_to_path(
 ) -> Path:
     """Priority:
     * output_path
-    > output_root + output_dir + output_name
-    > output_root + output_name
-    > output_root + "".join([url_to_domain]+url_to_segs_list)
+    * -> output_root + output_dir + output_name
+    * -> output_root + output_name
+    * -> output_root + "".join(url_segs)
     """
     if output_path:
         return norm_path(output_path)
@@ -199,7 +199,8 @@ def url_to_path(
     if output_ext:
         if not output_ext.startswith("."):
             output_ext = "." + output_ext
-        output_name = output_name + output_ext
+        if not output_name.endswith(output_ext):
+            output_name = output_name + output_ext
 
     output_path = norm_path(output_dir / output_name)
 

@@ -138,7 +138,7 @@ class ChromeClientArgParser(argparse.ArgumentParser):
         self.add_argument("-u", "--uid", type=str)
         self.add_argument("-p", "--port", type=int)
         self.add_argument("-x", "--proxy", type=str)
-        self.add_argument("-r", "--user-data-dir", type=str)
+        self.add_argument("-c", "--user-data-dir", type=str)
         self.add_argument("-s", "--use-vdisp", action="store_true")
         self.add_argument("-v", "--verbose", action="store_true")
         self.args, _ = self.parse_known_args()
