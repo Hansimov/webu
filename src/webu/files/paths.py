@@ -1,5 +1,6 @@
 from copy import deepcopy
-from tclogger import norm_path, logger, logstr, dict_to_str
+from pathlib import Path
+from tclogger import PathType, norm_path, logger, logstr, dict_to_str
 from urllib.parse import quote, unquote, urlparse, urlencode
 
 
@@ -94,12 +95,13 @@ def url_to_segs_list(
     keep_anchor: bool = True,
     prefix_slash: bool = True,
     suffix_slash: bool = True,
-    include_qs: list[str] = [],
-    exclude_qs: list[str] = [],
+    include_qs: list[str] = None,
+    exclude_qs: list[str] = None,
     seg_ps: bool = False,
     seg_qs: bool = False,
     seg_anchor: bool = False,
-    use_quote: bool = False,
+    keep_beg_slash: bool = False,
+    use_quote: bool = True,
 ) -> list:
     """<scheme>://<domain>/<paths>;<ps>?<qs>#<anchor>"""
     segs_dict = url_to_segs_dict(url)
@@ -143,6 +145,8 @@ def url_to_segs_list(
             segs.append(anchor_str)
         else:
             segs[-1] += anchor_str
+    if not keep_beg_slash and segs:
+        segs[0] = lstrip_slash(segs[0])
     if use_quote:
         segs = [xquote(s) for s in segs]
     return segs
@@ -151,6 +155,55 @@ def url_to_segs_list(
 def url_to_domain(url: str) -> str:
     domain = urlparse(url).netloc
     return xquote(domain)
+
+
+def url_to_path(
+    url: str = None,
+    output_root: PathType = None,
+    output_dir: str = None,
+    output_name: str = None,
+    output_path: PathType = None,
+    output_ext: str = None,
+) -> Path:
+    """Priority:
+    * output_path
+    > output_root + output_dir + output_name
+    > output_root + output_name
+    > output_root + "".join([url_to_domain]+url_to_segs_list)
+    """
+    if output_path:
+        return norm_path(output_path)
+
+    if output_root:
+        output_root = norm_path(output_root)
+    else:
+        output_root = WEBU_HTML_ROOT
+
+    if output_dir:
+        output_dir = output_root / output_dir
+    elif url:
+        output_dir = output_root / url_to_domain(url)
+    else:
+        output_dir = output_root
+
+    if output_name:
+        output_name = output_name
+    elif url:
+        url_segs = url_to_segs_list(
+            url, keep_scheme=False, keep_domain=False, keep_anchor=False
+        )
+        output_name = "".join(url_segs)
+    else:
+        output_name = "index"
+
+    if output_ext:
+        if not output_ext.startswith("."):
+            output_ext = "." + output_ext
+        output_name = output_name + output_ext
+
+    output_path = norm_path(output_dir / output_name)
+
+    return output_path
 
 
 def test_url_to_segs():
@@ -195,7 +248,29 @@ def test_url_to_segs():
         logger.mesg(f"  * {folder} / {logstr.okay(name)}")
 
 
+def test_url_to_path():
+    urls = [
+        "https://docs.python.org/3.14/whatsnew/3.14.html#incompatible-changes",
+        "https://github.com/vllm-project/vllm/blob/main/docs/serving/offline_inference.md#ray-data-llm-api",
+    ]
+
+    params_str = logstr.mesg(f"(default)")
+    logger.note(f"> Params: {params_str}")
+    for url in urls:
+        logger.note(f"  > {url}")
+        path = url_to_path(url=url)
+        logger.mesg(f"    * {logstr.okay(str(path))}")
+
+    params_str = logstr.mesg(f'output_root="."')
+    logger.note(f"> Params: {params_str}")
+    for url in urls:
+        logger.note(f"  > {url}")
+        path = url_to_path(url=url, output_root=".")
+        logger.mesg(f"    * {logstr.okay(str(path))}")
+
+
 if __name__ == "__main__":
-    test_url_to_segs()
+    # test_url_to_segs()
+    test_url_to_path()
 
     # python -m webu.files.paths
