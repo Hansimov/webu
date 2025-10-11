@@ -31,7 +31,7 @@ MATH_TAGS = "math maction menclose merror mfenced mfrac mi mmultiscripts mn mo m
 
 COMMON_REMOVE_CLASSES = [
     "(?<!has)sidebar",
-    "footer",
+    "(?<!flex-wrap-)footer",
     "related",
     "comment",
     "topbar",
@@ -81,11 +81,38 @@ WEIBO_REMOVE_CLASSES = [
     "card-act",  # 转发/评论
     "(wbpv-)((menu)|(open-layer-button)|(follow-area)|(hidden)|(control-bar))",  # 视频播放控件
 ]
-WEIXIN_REMOVE_CLASSES = ["mobile-links__wrp", "weui-actionsheet", "fixed-translate"]
+WEIXIN_REMOVE_CLASSES = [
+    "mobile-links__wrp",
+    "weui-actionsheet",
+    "fixed-translate",
+    "markdown_nav_box",
+]
+ARXIV_ORG_REMOVE_TAGS = [
+    "footer",  # "Click here to ..."
+]
+ARXIV_ORG_REMOVE_CLASSES = [
+    "is-sr-only",  # "Skip to main content"
+    "support-ack",  # "We gratefully acknowledge ..." + "Donate"
+    "help",  # "Help" + "Advanced Search"
+    "labstabs",  # "Bibiographic Tools" + ...
+    # "extra-services", # "Access Paper" + ...
+    "abs-license",  # "view license"
+    "browse",  # "Current browse context"
+    "dblp",  # "DBLP - CS Bibliography"
+    "extra-ref-cite",  # "export BibTeX citation"
+    "extra-general",  # "what is this"
+    "bib-cite-modal",  # "BibTeX formatted citation"
+    "bookmarks",  # "Bookmark"
+    "endorsers",  # "Which authors of this paper ...""
+]
 
 # ===================================== #
 
-REMOVE_TAGS = [*COMMON_REMOVE_TAGS, *WIKIPEDIA_REMOVE_TAGS]
+REMOVE_TAGS = [
+    *COMMON_REMOVE_TAGS,
+    *WIKIPEDIA_REMOVE_TAGS,
+    *ARXIV_ORG_REMOVE_TAGS,
+]
 REMOVE_CLASSES = [
     *COMMON_REMOVE_CLASSES,
     *GOOGLE_REMOVE_CLASSES,
@@ -95,4 +122,5 @@ REMOVE_CLASSES = [
     *AZURE_REMOVE_CLASSES,
     *WEIBO_REMOVE_CLASSES,
     *WEIXIN_REMOVE_CLASSES,
+    *ARXIV_ORG_REMOVE_CLASSES,
 ]

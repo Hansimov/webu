@@ -50,7 +50,7 @@ class HTMLPurifier:
         math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
         verbose: bool = False,
     ):
-        self.output_format = output_format
+        self.output_format = output_format or "html"
         self.keep_href = keep_href
         self.keep_group_tags = keep_group_tags
         self.keep_format_tags = keep_format_tags
