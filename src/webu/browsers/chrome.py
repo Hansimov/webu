@@ -1,3 +1,5 @@
+import argparse
+
 from copy import deepcopy
 from DrissionPage import Chromium, ChromiumOptions
 from pyvirtualdisplay import Display
@@ -130,9 +132,36 @@ DEFAULT_CHROME_CLIENT_CONFIG = {
 }
 
 
+class ChromeClientArgParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.add_argument("-u", "--uid", type=str)
+        self.add_argument("-p", "--port", type=int)
+        self.add_argument("-x", "--proxy", type=str)
+        self.add_argument("-r", "--user-data-dir", type=str)
+        self.add_argument("-s", "--use-vdisp", action="store_true")
+        self.add_argument("-v", "--verbose", action="store_true")
+        self.args, _ = self.parse_known_args()
+
+    def to_dict(self, skip_none: bool = True) -> ChromeClientConfigType:
+        arg_keys = ["uid", "port", "proxy", "user_data_dir", "use_vdisp", "verbose"]
+        arg_kvs = {}
+        for key in arg_keys:
+            if skip_none and getattr(self.args, key) is None:
+                continue
+            arg_kvs[key] = getattr(self.args, key)
+        return arg_kvs
+
+
 class ChromeClientByConfig(ChromeClient):
+    """Priority: default config < cli args < input config"""
+
     def __init__(self, config: ChromeClientConfigType = None):
         self.config = deepcopy(DEFAULT_CHROME_CLIENT_CONFIG)
+        arg_parser = ChromeClientArgParser()
+        arg_config = arg_parser.to_dict()
+        if arg_config:
+            self.config.update(arg_config)
         if config:
             self.config.update(config)
         super().__init__(**self.config)
@@ -154,7 +183,19 @@ def test_chrome_client():
     client.stop_client(close_browser=False)
 
 
-if __name__ == "__main__":
-    test_chrome_client()
+def test_chrome_client_by_config():
+    from time import sleep
 
-    # python -m webu.chrome
+    client = ChromeClientByConfig()
+    client.start_client()
+    tab = client.latest_tab
+    sleep(2)
+    client.stop_client(close_browser=False)
+
+
+if __name__ == "__main__":
+    # test_chrome_client()
+    test_chrome_client_by_config()
+
+    # python -m webu.browsers.chrome
+    # python -m webu.browsers.chrome -u 1001 -p 29002 -x "http://127.0.0.1:11111"
