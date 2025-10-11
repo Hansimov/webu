@@ -39,9 +39,33 @@ def is_element_has_tags(element: BeautifulSoup, tags: StrsType) -> bool:
     return False
 
 
+def add_url_div(soup: BeautifulSoup, url: str, div_text: str = None) -> BeautifulSoup:
+    """Add a div tag with url info at body head.
+    <div>Page URL: <a href="{url}">{url}</a></div>
+    """
+    if not url:
+        return soup
+    url_div = soup.new_tag("div")
+    if not div_text:
+        url_div.string = "Page URL: "
+    else:
+        url_div.string = div_text
+    url_a = soup.new_tag(
+        "a", attrs={"href": url, "target": "_blank", "rel": "noreferrer"}
+    )
+    url_a.string = url
+    url_div.append(url_a)
+    if soup.body:
+        soup.body.insert(0, url_div)
+    else:
+        soup.insert(0, url_div)
+    return soup
+
+
 class HTMLPurifier:
     def __init__(
         self,
+        url: str = None,
         output_format: Literal["markdown", "html"] = "html",
         keep_href: bool = False,
         keep_group_tags: bool = True,
@@ -50,6 +74,7 @@ class HTMLPurifier:
         math_style: Literal["latex", "latex_in_tag", "html"] = "latex",
         verbose: bool = False,
     ):
+        self.url = url
         self.output_format = output_format or "html"
         self.keep_href = keep_href
         self.keep_group_tags = keep_group_tags
@@ -71,6 +96,12 @@ class HTMLPurifier:
         return (element.name in protect_tags) or any(
             parent.name in protect_tags for parent in element.parents
         )
+
+    def add_extra_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
+        """Add extra informative elements: url div."""
+        if self.url:
+            soup = add_url_div(soup, self.url)
+        return soup
 
     def filter_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
         """Filter elements by patterns of tags, classes and ids."""
@@ -204,15 +235,16 @@ class HTMLPurifier:
         return soup
 
     def strip_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
-        """Strip whitespaces among tags."""
+        """Convert whitespaces among tags from multiple to single."""
         element: BeautifulSoup
         for element in soup.find_all(string=True):
             if isinstance(element, NavigableString):
-                stripped_text = element.strip()
-                if stripped_text:
-                    element.replace_with(stripped_text)
-                else:
+                ele_str = element.string
+                if re.match("^\s+$", ele_str):
                     element.extract()
+                else:
+                    stripped_text = re.sub(r"\s+", " ", ele_str)
+                    element.replace_with(stripped_text)
 
         return soup
 
@@ -246,6 +278,7 @@ class HTMLPurifier:
 
         soup = BeautifulSoup(html_str, "html.parser")
 
+        soup = self.add_extra_elements(soup)
         soup = self.filter_elements(soup)
         soup = self.filter_attrs(soup)
         soup = self.apply_extra_purifiers(soup)
@@ -331,6 +364,7 @@ class BatchHTMLPurifier:
 
 def purify_html_str(
     html_str: str,
+    url: str = None,
     output_format: Literal["markdown", "html"] = "html",
     keep_href: bool = False,
     keep_group_tags: bool = True,
@@ -340,6 +374,7 @@ def purify_html_str(
     verbose: bool = False,
 ):
     purifier = HTMLPurifier(
+        url=url,
         output_format=output_format,
         keep_href=keep_href,
         keep_group_tags=keep_group_tags,

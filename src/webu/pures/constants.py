@@ -105,6 +105,10 @@ ARXIV_ORG_REMOVE_CLASSES = [
     "bookmarks",  # "Bookmark"
     "endorsers",  # "Which authors of this paper ...""
 ]
+HUGGINGFACE_REMOVE_CLASSES = [
+    "SVELTE_HYDRATER",  # left sidebar
+    "max-w-4xl mx-auto",  # "Join the Hugging Face ..."
+]
 
 # ===================================== #
 
@@ -123,4 +127,5 @@ REMOVE_CLASSES = [
     *WEIBO_REMOVE_CLASSES,
     *WEIXIN_REMOVE_CLASSES,
     *ARXIV_ORG_REMOVE_CLASSES,
+    *HUGGINGFACE_REMOVE_CLASSES,
 ]

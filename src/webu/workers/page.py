@@ -23,7 +23,7 @@ class UrlPager:
         self.client.start_client()
         html_str = self.client.get_url_html(url)
         pure_html_str = purify_html_str(
-            html_str, keep_href=True, output_format=output_format
+            html_str, url=url, keep_href=True, output_format=output_format
         )
         if not output_path:
             output_path = url_to_path(url=url)
