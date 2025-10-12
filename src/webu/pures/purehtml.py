@@ -12,11 +12,10 @@ from pathlib import Path
 from tclogger import logger, logstr, PathType, PathsType, StrsType, norm_path
 from typing import Union, Literal
 
-from .math import MathPurifier
-
 from .constants import (
     REMOVE_TAGS,
     REMOVE_CLASSES,
+    HEADER_TAGS,
     ENV_TAGS,
     GROUP_TAGS,
     FORMAT_TAGS,
@@ -24,6 +23,7 @@ from .constants import (
     PROTECT_TAGS,
     PROTECT_ATTRS,
 )
+from .math import MathPurifier
 from .html2md import html2md
 
 
@@ -35,6 +35,18 @@ def is_element_has_tags(element: BeautifulSoup, tags: StrsType) -> bool:
             return True
         for child in element.find_all():
             if child.name == tag:
+                return True
+    return False
+
+
+def is_element_under_tags(element: BeautifulSoup, tags: StrsType) -> bool:
+    if isinstance(tags, str):
+        tags = [tags]
+    for tag in tags:
+        if element.name == tag:
+            return True
+        for parent in element.parents:
+            if parent.name == tag:
                 return True
     return False
 
@@ -235,16 +247,25 @@ class HTMLPurifier:
         return soup
 
     def strip_elements(self, soup: BeautifulSoup) -> BeautifulSoup:
-        """Convert whitespaces among tags from multiple to single."""
+        """Strip whitespaces among tags."""
         element: BeautifulSoup
         for element in soup.find_all(string=True):
             if isinstance(element, NavigableString):
+                # if inside <pre> or <code>, skip
+                if is_element_under_tags(element, ["pre", "code"]):
+                    continue
                 ele_str = element.string
+                # if all whitespaces, remove element
                 if re.match("^\s+$", ele_str):
                     element.extract()
+                    continue
+                # if header tags, strip all whitespaces
+                if is_element_under_tags(element, HEADER_TAGS):
+                    ele_str = ele_str.strip()
+                # else, convert multiple whitespaces to single
                 else:
-                    stripped_text = re.sub(r"\s+", " ", ele_str)
-                    element.replace_with(stripped_text)
+                    ele_str = re.sub(r"\s+", " ", ele_str)
+                element.replace_with(ele_str)
 
         return soup
 
