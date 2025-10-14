@@ -8,6 +8,7 @@ import concurrent.futures
 import re
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Doctype
+from copy import deepcopy
 from pathlib import Path
 from tclogger import logger, logstr, PathType, PathsType, StrsType, norm_path
 from typing import Union, Literal
@@ -158,17 +159,17 @@ class HTMLPurifier:
                 removed_element_count += 1
 
         # Unwrap tags by [env, group, format], and remove empty elements
-        KEEP_TAGS = ENV_TAGS
+        keep_tags = deepcopy(ENV_TAGS)
         if self.keep_group_tags:
-            KEEP_TAGS.extend(GROUP_TAGS)
+            keep_tags.extend(GROUP_TAGS)
         if self.keep_format_tags:
-            KEEP_TAGS.extend(FORMAT_TAGS)
+            keep_tags.extend(FORMAT_TAGS)
 
         for element in soup.find_all():
             if self.is_element_protected(element):
                 continue
 
-            is_in_keep_tags = element.name in KEEP_TAGS
+            is_in_keep_tags = element.name in keep_tags
             if is_in_protect_tags:
                 continue
 

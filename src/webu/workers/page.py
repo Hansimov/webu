@@ -42,7 +42,10 @@ class UrlPager:
             original_path = url_to_path(url=url, output_ext=".otml")
         else:
             output_path = Path(output_path)
-            original_path = output_path.with_suffix(".otml")
+            if str(output_path).endswith(".html"):
+                original_path = output_path.with_suffix(".otml")
+            else:
+                original_path = Path(str(output_path) + ".otml")
 
         if load_original and original_path.exists():
             html_str = self.load_html_str(original_path)
