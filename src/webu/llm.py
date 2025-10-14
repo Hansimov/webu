@@ -8,14 +8,14 @@ from tclogger import logger, logstr, Runtimer
 from tclogger import dict_to_str, dt_to_str, obj_param, obj_params
 from typing import Literal, TypedDict
 
-API_FORMAT_TYPE = Literal["openai", "ollama", "doubao"]
+LlmApiType = Literal["openai", "ollama", "doubao"]
 
 
 class LLMConfigsType(TypedDict):
     endpoint: str
     api_key: str
     model: str
-    api_format: API_FORMAT_TYPE = "openai"
+    api_format: LlmApiType = "openai"
     stream: bool = None
     init_messages: list = []
     enable_thinking: bool = None
@@ -42,7 +42,7 @@ class LLMClient:
         self,
         endpoint: str,
         api_key: str,
-        api_format: API_FORMAT_TYPE = "openai",
+        api_format: LlmApiType = "openai",
         model: str = None,
         stream: bool = None,
         init_messages: list = [],
