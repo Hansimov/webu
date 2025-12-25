@@ -1,3 +1,4 @@
+import argparse
 import json
 import threading
 import netifaces
@@ -19,6 +20,9 @@ REQUESTS_HEADERS = {
 }
 
 logger = TCLogger(name="IPv6Utils")
+
+
+NDPDD_CONF = "/etc/ndppd.conf"
 
 
 class IPv6Adapter(HTTPAdapter):
@@ -340,9 +344,11 @@ class IPv6Generator:
             return random_res
 
 
-class IPv6RouteModifier:
-    def __init__(self, ndppd_conf: Union[Path, str] = None, verbose: bool = False):
-        self.ndppd_conf = ndppd_conf or Path("/etc/ndppd.conf")
+class IPv6RouteUpdater:
+    """Update route and ndppd.conf for IPv6 proxying."""
+
+    def __init__(self, ndppd_conf: PathType = None, verbose: bool = False):
+        self.ndppd_conf = ndppd_conf or Path(NDPDD_CONF)
         self.prefixer = IPv6Prefixer()
         self.prefix = self.prefixer.prefix
         self.netint = self.prefixer.netint
@@ -429,6 +435,15 @@ class IPv6RouteModifier:
         logger.note(f"> Waiting {wait_seconds} seconds for ndppd to work ...")
         time.sleep(wait_seconds)
 
+    def run(self):
+        self.add_route()
+        if self.is_ndppd_conf_latest():
+            logger.okay(f"✓ ndppd.conf is up-to-date, skip restart.")
+        else:
+            self.modify_ndppd_conf(overwrite=True)
+            self.restart_ndppd()
+            self.wait_ndppd_work()
+
 
 def test_ipv6_generator():
     generator = IPv6Generator(cache_name="ipv6_addrs_for_tags", verbose=True)
@@ -448,25 +463,41 @@ def test_ipv6_generator():
         logger.file(f"  * [{addr}]")
 
 
-def test_ipv6_route_modifier():
-    modifier = IPv6RouteModifier()
-    modifier.add_route()
-    if modifier.is_ndppd_conf_latest():
-        logger.okay(f"✓ ndppd.conf is up-to-date, skip restart.")
-    else:
-        modifier.modify_ndppd_conf(overwrite=True)
-        modifier.restart_ndppd()
-        modifier.wait_ndppd_work(wait_seconds=5)
+class IPv6Argparser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # route update
+        self.add_argument(
+            "-r",
+            "--route-update",
+            action="store_true",
+            help="RUN: Update IPv6 route and ndppd.conf for IPv6 proxying",
+        )
+        self.add_argument(
+            "-nc",
+            "--ndppd-conf",
+            type=str,
+            help=f"ndppd.conf path (default: {NDPDD_CONF})",
+            default=None,
+        )
+
+        self.args = self.parse_args()
+
+
+def main():
+    args = IPv6Argparser().args
+    if args.route_update:
+        modifier = IPv6RouteUpdater(ndppd_conf=args.ndppd_conf, verbose=True)
+        modifier.run()
 
 
 if __name__ == "__main__":
-    test_ipv6_generator()
-    test_ipv6_route_modifier()
+    main()
 
     # sudo is needed to modify ndppd.conf
 
     # Case1: Run directly, need to type sudo password
-    # sudo env "PATH=$PATH" python -m networks.ipv6.router
+    # sudo env "PATH=$PATH" python -m webu.proxies.ipv6 -r
 
     # Case2: Run with piped password
-    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m networks.ipv6.router
+    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.proxies.ipv6 -r
