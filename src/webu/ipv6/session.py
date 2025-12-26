@@ -7,12 +7,9 @@ from requests import Session
 from requests.adapters import HTTPAdapter
 from tclogger import TCLogger, logstr
 
-from .constants import (
-    SERVER_URL,
-    DBNAME,
-    SESSION_RETRY_INTERVAL,
-)
+from .constants import SERVER_URL, DBNAME, ADAPT_RETRY_INTERVAL
 from .server import AddrStatus, AddrReportInfo
+from .client import IPv6DBClient
 
 logger = TCLogger(name="IPv6Session")
 
@@ -62,63 +59,50 @@ class IPv6Session(Session):
         self,
         dbname: str = DBNAME,
         server_url: str = SERVER_URL,
-        retry_interval: float = SESSION_RETRY_INTERVAL,
+        adapt_retry_interval: float = ADAPT_RETRY_INTERVAL,
         verbose: bool = False,
     ):
         super().__init__()
         self.dbname = dbname
         self.server_url = server_url
-        self.retry_interval = retry_interval
+        self.adapt_retry_interval = adapt_retry_interval
         self.verbose = verbose
-        self.current_ip: str = None
-        self._client = None
-
-        # Force IPv6 connection
+        self.ip: str = None
+        self.client = IPv6DBClient(
+            dbname=self.dbname,
+            server_url=self.server_url,
+            verbose=self.verbose,
+        )
         IPv6SessionAdapter.force_ipv6()
 
-    def _get_client(self):
-        """Get or create IPv6DBClient instance."""
-        if self._client is None:
-            from .client import IPv6DBClient
-
-            self._client = IPv6DBClient(
-                dbname=self.dbname,
-                server_url=self.server_url,
-                verbose=self.verbose,
-            )
-        return self._client
-
-    def adapt(self) -> str:
+    def adapt(self) -> bool:
         """
         Pick ip from db, and adapt session to use that ip.
         If db is empty, would hang and wait for new addrs spawned and usable in server side.
         """
-        client = self._get_client()
 
         while True:
-            ip = client.pick()
+            ip = self.client.pick()
             if ip:
                 IPv6SessionAdapter.adapt(self, ip)
-                self.current_ip = ip
+                self.ip = ip
                 if self.verbose:
                     ip_str = logstr.okay(f"[{ip}]")
                     logger.note(f"> Adapted [{self.dbname}] to IPv6: {ip_str}")
-                return ip
+                return True
             else:
                 if self.verbose:
                     logger.warn(
-                        f"× No usable IPv6 addr for [{self.dbname}], retry in {self.retry_interval}s ..."
+                        f"× No usable IPv6 addr for [{self.dbname}], retry in {self.adapt_retry_interval}s ..."
                     )
-                time.sleep(self.retry_interval)
+                time.sleep(self.adapt_retry_interval)
+        return False
 
     def report(self, status: AddrStatus):
         """Report current addr status to server."""
-        if self.current_ip:
-            client = self._get_client()
-            report_info = AddrReportInfo(addr=self.current_ip, status=status)
-            client.report(report_info)
+        if self.ip:
+            report_info = AddrReportInfo(addr=self.ip, status=status)
+            self.client.report(report_info)
             if self.verbose:
                 status_str = logstr.okay(status.value)
-                logger.note(
-                    f"> Reported [{self.dbname}] [{self.current_ip}]: {status_str}"
-                )
+                logger.note(f"> Reported [{self.dbname}] [{self.ip}]: {status_str}")

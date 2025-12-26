@@ -2,12 +2,8 @@ import requests
 
 from tclogger import TCLogger, logstr
 
-from .constants import (
-    SERVER_URL,
-    DBNAME,
-    CLIENT_TIMEOUT,
-)
-from .server import AddrStatus, AddrReportInfo
+from .constants import SERVER_URL, DBNAME, CLIENT_TIMEOUT
+from .server import AddrReportInfo
 
 logger = TCLogger(name="IPv6DBClient")
 

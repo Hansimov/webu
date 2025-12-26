@@ -4,3 +4,5 @@ __pycache__
 .vscode
 *.log
 data/
+ipv6_mirrors/
+ipv6_global_addrs.json
