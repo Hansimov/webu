@@ -25,13 +25,14 @@ from .constants import (
     CHECK_URL,
     CHECK_TIMEOUT,
     ROUTE_CHECK_INTERVAL,
-    MAINTAIN_INTERVAL,
     SPAWN_MAX_RETRIES,
     SPAWN_MAX_ADDRS,
 )
 from .route import IPv6Prefixer, IPv6RouteUpdater
 
 logger = TCLogger(name="IPv6DBServer")
+
+_addr_suffix = IPv6Prefixer()._addr_suffix
 
 
 class AddrStatus(str, Enum):
@@ -398,7 +399,6 @@ class IPv6DBServer:
 
         # Background tasks
         self._route_monitor_task: asyncio.Task = None
-        self._spawn_task: asyncio.Task = None
 
         # Load existing mirrors
         self._load_existing_mirrors()
@@ -440,12 +440,6 @@ class IPv6DBServer:
         suffix = self._generate_random_suffix()
         return f"{self.prefix}:{suffix}"
 
-    def _addr_suffix(self, addr: str) -> str:
-        """Extract suffix part of addr for shorter logging."""
-        if self.prefix and addr.startswith(self.prefix):
-            return addr[len(self.prefix) :]
-        return addr
-
     def check(self, addr: str) -> bool:
         """Check usability of addr by making a request."""
         from .session import IPv6SessionAdapter
@@ -464,11 +458,11 @@ class IPv6DBServer:
                 else:
                     mark = "×"
                     logfunc = logger.warn
-                logfunc(f"{mark} [{result_ip}]")
+                logfunc(f"  {mark} [{_addr_suffix(result_ip)}]")
             return is_good
         except Exception as e:
             if self.verbose:
-                logger.warn(f"  × Failed : [{self._addr_suffix(addr)}]")
+                logger.warn(f"  × Failed: [{_addr_suffix(addr)}]")
             return False
 
     def checks(self, addrs: list[str]) -> list[bool]:
@@ -487,25 +481,25 @@ class IPv6DBServer:
             str: The spawned addr if successful, None if all check attempts failed.
         """
         addr = self._generate_random_addr()
-        suffix = self._addr_suffix(addr)
+        suffix = _addr_suffix(addr)
+        logger.note(f"> Spawn: [{suffix}]")
         for retry in range(SPAWN_MAX_RETRIES):
             if self.verbose:
                 if retry >= 1:
                     retry_str = logstr.mesg(f" ({retry + 1}/{SPAWN_MAX_RETRIES})")
                 else:
                     retry_str = ""
-                logger.note(f"  > Checking [{suffix}]{retry_str}")
+                logger.mesg(f"  * Check: [{suffix}]{retry_str}")
             is_good = self.check(addr)
             if is_good:
                 self.global_db.add_addr(addr)
                 # Sync to all mirrors
                 self._sync_all_mirrors()
-                if self.verbose:
-                    addr_str = logstr.okay(f"[{suffix}]")
-                    logger.note(f"> Spawned IPv6: {addr_str}")
                 return addr
         if self.verbose:
-            logger.warn(f"× Spawn failed after {SPAWN_MAX_RETRIES} retries: [{suffix}]")
+            logger.warn(
+                f"  × Spawn failed after {SPAWN_MAX_RETRIES} retries: [{suffix}]"
+            )
         return None
 
     def spawns(self, num: int = 1) -> list[str]:
@@ -546,7 +540,7 @@ class IPv6DBServer:
         mirror = self.get_mirror(dbname)
         addr = mirror.get_idle_addr()
         if self.verbose and addr:
-            addr_str = logstr.okay(f"[{self._addr_suffix(addr)}]")
+            addr_str = logstr.okay(f"[{_addr_suffix(addr)}]")
             logger.note(f"> Picked [{dbname}]: {addr_str}")
         return addr
 
@@ -568,7 +562,7 @@ class IPv6DBServer:
         if self.verbose:
             status_str = logstr.okay(report_info.status.value)
             logger.note(
-                f"> Reported [{dbname}] [{self._addr_suffix(report_info.addr)}]: {status_str}"
+                f"> Reported [{dbname}] [{_addr_suffix(report_info.addr)}]: {status_str}"
             )
         return True
 
@@ -648,57 +642,44 @@ class IPv6DBServer:
                 logger.note("> Route monitor task cancelled")
             raise
 
-    async def maintain_usable_addrs(self):
-        """Background task to maintain usable_num of addrs in global db."""
+    async def init_usable_addrs(self):
+        """Initialize usable_num of addrs in global db at startup."""
         try:
-            while True:
-                try:
-                    exist_count = len(self.global_db.get_all_addrs())
-                    if exist_count < self.usable_num:
-                        remain_count = self.usable_num - exist_count
-                        if self.verbose:
-                            count_str = logstr.mesg(
-                                f"[{exist_count}/{self.usable_num}]"
-                            )
-                            logger.note(
-                                f"> Global addrs: {count_str}; "
-                                f"need to spawn {remain_count} new addrs..."
-                            )
-                        # Run blocking spawns() in thread pool to allow cancellation
-                        spawned_addrs, should_stop = await asyncio.to_thread(
-                            self.spawns, remain_count
-                        )
-                        self.save()
-                        # If spawns() hit consecutive failure limit, stop task completely
-                        if should_stop:
-                            if self.verbose:
-                                logger.warn(
-                                    f"× Spawn stopped: got {len(spawned_addrs)}/{remain_count}, {SPAWN_MAX_ADDRS} failures. Task terminated."
-                                )
-                            return  # Exit the task completely
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
+            exist_count = len(self.global_db.get_all_addrs())
+            if exist_count < self.usable_num:
+                remain_count = self.usable_num - exist_count
+                if self.verbose:
+                    count_str = logstr.mesg(f"[{exist_count}/{self.usable_num}]")
+                    logger.note(
+                        f"> Global addrs: {count_str}; "
+                        f"need to spawn {remain_count} new addrs..."
+                    )
+                # Run blocking spawns() in thread pool
+                spawned_addrs, should_stop = await asyncio.to_thread(
+                    self.spawns, remain_count
+                )
+                self.save()
+                # Log result
+                if should_stop:
                     if self.verbose:
-                        logger.warn(f"× Maintain addrs error: {e}")
-                await asyncio.sleep(MAINTAIN_INTERVAL)
-        except asyncio.CancelledError:
+                        logger.warn(
+                            f"× Spawn stopped: got {len(spawned_addrs)}/{remain_count}, {SPAWN_MAX_ADDRS} failures."
+                        )
+                elif self.verbose:
+                    logger.okay(f"✓ Spawned {len(spawned_addrs)} new addrs")
+        except Exception as e:
             if self.verbose:
-                logger.note("> Maintain addrs task cancelled")
-            raise
+                logger.warn(f"× Init addrs error: {e}")
 
     def start_background_tasks(self):
-        """Start background tasks for route monitoring and addr maintenance."""
+        """Start background tasks for route monitoring."""
         loop = asyncio.get_event_loop()
         self._route_monitor_task = loop.create_task(self.monitor_route())
-        self._spawn_task = loop.create_task(self.maintain_usable_addrs())
 
     def stop_background_tasks(self):
         """Stop background tasks."""
         if self._route_monitor_task:
             self._route_monitor_task.cancel()
-        if self._spawn_task:
-            self._spawn_task.cancel()
 
     def get_global_stats(self) -> dict:
         """Get global database statistics."""
@@ -749,6 +730,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup
+        await server.init_usable_addrs()
         server.start_background_tasks()
         if verbose:
             logger.okay("✓ IPv6DBServer started")

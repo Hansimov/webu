@@ -70,6 +70,12 @@ class IPv6Prefixer:
         self.prefix = prefix
         self.prefix_bits = prefix_bits
 
+    def _addr_suffix(self, addr: str) -> str:
+        """Extract suffix part of addr for shorter logging."""
+        if self.prefix and addr.startswith(self.prefix):
+            return addr[len(self.prefix) :]
+        return addr
+
 
 class IPv6RouteUpdater:
     """Update route and ndppd.conf for IPv6 proxying."""

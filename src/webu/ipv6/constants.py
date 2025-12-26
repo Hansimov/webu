@@ -7,7 +7,7 @@ DB_ROOT = Path(__file__).parent
 DBNAME = "default"
 GLOBAL_DB_FILE = "ipv6_global_addrs.json"
 MIRROR_DB_DIR = "ipv6_mirrors"
-USABLE_NUM = 10
+USABLE_NUM = 20
 
 # ========== Server ==========
 SERVER_HOST = "0.0.0.0"
@@ -22,8 +22,7 @@ CHECK_TIMEOUT = 5.0
 CLIENT_TIMEOUT = 10.0
 ADAPT_RETRY_INTERVAL = 5.0
 ADAPT_MAX_RETRIES = 15
-ROUTE_CHECK_INTERVAL = 60.0
-MAINTAIN_INTERVAL = 10.0
+ROUTE_CHECK_INTERVAL = 1800.0  # 30min
 
 # ========== Spawn ==========
 SPAWN_MAX_RETRIES = 3
