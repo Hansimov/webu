@@ -1,17 +1,6 @@
 # Ipv6 Module
 
-IPv6 route, proxy, pool, and manager.
-
 ## `route.py`
-
-### `class IPv6Prefixer`
-
-Helper class of `class IPv6RouteUpdater`.
-
-Auto init `netint` and `prefix`, used by :
-- `self.netint`
-- `self.prefix`
-- `def addr_to_segs()`
 
 ### `class IPv6RouteUpdater`
 
@@ -21,75 +10,77 @@ Update IPv6 routes using `ndppd` and `ip route add`:
 - `def is_ndppd_conf_latest`
 - `def modify_ndppd_conf`
 
+Use helper `class IPv6Prefixer`: init `self.netint` and `self.prefix`
+
 ## `session.py`
 
-### `class IPv6SessionAdapter`
+### `class IPv6Session`
 
-Helper class of `class IPv6Session`.
+Inherits from `requests.Session`, and supports force ipv6 connection, and auto use new ipv6 addr from db.
 
-Adapter to force connect via IPv6 in requests sessions. 
+Could be used directly by outside scraper.
+
+- `def adapt()`: pick ip from db, and adapt session to use that ip.
+
+Use helper `class IPv6SessionAdapter`:
 - `def force_ipv4()`
 - `def force_ipv6()`
 - `def adapt(session, ip)`
 
+## `server.py`
 
-### `class IPv6Session`
+### `class IPv6DBServer`
 
-Inherits from `requests.Session`, and supports force ipv6 connection, and auto use new ipv6 addr from pool.
+- `def spawn()->str`: Spawn random IPv6 addr not in db
+- `def pick()->str`: Pick usable and not-using addr from db
+- `def check(addr:str)->bool`: check usability of addr
+- `def report(addr:str, usable:bool)->bool`: report addr usability and status
 
-Could be used directly by outside scraper.
+For batch operations:
 
-- `def adapt()`: pick ip from pool, and adapt session to use that ip.
+- `def spawns(num:int=1)->list[str]`
+- `def picks(num:int=1)->list[str]`
+- `def checks(addr:list[str])->list[bool]`
+- `def reports(addrs:list[str], usables:list[bool])->bool`
 
-## `pool.py`
+## `client.py`
 
-### `class IPv6Checker`
+### `class IPv6DBClient`
 
-Helper class of `IPv6Spawner`.
+- `pick()->str`: Pick usable and not-using addr from server
+- `report(addr:str, usable:bool)`: report addr usability to server
 
-Check ipv6 addr usability.
+For batch operations:
 
-- `def check(addr)`
-- `def checks(addrs)`
+- `picks(num:int=1)->list[str]`
+- `reports(addrs:list[str], usables:list[bool])`
 
-### `class IPv6Spawner`
-
-- `def spawn(num:int=1)`: Spawn random IPv6 address not in pool.
-
-
-### `class IPv6Picker`
-
-Used by `class IPv6Session`.
-
-Pick IPv6 address from pool.
-
-### `class IPv6Database`
-
-- `def exists(addr)`
-- `def push(addr)`
-- `def pop(addr)`
-- `def len()`
-
-### `class IPv6Pool`
-
-
-## How to use in scraper
+## How to use
 
 ### scraper side
-- `IPv6Session` could be instantiated as `session` in scraper
-- if current ipv6 addr is unusable, call `session.adapt()` to switch to use a new addr from pool
-- if pool is empty, `adapt()` would hang, and wait for new addrs spawned and available
+- `IPv6Session` is instantiated as `session` in scraper
+- if current ipv6 addr is unusable, call `session.adapt()` to use a new addr, which calls `IPv6DBClient.pick()`
+- if db is empty, `adapt()` would hang, and wait for new addrs spawned and usable in server side
 
-### pool side
-- `IPv6Pool` is used by `IPv6Session`, and pool is consited of `IPv6Database`, `IPv6Picker` and `IPv6Spawner`
-- `IPv6Database` manages the ipv6 addrs cache, storage and flush
-- `IPv6Picker` picks good and not-using addrs from database
-- `IPv6Spawner` spawns new random addrs, and it would use `IPv6Checker` to check addr usability
+### database client side
 
-### database side
+- `IPv6DBClient` is used by `IPv6Session`
+- communicates with `IPv6DBServer`
+- `pick()` return good and not-using addrs from server
+- `report(addr, usable)` report addr usability to server
 
-- `IPv6Database` uses `json` as persistent storage, and `IPv6Cacher` as in-memory cache
-- it contains `IPv6Cacher` and `IPv6Storage`
-- `IPv6Cacher` manages in-memory cache of addrs, and has methods like `push()`, `pop()`, `exists()`, `len()`
-- `IPv6Storage` manages persistent storage of addrs, and has methods like `load()`, `save()`, `flush()`
-- should run as a service
+### database server side
+
+`IPv6DBServer`: (fastapi server)
+
+- `dbname`: name of database, to maintain status and usability of addrs in different tasks or groups
+- `usable_num`: number of real-time usable addrs to maintain in db
+
+- `save()/load()/flush()`: sync between in-memory cache and persistent storage
+
+- `check()/checks()` checks addr usability
+- `spawn()/spawns()` creates new addrs, and ensures: random, not in db, usable
+- `pick()/picks()` returns usable and not-using addrs
+
+- `report()/reports()` reports addr usability and status
+- `monitor_route()/update_route()`: monitor ipv6 prefix change of local network periodically, and update routes accordingly via `IPv6RouteUpdater` if change happens
