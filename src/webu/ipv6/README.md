@@ -1,5 +1,7 @@
 # Ipv6 Module
 
+NOTE: APIs are in rapid change, refer to latest codes though.
+
 ## `route.py`
 
 ### `class IPv6RouteUpdater`
@@ -41,7 +43,7 @@ For batch operations:
 - `def spawns(num:int=1)->list[str]`
 - `def picks(num:int=1)->list[str]`
 - `def checks(addr:list[str])->list[bool]`
-- `def reports(addrs:list[str], usables:list[bool])->bool`
+- `def reports(addr_usables:list[tuple[str,bool]])->bool`
 
 ## `client.py`
 
@@ -53,7 +55,7 @@ For batch operations:
 For batch operations:
 
 - `picks(num:int=1)->list[str]`
-- `reports(addrs:list[str], usables:list[bool])`
+- `reports(addr_usables:list[tuple[str,bool]])->bool`
 
 ## How to use
 
