@@ -15,14 +15,16 @@ SERVER_PORT = 16000
 SERVER_URL = f"http://localhost:{SERVER_PORT}"
 
 # ========== Check ==========
-CHECK_URL = "https://ipv6.icanhazip.com"
-CHECK_TIMEOUT = 10.0
+CHECK_URL = "https://test.ipw.cn"
+CHECK_TIMEOUT = 5.0
 
 # ========== Timeouts and Intervals ==========
 CLIENT_TIMEOUT = 10.0
 ADAPT_RETRY_INTERVAL = 5.0
+ADAPT_MAX_RETRIES = 15
 ROUTE_CHECK_INTERVAL = 60.0
 MAINTAIN_INTERVAL = 10.0
 
 # ========== Spawn ==========
-MAX_SPAWN_ATTEMPTS = 100
+SPAWN_MAX_RETRIES = 3
+SPAWN_MAX_ADDRS = 3  # Stop spawning after this many consecutive failures

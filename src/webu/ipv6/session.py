@@ -7,7 +7,8 @@ from requests import Session
 from requests.adapters import HTTPAdapter
 from tclogger import TCLogger, logstr
 
-from .constants import SERVER_URL, DBNAME, ADAPT_RETRY_INTERVAL
+from .constants import SERVER_URL, DBNAME
+from .constants import ADAPT_RETRY_INTERVAL, ADAPT_MAX_RETRIES
 from .server import AddrStatus, AddrReportInfo
 from .client import IPv6DBClient
 
@@ -60,12 +61,14 @@ class IPv6Session(Session):
         dbname: str = DBNAME,
         server_url: str = SERVER_URL,
         adapt_retry_interval: float = ADAPT_RETRY_INTERVAL,
+        adapt_max_retries: int = ADAPT_MAX_RETRIES,
         verbose: bool = False,
     ):
         super().__init__()
         self.dbname = dbname
         self.server_url = server_url
         self.adapt_retry_interval = adapt_retry_interval
+        self.adapt_max_retries = adapt_max_retries
         self.verbose = verbose
         self.ip: str = None
         self.client = IPv6DBClient(
@@ -79,23 +82,35 @@ class IPv6Session(Session):
         """
         Pick ip from db, and adapt session to use that ip.
         If db is empty, would hang and wait for new addrs spawned and usable in server side.
-        """
 
-        while True:
-            ip = self.client.pick()
-            if ip:
-                IPv6SessionAdapter.adapt(self, ip)
-                self.ip = ip
+        Returns:
+            True if successfully adapted, False otherwise.
+
+        Raises:
+            KeyboardInterrupt: If interrupted by Ctrl+C.
+        """
+        retries = 0
+        while self.adapt_max_retries is None or retries <= self.adapt_max_retries:
+            try:
+                ip = self.client.pick()
+                if ip:
+                    IPv6SessionAdapter.adapt(self, ip)
+                    self.ip = ip
+                    if self.verbose:
+                        ip_str = logstr.okay(f"[{ip}]")
+                        logger.note(f"> Adapted [{self.dbname}] to IPv6: {ip_str}")
+                    return True
+                else:
+                    if self.verbose:
+                        logger.warn(
+                            f"× No usable IPv6 addr for [{self.dbname}], retry in {self.adapt_retry_interval}s ..."
+                        )
+                    time.sleep(self.adapt_retry_interval)
+                    retries += 1
+            except KeyboardInterrupt:
                 if self.verbose:
-                    ip_str = logstr.okay(f"[{ip}]")
-                    logger.note(f"> Adapted [{self.dbname}] to IPv6: {ip_str}")
-                return True
-            else:
-                if self.verbose:
-                    logger.warn(
-                        f"× No usable IPv6 addr for [{self.dbname}], retry in {self.adapt_retry_interval}s ..."
-                    )
-                time.sleep(self.adapt_retry_interval)
+                    logger.warn(f"× Adapt [{self.dbname}] interrupted by user")
+                raise
         return False
 
     def report(self, status: AddrStatus):
