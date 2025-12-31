@@ -382,6 +382,14 @@ class IPv6DBServer:
 # ========== FastAPI Application ==========
 
 
+class CheckRequest(BaseModel):
+    addr: str
+
+
+class ChecksRequest(BaseModel):
+    addrs: list[str]
+
+
 class ReportRequestItem(BaseModel):
     addr: str
     status: str  # AddrStatus value
@@ -431,6 +439,16 @@ def create_app(
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
     )
 
+    @app.get(
+        "/stats",
+        summary="Get statistics. If dbname is None, return global stats. Otherwise, return stats for specific mirror.",
+    )
+    async def stats(dbname: str = Query(default=None)):
+        if dbname is None:
+            return server.get_global_stats()
+        else:
+            return server.get_mirror_stats(dbname)
+
     @app.get("/spawn", summary="Spawn a new random IPv6 addr to global db")
     async def spawn():
         addr = server.spawn()
@@ -454,15 +472,15 @@ def create_app(
         addrs = server.picks(dbname, num)
         return {"success": len(addrs) > 0, "addrs": addrs, "dbname": dbname}
 
-    @app.get("/check", summary="Check usability of an addr")
-    async def check(addr: str):
-        usable = server.check(addr)
-        return {"success": True, "addr": addr, "usable": usable}
+    @app.post("/check", summary="Check usability of an addr")
+    async def check(req: CheckRequest):
+        usable = server.check(req.addr)
+        return {"success": True, "addr": req.addr, "usable": usable}
 
-    @app.get("/checks", summary="Check usability of multiple addrs")
-    async def checks(addrs: list[str]):
-        usables = server.checks(addrs)
-        return {"success": True, "results": dict(zip(addrs, usables))}
+    @app.post("/checks", summary="Check usability of multiple addrs")
+    async def checks(req: ChecksRequest):
+        usables = server.checks(req.addrs)
+        return {"success": True, "results": dict(zip(req.addrs, usables))}
 
     @app.post("/report", summary="Report addr status to specific dbname's mirror")
     async def report(req: ReportRequest):
@@ -483,16 +501,6 @@ def create_app(
         ]
         success = server.reports(req.dbname, report_infos)
         return {"success": success, "dbname": req.dbname}
-
-    @app.get(
-        "/stats",
-        summary="Get statistics. If dbname is None, return global stats. Otherwise, return stats for specific mirror.",
-    )
-    async def stats(dbname: str = Query(default=None)):
-        if dbname is None:
-            return server.get_global_stats()
-        else:
-            return server.get_mirror_stats(dbname)
 
     @app.post("/save", summary="Save all databases to persistent storage")
     async def save():
