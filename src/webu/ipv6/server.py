@@ -434,10 +434,13 @@ def create_app(
 
     app = FastAPI(
         title="IPv6DBServer",
-        docs_url="/",
+        docs_url=None,
         lifespan=lifespan,
-        swagger_ui_parameters={"defaultModelsExpandDepth": -1},
     )
+
+    from ..fastapis.styles import setup_swagger_ui
+
+    setup_swagger_ui(app)
 
     @app.get(
         "/stats",
