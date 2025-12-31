@@ -9,6 +9,7 @@ from tclogger import TCLogger, logstr
 
 from .constants import SERVER_URL, DBNAME
 from .constants import ADAPT_RETRY_INTERVAL, ADAPT_MAX_RETRIES
+from .constants import REQUESTS_HEADERS
 from .server import AddrStatus, AddrReportInfo
 from .client import IPv6DBClient
 
@@ -62,6 +63,7 @@ class IPv6Session(Session):
         server_url: str = SERVER_URL,
         adapt_retry_interval: float = ADAPT_RETRY_INTERVAL,
         adapt_max_retries: int = ADAPT_MAX_RETRIES,
+        headers: dict = None,
         verbose: bool = False,
     ):
         super().__init__()
@@ -70,13 +72,14 @@ class IPv6Session(Session):
         self.adapt_retry_interval = adapt_retry_interval
         self.adapt_max_retries = adapt_max_retries
         self.verbose = verbose
-        self.ip: str = None
+        self.headers.update(headers or REQUESTS_HEADERS)
         self.client = IPv6DBClient(
             dbname=self.dbname,
             server_url=self.server_url,
             verbose=self.verbose,
         )
-        IPv6SessionAdapter.force_ipv6()
+        self.ip = None
+        self.adapt()
 
     def adapt(self) -> bool:
         """
@@ -95,6 +98,7 @@ class IPv6Session(Session):
                 ip = self.client.pick()
                 if ip:
                     IPv6SessionAdapter.adapt(self, ip)
+                    IPv6SessionAdapter.force_ipv6()
                     self.ip = ip
                     if self.verbose:
                         ip_str = logstr.okay(f"[{ip}]")

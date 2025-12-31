@@ -1,4 +1,6 @@
 import requests
+import requests.packages.urllib3.util.connection as urllib3_cn
+import socket
 
 from tclogger import TCLogger, logstr
 
@@ -32,9 +34,11 @@ class IPv6DBClient:
     def _request(
         self, method: str, endpoint: str, params: dict = None, json: dict = None
     ) -> dict:
-        """Make HTTP request to server."""
+        """request to server (via IPv4)"""
         url = f"{self.server_url}{endpoint}"
         try:
+            # force IPv4 for client-server communication
+            urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
             response = requests.request(
                 method=method,
                 url=url,
