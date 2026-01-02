@@ -454,13 +454,19 @@ def create_app(
 
     @app.get("/spawn", summary="Spawn a new random IPv6 addr to global db")
     async def spawn():
-        addr = server.spawn()
+        addr = await asyncio.to_thread(server.spawn)
         return {"success": addr is not None, "addr": addr}
 
     @app.get("/spawns", summary="Spawn multiple new random IPv6 addrs to global db")
     async def spawns(num: int = Query(default=1, ge=1, le=100)):
-        addrs = server.spawns(num)
-        return {"success": len(addrs) > 0, "addrs": addrs}
+        addrs, should_stop = await asyncio.to_thread(server.spawns, num)
+        return {
+            "success": len(addrs) > 0,
+            "addrs": addrs,
+            "should_stop": should_stop,
+            "spawned_count": len(addrs),
+            "requested_count": num,
+        }
 
     @app.get("/pick", summary="Pick an idle addr from specific dbname's mirror")
     async def pick(dbname: str = Query(default=DBNAME)):
@@ -472,17 +478,17 @@ def create_app(
         dbname: str = Query(default=DBNAME),
         num: int = Query(default=1, ge=1, le=100),
     ):
-        addrs = server.picks(dbname, num)
+        addrs = await asyncio.to_thread(server.picks, dbname, num)
         return {"success": len(addrs) > 0, "addrs": addrs, "dbname": dbname}
 
     @app.post("/check", summary="Check usability of an addr")
     async def check(req: CheckRequest):
-        usable = server.check(req.addr)
+        usable = await asyncio.to_thread(server.check, req.addr)
         return {"success": True, "addr": req.addr, "usable": usable}
 
     @app.post("/checks", summary="Check usability of multiple addrs")
     async def checks(req: ChecksRequest):
-        usables = server.checks(req.addrs)
+        usables = await asyncio.to_thread(server.checks, req.addrs)
         return {"success": True, "results": dict(zip(req.addrs, usables))}
 
     @app.post("/report", summary="Report addr status to specific dbname's mirror")
@@ -502,12 +508,12 @@ def create_app(
             AddrReportInfo(addr=item.addr, status=AddrStatus(item.status))
             for item in req.report_infos
         ]
-        success = server.reports(req.dbname, report_infos)
+        success = await asyncio.to_thread(server.reports, req.dbname, report_infos)
         return {"success": success, "dbname": req.dbname}
 
     @app.post("/save", summary="Save all databases to persistent storage")
     async def save():
-        server.save()
+        await asyncio.to_thread(server.save)
         return {"success": True}
 
     @app.post(
@@ -515,7 +521,7 @@ def create_app(
         summary="Flush database. If dbname is None, flush global and all mirrors. Otherwise, flush only the specified mirror.",
     )
     async def flush(dbname: str = Query(default=None)):
-        server.flush(dbname)
+        await asyncio.to_thread(server.flush, dbname)
         return {"success": True, "dbname": dbname}
 
     return app
