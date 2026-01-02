@@ -102,13 +102,12 @@ class IPv6Session(Session):
                     self.ip = ip
                     if self.verbose:
                         ip_str = logstr.okay(f"[{ip}]")
-                        logger.note(f"> Adapted [{self.dbname}] to IPv6: {ip_str}")
+                        logger.note(f"> Adapted IPv6: {ip_str}")
                     return True
                 else:
-                    if self.verbose:
-                        logger.warn(
-                            f"× No usable IPv6 addr for [{self.dbname}], retry in {self.adapt_retry_interval}s ..."
-                        )
+                    logger.warn(
+                        f"× No usable IPv6 addr, retry in {self.adapt_retry_interval}s ..."
+                    )
                     time.sleep(self.adapt_retry_interval)
                     retries += 1
             except KeyboardInterrupt:

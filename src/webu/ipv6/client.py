@@ -117,3 +117,52 @@ class IPv6DBClient:
                 logger.note(f"> Reported [{self.dbname}] {len(report_infos)} addrs")
             return True
         return False
+
+    def reset(self, addr: str) -> bool:
+        """Reset addr status to IDLE in server for this dbname."""
+        result = self._request(
+            "POST",
+            "/reset",
+            json={
+                "dbname": self.dbname,
+                "addr": addr,
+            },
+        )
+        if result and result.get("success"):
+            if self.verbose:
+                logger.note(f"> Reset [{self.dbname}] [{addr}] to IDLE")
+            return True
+        return False
+
+    def resets(self, addrs: list[str]) -> int:
+        """Reset multiple addrs status to IDLE in server for this dbname."""
+        result = self._request(
+            "POST",
+            "/resets",
+            json={
+                "dbname": self.dbname,
+                "addrs": addrs,
+            },
+        )
+        if result and result.get("success"):
+            count = result.get("reset_count", 0)
+            if self.verbose:
+                logger.note(
+                    f"> Reset [{self.dbname}] {count}/{len(addrs)} addrs to IDLE"
+                )
+            return count
+        return 0
+
+    def reset_all(self) -> int:
+        """Reset all addrs status to IDLE in server for this dbname."""
+        result = self._request(
+            "POST",
+            "/reset_all",
+            params={"dbname": self.dbname},
+        )
+        if result and result.get("success"):
+            count = result.get("reset_count", 0)
+            if self.verbose:
+                logger.note(f"> Reset all [{self.dbname}] {count} addrs to IDLE")
+            return count
+        return 0

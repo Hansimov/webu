@@ -257,6 +257,30 @@ class IPv6DBServer:
             self.report(dbname, report_info)
         return True
 
+    def reset(self, dbname: str, addr: str) -> bool:
+        """Reset addr status to IDLE in specific dbname's mirror."""
+        mirror = self.get_mirror(dbname)
+        success = mirror.reset_addr(addr)
+        if self.verbose and success:
+            logger.note(f"> Reset [{dbname}] [{_addr_suffix(addr)}] to IDLE")
+        return success
+
+    def resets(self, dbname: str, addrs: list[str]) -> int:
+        """Reset multiple addrs status to IDLE in specific dbname's mirror."""
+        mirror = self.get_mirror(dbname)
+        count = mirror.reset_addrs(addrs)
+        if self.verbose:
+            logger.note(f"> Reset [{dbname}] {count}/{len(addrs)} addrs to IDLE")
+        return count
+
+    def reset_all(self, dbname: str) -> int:
+        """Reset all addrs status to IDLE in specific dbname's mirror."""
+        mirror = self.get_mirror(dbname)
+        count = mirror.reset_all()
+        if self.verbose:
+            logger.note(f"> Reset all [{dbname}] {count} addrs to IDLE")
+        return count
+
     def save(self):
         """Save global db and all mirrors to persistent storage."""
         self.global_db.save()
@@ -407,6 +431,16 @@ class ReportRequest(BaseModel):
 class ReportsRequest(BaseModel):
     dbname: str = DBNAME
     report_infos: list[ReportRequestItem]
+
+
+class ResetRequest(BaseModel):
+    dbname: str = DBNAME
+    addr: str
+
+
+class ResetsRequest(BaseModel):
+    dbname: str = DBNAME
+    addrs: list[str]
 
 
 # ========== Response Models ==========
@@ -659,6 +693,66 @@ class FlushResponse(BaseModel):
     }
 
 
+class ResetResponse(BaseModel):
+    """Response for resetting a single address status."""
+
+    success: bool
+    dbname: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "dbname": "default",
+                }
+            ]
+        }
+    }
+
+
+class ResetsResponse(BaseModel):
+    """Response for resetting multiple addresses status."""
+
+    success: bool
+    dbname: str
+    reset_count: int
+    total_count: int
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "dbname": "default",
+                    "reset_count": 5,
+                    "total_count": 5,
+                }
+            ]
+        }
+    }
+
+
+class ResetAllResponse(BaseModel):
+    """Response for resetting all addresses status."""
+
+    success: bool
+    dbname: str
+    reset_count: int
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "dbname": "default",
+                    "reset_count": 223,
+                }
+            ]
+        }
+    }
+
+
 def create_app(
     db_root: Path = None,
     usable_num: int = USABLE_NUM,
@@ -795,6 +889,38 @@ def create_app(
         ]
         success = await asyncio.to_thread(server.reports, req.dbname, report_infos)
         return {"success": success, "dbname": req.dbname}
+
+    @app.post(
+        "/reset",
+        response_model=ResetResponse,
+        summary="Reset addr status to IDLE in specific dbname's mirror",
+    )
+    async def reset(req: ResetRequest):
+        success = await asyncio.to_thread(server.reset, req.dbname, req.addr)
+        return {"success": success, "dbname": req.dbname}
+
+    @app.post(
+        "/resets",
+        response_model=ResetsResponse,
+        summary="Reset multiple addrs status to IDLE in specific dbname's mirror",
+    )
+    async def resets(req: ResetsRequest):
+        count = await asyncio.to_thread(server.resets, req.dbname, req.addrs)
+        return {
+            "success": count > 0,
+            "dbname": req.dbname,
+            "reset_count": count,
+            "total_count": len(req.addrs),
+        }
+
+    @app.post(
+        "/reset_all",
+        response_model=ResetAllResponse,
+        summary="Reset all addrs status to IDLE in specific dbname's mirror",
+    )
+    async def reset_all(dbname: str = Query(default=DBNAME)):
+        count = await asyncio.to_thread(server.reset_all, dbname)
+        return {"success": count > 0, "dbname": dbname, "reset_count": count}
 
     @app.post(
         "/save",

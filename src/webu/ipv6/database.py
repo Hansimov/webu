@@ -307,6 +307,32 @@ class MirrorIPv6DB:
                 info = self.addrs[report_info.addr]
                 info.status = report_info.status
 
+    def reset_addr(self, addr: str) -> bool:
+        """Reset addr status to IDLE."""
+        with self._lock:
+            if addr in self.addrs:
+                self.addrs[addr].status = AddrStatus.IDLE
+                return True
+            return False
+
+    def reset_addrs(self, addrs: list[str]) -> int:
+        """Reset multiple addrs status to IDLE. Returns count of successfully reset addrs."""
+        count = 0
+        with self._lock:
+            for addr in addrs:
+                if addr in self.addrs:
+                    self.addrs[addr].status = AddrStatus.IDLE
+                    count += 1
+        return count
+
+    def reset_all(self) -> int:
+        """Reset all addrs status to IDLE. Returns count of reset addrs."""
+        with self._lock:
+            count = len(self.addrs)
+            for info in self.addrs.values():
+                info.status = AddrStatus.IDLE
+        return count
+
     def get_stats(self) -> dict:
         """Get statistics for this mirror."""
         with self._lock:
