@@ -35,7 +35,7 @@ class AddrStatus(str, Enum):
 
     IDLE = "idle"  # usable and not in use
     USING = "using"  # currently in use
-    UNUSABLE = "unusable"  # marked as unusable
+    BAD = "bad"  # marked as bad
 
 
 class GlobalAddrInfo:
@@ -120,7 +120,7 @@ class AddrReportInfo:
     def from_dict(cls, data: dict) -> "AddrReportInfo":
         return cls(
             addr=data["addr"],
-            status=AddrStatus(data.get("status", "unusable")),
+            status=AddrStatus(data.get("status", "bad")),
             report_at=_parse_datetime(data.get("report_at")),
         )
 
@@ -317,13 +317,13 @@ class MirrorIPv6DB:
             using = sum(
                 1 for info in self.addrs.values() if info.status == AddrStatus.USING
             )
-            unusable = sum(
-                1 for info in self.addrs.values() if info.status == AddrStatus.UNUSABLE
+            bad = sum(
+                1 for info in self.addrs.values() if info.status == AddrStatus.BAD
             )
         return {
             "dbname": self.dbname,
             "total": total,
             "idle": idle,
             "using": using,
-            "unusable": unusable,
+            "bad": bad,
         }

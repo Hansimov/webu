@@ -441,7 +441,7 @@ class MirrorStatsResponse(BaseModel):
     total: int
     idle: int
     using: int
-    unusable: int
+    bad: int
 
     model_config = {
         "json_schema_extra": {
@@ -451,7 +451,7 @@ class MirrorStatsResponse(BaseModel):
                     "total": 223,
                     "idle": 200,
                     "using": 15,
-                    "unusable": 8,
+                    "bad": 8,
                 }
             ]
         }
