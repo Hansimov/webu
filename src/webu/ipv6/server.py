@@ -4,6 +4,8 @@ import random
 import requests
 import threading
 
+from typing import Union
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
 from pathlib import Path
@@ -381,6 +383,8 @@ class IPv6DBServer:
 
 # ========== FastAPI Application ==========
 
+# ========== Request Models ==========
+
 
 class CheckRequest(BaseModel):
     addr: str
@@ -392,7 +396,7 @@ class ChecksRequest(BaseModel):
 
 class ReportRequestItem(BaseModel):
     addr: str
-    status: str  # AddrStatus value
+    status: AddrStatus
 
 
 class ReportRequest(BaseModel):
@@ -403,6 +407,256 @@ class ReportRequest(BaseModel):
 class ReportsRequest(BaseModel):
     dbname: str = DBNAME
     report_infos: list[ReportRequestItem]
+
+
+# ========== Response Models ==========
+
+
+class GlobalStatsResponse(BaseModel):
+    """Response for global statistics."""
+
+    prefix: str
+    total_addrs: int
+    usable_num_target: int
+    mirrors: list[str]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "prefix": "240x:xxx:xxx:xxx",
+                    "total_addrs": 223,
+                    "usable_num_target": 100,
+                    "mirrors": ["default", "test"],
+                }
+            ]
+        }
+    }
+
+
+class MirrorStatsResponse(BaseModel):
+    """Response for mirror-specific statistics."""
+
+    dbname: str
+    total: int
+    idle: int
+    using: int
+    unusable: int
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "dbname": "default",
+                    "total": 223,
+                    "idle": 200,
+                    "using": 15,
+                    "unusable": 8,
+                }
+            ]
+        }
+    }
+
+
+class SpawnResponse(BaseModel):
+    """Response for spawning a single IPv6 address."""
+
+    success: bool
+    addr: str | None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "addr": "240x:xxx:xxx:xxx:xxx:xxx:xxx:xxx",
+                }
+            ]
+        }
+    }
+
+
+class SpawnsResponse(BaseModel):
+    """Response for spawning multiple IPv6 addresses."""
+
+    success: bool
+    addrs: list[str]
+    should_stop: bool
+    spawned_count: int
+    requested_count: int
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "addrs": [
+                        "240x:xxx:xxx:xxx:xxx:xxx:xxx:xxx",
+                        "240x:yyy:yyy:yyy:yyy:yyy:yyy:yyy",
+                        "240x:zzz:zzz:zzz:zzz:zzz:zzz:zzz",
+                    ],
+                    "should_stop": False,
+                    "spawned_count": 3,
+                    "requested_count": 5,
+                }
+            ]
+        }
+    }
+
+
+class PickResponse(BaseModel):
+    """Response for picking a single IPv6 address."""
+
+    success: bool
+    addr: str | None
+    dbname: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "addr": "240x:xxx:xxx:xxx:xxx:xxx:xxx:xxx",
+                    "dbname": "default",
+                }
+            ]
+        }
+    }
+
+
+class PicksResponse(BaseModel):
+    """Response for picking multiple IPv6 addresses."""
+
+    success: bool
+    addrs: list[str]
+    dbname: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "addrs": [
+                        "240x:xxx:xxx:xxx:xxx:xxx:xxx:xxx",
+                        "240x:yyy:yyy:yyy:yyy:yyy:yyy:yyy",
+                    ],
+                    "dbname": "default",
+                }
+            ]
+        }
+    }
+
+
+class CheckResponse(BaseModel):
+    """Response for checking a single IPv6 address."""
+
+    success: bool
+    addr: str
+    usable: bool
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "addr": "240x:xxx:xxx:xxx:xxx:xxx:xxx:xxx",
+                    "usable": True,
+                }
+            ]
+        }
+    }
+
+
+class ChecksResponse(BaseModel):
+    """Response for checking multiple IPv6 addresses."""
+
+    success: bool
+    results: dict[str, bool]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "results": {
+                        "240x:xxx:xxx:xxx:xxx:xxx:xxx:xxx": True,
+                        "240x:yyy:yyy:yyy:yyy:yyy:yyy:yyy": True,
+                        "2001:db8::1": False,
+                    },
+                }
+            ]
+        }
+    }
+
+
+class ReportResponse(BaseModel):
+    """Response for reporting a single address status."""
+
+    success: bool
+    dbname: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "dbname": "default",
+                }
+            ]
+        }
+    }
+
+
+class ReportsResponse(BaseModel):
+    """Response for reporting multiple address statuses."""
+
+    success: bool
+    dbname: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "dbname": "default",
+                }
+            ]
+        }
+    }
+
+
+class SaveResponse(BaseModel):
+    """Response for saving databases."""
+
+    success: bool
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                }
+            ]
+        }
+    }
+
+
+class FlushResponse(BaseModel):
+    """Response for flushing databases."""
+
+    success: bool
+    dbname: str | None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "dbname": None,
+                }
+            ]
+        }
+    }
 
 
 def create_app(
@@ -444,6 +698,7 @@ def create_app(
 
     @app.get(
         "/stats",
+        response_model=Union[GlobalStatsResponse, MirrorStatsResponse],
         summary="Get statistics. If dbname is None, return global stats. Otherwise, return stats for specific mirror.",
     )
     async def stats(dbname: str = Query(default=None)):
@@ -452,12 +707,20 @@ def create_app(
         else:
             return server.get_mirror_stats(dbname)
 
-    @app.get("/spawn", summary="Spawn a new random IPv6 addr to global db")
+    @app.get(
+        "/spawn",
+        response_model=SpawnResponse,
+        summary="Spawn a new random IPv6 addr to global db",
+    )
     async def spawn():
         addr = await asyncio.to_thread(server.spawn)
         return {"success": addr is not None, "addr": addr}
 
-    @app.get("/spawns", summary="Spawn multiple new random IPv6 addrs to global db")
+    @app.get(
+        "/spawns",
+        response_model=SpawnsResponse,
+        summary="Spawn multiple new random IPv6 addrs to global db",
+    )
     async def spawns(num: int = Query(default=1, ge=1, le=100)):
         addrs, should_stop = await asyncio.to_thread(server.spawns, num)
         return {
@@ -468,12 +731,20 @@ def create_app(
             "requested_count": num,
         }
 
-    @app.get("/pick", summary="Pick an idle addr from specific dbname's mirror")
+    @app.get(
+        "/pick",
+        response_model=PickResponse,
+        summary="Pick an idle addr from specific dbname's mirror",
+    )
     async def pick(dbname: str = Query(default=DBNAME)):
         addr = server.pick(dbname)
         return {"success": addr is not None, "addr": addr, "dbname": dbname}
 
-    @app.get("/picks", summary="Pick multiple idle addrs from specific dbname's mirror")
+    @app.get(
+        "/picks",
+        response_model=PicksResponse,
+        summary="Pick multiple idle addrs from specific dbname's mirror",
+    )
     async def picks(
         dbname: str = Query(default=DBNAME),
         num: int = Query(default=1, ge=1, le=100),
@@ -481,17 +752,29 @@ def create_app(
         addrs = await asyncio.to_thread(server.picks, dbname, num)
         return {"success": len(addrs) > 0, "addrs": addrs, "dbname": dbname}
 
-    @app.post("/check", summary="Check usability of an addr")
+    @app.post(
+        "/check",
+        response_model=CheckResponse,
+        summary="Check usability of an addr",
+    )
     async def check(req: CheckRequest):
         usable = await asyncio.to_thread(server.check, req.addr)
         return {"success": True, "addr": req.addr, "usable": usable}
 
-    @app.post("/checks", summary="Check usability of multiple addrs")
+    @app.post(
+        "/checks",
+        response_model=ChecksResponse,
+        summary="Check usability of multiple addrs",
+    )
     async def checks(req: ChecksRequest):
         usables = await asyncio.to_thread(server.checks, req.addrs)
         return {"success": True, "results": dict(zip(req.addrs, usables))}
 
-    @app.post("/report", summary="Report addr status to specific dbname's mirror")
+    @app.post(
+        "/report",
+        response_model=ReportResponse,
+        summary="Report addr status to specific dbname's mirror",
+    )
     async def report(req: ReportRequest):
         report_info = AddrReportInfo(
             addr=req.report_info.addr,
@@ -501,7 +784,9 @@ def create_app(
         return {"success": success, "dbname": req.dbname}
 
     @app.post(
-        "/reports", summary="Report multiple addrs status to specific dbname's mirror"
+        "/reports",
+        response_model=ReportsResponse,
+        summary="Report multiple addrs status to specific dbname's mirror",
     )
     async def reports(req: ReportsRequest):
         report_infos = [
@@ -511,13 +796,18 @@ def create_app(
         success = await asyncio.to_thread(server.reports, req.dbname, report_infos)
         return {"success": success, "dbname": req.dbname}
 
-    @app.post("/save", summary="Save all databases to persistent storage")
+    @app.post(
+        "/save",
+        response_model=SaveResponse,
+        summary="Save all databases to persistent storage",
+    )
     async def save():
         await asyncio.to_thread(server.save)
         return {"success": True}
 
     @app.post(
         "/flush",
+        response_model=FlushResponse,
         summary="Flush database. If dbname is None, flush global and all mirrors. Otherwise, flush only the specified mirror.",
     )
     async def flush(dbname: str = Query(default=None)):

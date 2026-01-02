@@ -6,19 +6,16 @@ SWAGGER_CUSTOM_CSS = """
 .curl-command {
     display: none !important;
 }
-/* Hide static Responses documentation section */
-.responses-wrapper > .opblock-section-header {
-    display: none !important;
-}
-.responses-wrapper > .responses-inner > table.responses-table {
-    display: none !important;
-}
 /* Hide /openapi.json link under title */
 .info .link {
     display: none !important;
 }
 /* Hide OAS3.1 badge */
 .version-stamp {
+    display: none !important;
+}
+/* Hide 422 Validation Error responses */
+tr.response[data-code="422"] {
     display: none !important;
 }
 """
