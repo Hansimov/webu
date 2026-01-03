@@ -124,3 +124,11 @@ class IPv6Session(Session):
             if self.verbose:
                 status_str = logstr.okay(status.value)
                 logger.note(f"> Reported [{self.dbname}] [{self.ip}]: {status_str}")
+
+    def report_idle(self):
+        """Report current addr to server as idle"""
+        self.report(AddrStatus.IDLE)
+
+    def report_bad(self):
+        """Report current addr to server as bad"""
+        self.report(AddrStatus.BAD)
