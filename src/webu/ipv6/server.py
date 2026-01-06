@@ -984,4 +984,8 @@ def main():
 if __name__ == "__main__":
     main()
 
+    # Case1: normal serve
     # python -m webu.ipv6.server -p 16000 -n 100 -v
+
+    # Case2: sudo serve (for route update)
+    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.server -p 16000 -n 100 -v

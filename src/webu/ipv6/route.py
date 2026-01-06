@@ -38,6 +38,9 @@ class IPv6Prefixer:
             addresses = netifaces.ifaddresses(interface)
             if netifaces.AF_INET6 not in addresses:
                 continue
+            if interface.lower().startswith("cloudflare"):
+                # skip cloudflare tunnel interface
+                continue
             for addr_info in addresses[netifaces.AF_INET6]:
                 if not addr_info["addr"].startswith("2"):
                     break
