@@ -1,6 +1,6 @@
 [project]
 name = "webu"
-version = "0.6.1.1"
+version = "0.6.1.2"
 authors = [
     { name="Hansimov" },
 ]
@@ -12,7 +12,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "numpy"]
+dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy"]
 
 [project.urls]
 Homepage = "https://github.com/Hansimov/webu"
