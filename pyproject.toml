@@ -1,6 +1,6 @@
 [project]
 name = "webu"
-version = "0.6.1"
+version = "0.6.1.1"
 authors = [
     { name="Hansimov" },
 ]
