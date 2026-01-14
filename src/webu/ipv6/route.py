@@ -206,7 +206,7 @@ if __name__ == "__main__":
     # sudo is needed to modify ndppd.conf
 
     # Case1: Run directly, need to type sudo password
-    # sudo env "PATH=$PATH" python -m webu.ipv6.route -r
+    # sudo env "PATH=$PATH" python -m webu.ipv6.route
 
     # Case2: Run with piped password
-    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.route -r
+    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.route

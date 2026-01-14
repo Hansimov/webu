@@ -769,6 +769,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup
+        server.update_route()
         await server.init_usable_addrs()
         server.start_background_tasks()
         if verbose:
