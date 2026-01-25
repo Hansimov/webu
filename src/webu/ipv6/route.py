@@ -99,11 +99,12 @@ class IPv6RouteUpdater:
         with open(self.ndppd_conf, "r") as rf:
             lines = rf.readlines()
 
+        # Check proxy (netint)
         is_netint_found = False
+        netint_str = logstr.file(self.netint)
         netint_pattern = re.compile(rf"proxy\s+{self.netint}")
         for line in lines:
             if netint_pattern.search(line):
-                netint_str = logstr.file(self.netint)
                 logger.mesg(f"  + Found proxy (netint): {netint_str}")
                 is_netint_found = True
                 break
@@ -111,12 +112,12 @@ class IPv6RouteUpdater:
             logger.mesg(f"  - Not found proxy (netint): {netint_str}")
             return False
 
+        # Check rule (prefix)
         is_prefix_found = False
+        prefix_str = logstr.file(f"{self.prefix}::/64")
         prefix_pattern = re.compile(rf"rule\s+{self.prefix}::/64")
-        prefix_str = None
         for line in lines:
             if prefix_pattern.search(line):
-                prefix_str = logstr.file(f"{self.prefix}::/64")
                 logger.mesg(f"  + Found rule (prefix/): {prefix_str}")
                 is_prefix_found = True
                 break
@@ -127,7 +128,8 @@ class IPv6RouteUpdater:
 
     def add_route(self):
         logger.note("> Add IP route:")
-        cmd = f"sudo ip route add local {self.prefix}::/64 dev {self.netint}"
+        # Use `replace` instead of `add` to avoid "RTNETLINK answers: File exists" error
+        cmd = f"sudo ip route replace local {self.prefix}::/64 dev {self.netint}"
         shell_cmd(cmd)
 
     def del_route(self):
