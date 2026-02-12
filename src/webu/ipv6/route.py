@@ -163,6 +163,10 @@ class IPv6RouteUpdater:
             logger.okay(f"✓ Modified: {logstr.file(self.ndppd_conf)}")
 
     def restart_ndppd(self):
+        # NOTE: RUN mannually if sometimes ipv6 fails, as ndppd may crash:
+        #   sudo systemctl restart ndppd
+        # And check with:
+        #   curl --int 240?:????:????:????:abcd:9876:5678:0123 http://ifconfig.me/ip
         logger.note("> Restart ndppd:")
         cmd = "sudo systemctl restart ndppd"
         shell_cmd(cmd)
@@ -172,11 +176,18 @@ class IPv6RouteUpdater:
         logger.note(f"> Waiting {wait_seconds} seconds for ndppd to work ...")
         time.sleep(wait_seconds)
 
-    def run(self):
+    def run(self, force_restart_ndppd: bool = False):
         self.add_route()
         if self.is_ndppd_conf_latest():
-            logger.okay(f"✓ ndppd.conf is up-to-date, skip restart.")
+            logger.okay("> ndppd.conf is up-to-date", end="")
+            if force_restart_ndppd:
+                logger.note(", force restart...")
+                self.restart_ndppd()
+                self.wait_ndppd_work()
+            else:
+                logger.okay(", skip restart.")
         else:
+            logger.note("> ndppd.conf is changed, modify and restart...")
             self.modify_ndppd_conf(overwrite=True)
             self.restart_ndppd()
             self.wait_ndppd_work()
@@ -192,14 +203,19 @@ class IPv6Argparser(argparse.ArgumentParser):
             help=f"ndppd.conf path (default: {NDPDD_CONF})",
             default=None,
         )
-
+        self.add_argument(
+            "-rn",
+            "--restart-ndppd",
+            action="store_true",
+            help="Force restart ndppd even if ndppd.conf is up-to-date",
+        )
         self.args = self.parse_args()
 
 
 def main():
     args = IPv6Argparser().args
     modifier = IPv6RouteUpdater(ndppd_conf=args.ndppd_conf, verbose=True)
-    modifier.run()
+    modifier.run(force_restart_ndppd=args.restart_ndppd)
 
 
 if __name__ == "__main__":
@@ -212,3 +228,6 @@ if __name__ == "__main__":
 
     # Case2: Run with piped password
     # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.route
+
+    # Case3: Run with piped password and force restart ndppd
+    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.route -rn

@@ -312,13 +312,14 @@ class IPv6DBServer:
             # Re-sync from global
             mirror.sync_from_global(self.global_db.get_all_addrs())
 
-    def update_route(self):
+    def update_route(self, force_restart_ndppd: bool = False):
         """Update routes via IPv6RouteUpdater if prefix changed."""
         old_prefix = self.prefix
         self.prefixer = IPv6Prefixer(verbose=self.verbose)
         new_prefix = self.prefixer.prefix
 
         if old_prefix == new_prefix:
+            self.route_updater.run(force_restart_ndppd=force_restart_ndppd)
             return
 
         if self.verbose:
@@ -329,7 +330,7 @@ class IPv6DBServer:
         self.prefix = new_prefix
         self.global_db.set_prefix(new_prefix)
         self.route_updater = IPv6RouteUpdater(verbose=self.verbose)
-        self.route_updater.run()
+        self.route_updater.run(force_restart_ndppd=force_restart_ndppd)
 
         # Flush all databases since old addrs are invalid
         self.flush()
@@ -769,7 +770,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup
-        server.update_route()
+        server.update_route(force_restart_ndppd=True)
         await server.init_usable_addrs()
         server.start_background_tasks()
         if verbose:
