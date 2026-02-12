@@ -770,7 +770,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup
-        server.update_route(force_restart_ndppd=True)
+        server.update_route()
         await server.init_usable_addrs()
         server.start_background_tasks()
         if verbose:
@@ -986,8 +986,10 @@ def main():
 if __name__ == "__main__":
     main()
 
-    # Case1: normal serve
-    # python -m webu.ipv6.server -p 16000 -n 100 -v
+    # SUDOPASS env is needed for privileged operations (ip route, ndppd, /etc/ndppd.conf)
 
-    # Case2: sudo serve (for route update)
-    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.server -p 16000 -n 100 -v
+    # Case1: Run with SUDOPASS env (recommended)
+    # python -m webu.ipv6.server -p 16000 -n 200 -v
+
+    # Case2: Run as root
+    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.server -p 16000 -n 200 -v

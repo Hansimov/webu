@@ -1,6 +1,8 @@
 import argparse
 import netifaces
+import os
 import re
+import tempfile
 
 import time
 
@@ -85,10 +87,20 @@ class IPv6RouteUpdater:
 
     def __init__(self, ndppd_conf: PathType = None, verbose: bool = False):
         self.ndppd_conf = ndppd_conf or Path(NDPDD_CONF)
-        self.prefixer = IPv6Prefixer()
+        self.prefixer = IPv6Prefixer(verbose=verbose)
         self.prefix = self.prefixer.prefix
         self.netint = self.prefixer.netint
         self.verbose = verbose
+        if self.verbose:
+            if os.geteuid() == 0:
+                logger.okay("> Privilege: running as root, no sudo needed")
+            elif os.environ.get("SUDOPASS"):
+                logger.okay("> Privilege: SUDOPASS env found, using sudo -S")
+            else:
+                logger.warn(
+                    "> Privilege: not root, no SUDOPASS env "
+                    "(sudo may prompt for password after cache expires)"
+                )
 
     def is_ndppd_conf_latest(self):
         logger.note("> Check proxy (netint) and rule (prefix) in ndppd.conf:")
@@ -129,13 +141,13 @@ class IPv6RouteUpdater:
     def add_route(self):
         logger.note("> Add IP route:")
         # Use `replace` instead of `add` to avoid "RTNETLINK answers: File exists" error
-        cmd = f"sudo ip route replace local {self.prefix}::/64 dev {self.netint}"
-        shell_cmd(cmd)
+        cmd = f"ip route replace local {self.prefix}::/64 dev {self.netint}"
+        shell_cmd(cmd, sudo=True)
 
     def del_route(self):
         logger.note("> Delete IP route:")
-        cmd = f"sudo ip route del local {self.prefix}::/64 dev {self.netint}"
-        shell_cmd(cmd)
+        cmd = f"ip route del local {self.prefix}::/64 dev {self.netint}"
+        shell_cmd(cmd, sudo=True)
 
     def modify_ndppd_conf(self, overwrite: bool = False):
         if self.ndppd_conf.exists():
@@ -158,18 +170,23 @@ class IPv6RouteUpdater:
             )
             logger.note(f"> Write: {logstr.file(self.ndppd_conf)}")
             logger.mesg(f"{new_ndppd_conf_str}")
-            with open(self.ndppd_conf, "w") as wf:
-                wf.write(decolored(new_ndppd_conf_str))
+            content = decolored(new_ndppd_conf_str)
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".conf", delete=False
+            ) as tf:
+                tf.write(content)
+                tmp_path = tf.name
+            shell_cmd(f"cp {tmp_path} {self.ndppd_conf}", sudo=True, showcmd=False)
+            os.unlink(tmp_path)
             logger.okay(f"✓ Modified: {logstr.file(self.ndppd_conf)}")
 
     def restart_ndppd(self):
-        # NOTE: RUN mannually if sometimes ipv6 fails, as ndppd may crash:
+        # NOTE: RUN manually if sometimes ipv6 fails, as ndppd may crash:
         #   sudo systemctl restart ndppd
         # And check with:
         #   curl --int 240?:????:????:????:abcd:9876:5678:0123 http://ifconfig.me/ip
         logger.note("> Restart ndppd:")
-        cmd = "sudo systemctl restart ndppd"
-        shell_cmd(cmd)
+        shell_cmd("systemctl restart ndppd", sudo=True)
         logger.okay(f"✓ Restarted: {logstr.file('ndppd')}")
 
     def wait_ndppd_work(self, wait_seconds: int = 5):
@@ -221,13 +238,13 @@ def main():
 if __name__ == "__main__":
     main()
 
-    # sudo is needed to modify ndppd.conf
+    # SUDOPASS env is needed for privileged operations (ip route, ndppd, /etc/ndppd.conf)
 
-    # Case1: Run directly, need to type sudo password
-    # sudo env "PATH=$PATH" python -m webu.ipv6.route
+    # Case1: Run with SUDOPASS env (recommended)
+    # python -m webu.ipv6.route
 
-    # Case2: Run with piped password
+    # Case2: Force restart ndppd
+    # python -m webu.ipv6.route -rn
+
+    # Case3: Run as root
     # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.route
-
-    # Case3: Run with piped password and force restart ndppd
-    # echo $SUDOPASS | sudo -S env "PATH=$PATH" python -m webu.ipv6.route -rn
