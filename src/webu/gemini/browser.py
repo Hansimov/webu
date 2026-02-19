@@ -514,6 +514,9 @@ class GeminiBrowser:
                 )
                 self.page = await self.context.new_page()
 
+            # 设置页面事件处理器（防止新标签页意外打开）
+            await self._setup_page_handlers()
+
             self.is_started = True
             hostname = socket.gethostname()
             novnc_port = self.config.novnc_port
@@ -745,6 +748,47 @@ class GeminiBrowser:
             }
         except Exception as e:
             return {"error": str(e)}
+
+    # ── 标签页管理 ─────────────────────────────────────────────
+
+    async def _setup_page_handlers(self):
+        """为当前页面设置事件处理器（防止新标签页意外打开）。"""
+        if not self.page:
+            return
+        self.page.on("popup", self._handle_popup)
+
+    async def _handle_popup(self, popup_page: Page):
+        """处理弹出的新标签页：获取 URL 后关闭，保持当前页面。"""
+        try:
+            # 等待新页面至少开始加载
+            try:
+                await popup_page.wait_for_load_state("commit", timeout=3000)
+            except Exception:
+                pass
+            url = popup_page.url
+            logger.warn(f"  ⚠ 检测到新标签页: {url}")
+            await popup_page.close()
+            logger.mesg("  已关闭新标签页")
+        except Exception as e:
+            logger.warn(f"  × 关闭新标签页出错: {e}")
+
+    async def close_extra_pages(self):
+        """关闭除主页面外的所有标签页。"""
+        if not self.context:
+            return
+        pages = self.context.pages
+        if len(pages) <= 1:
+            return
+        count = 0
+        for page in pages:
+            if page != self.page:
+                try:
+                    await page.close()
+                    count += 1
+                except Exception:
+                    pass
+        if count:
+            logger.mesg(f"  已清理 {count} 个多余标签页")
 
     async def __aenter__(self):
         await self.start()

@@ -32,6 +32,40 @@ class GeminiImage:
             d["base64_data"] = self.base64_data
         return d
 
+    def get_extension(self) -> str:
+        """根据 MIME 类型返回文件扩展名。"""
+        mime_to_ext = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/jpg": "jpg",
+            "image/gif": "gif",
+            "image/webp": "webp",
+            "image/svg+xml": "svg",
+            "image/bmp": "bmp",
+        }
+        return mime_to_ext.get(self.mime_type, "png")
+
+    def save_to_file(self, path: str) -> bool:
+        """将图片的 base64 数据保存为文件。
+
+        Args:
+            path: 文件保存路径
+
+        Returns:
+            True 如果保存成功
+        """
+        if not self.base64_data:
+            return False
+
+        from pathlib import Path as _Path
+
+        _Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+        data = base64.b64decode(self.base64_data)
+        with open(path, "wb") as f:
+            f.write(data)
+        return True
+
 
 @dataclass
 class GeminiCodeBlock:
@@ -297,11 +331,15 @@ class GeminiResponseParser:
         """从页面元素属性中解析图片数据。
 
         过滤掉小图标（<50px），处理 base64 嵌入图片。
+        支持直接携带 base64_data 的条目（来自 canvas 转换或预下载）。
         """
         images = []
         for img_data in image_data_list:
             src = img_data.get("src", "")
-            if not src:
+            pre_base64 = img_data.get("base64_data", "")
+
+            # 跳过既无 src 也无 base64 数据的条目
+            if not src and not pre_base64:
                 continue
 
             # 跳过小图标和 UI 元素
@@ -311,21 +349,25 @@ class GeminiResponseParser:
                 continue
 
             image = GeminiImage(
-                url=src,
+                url=src if src and not src.startswith("data:") else "",
                 alt=img_data.get("alt", ""),
                 width=int(width) if width else 0,
                 height=int(height) if height else 0,
             )
 
-            # 处理 base64 嵌入图片
-            if src.startswith("data:"):
+            # 处理 data: URL 嵌入图片
+            if src and src.startswith("data:"):
                 parts = src.split(",", 1)
                 if len(parts) == 2:
                     mime_match = re.match(r"data:([^;]+)", parts[0])
                     if mime_match:
                         image.mime_type = mime_match.group(1)
                     image.base64_data = parts[1]
-                    image.url = ""
+
+            # 处理预提取的 base64 数据（来自 canvas 转换、blob 转换或下载）
+            if pre_base64 and not image.base64_data:
+                image.base64_data = pre_base64
+                image.mime_type = img_data.get("mime_type", image.mime_type)
 
             images.append(image)
         return images

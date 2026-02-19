@@ -250,45 +250,59 @@ class GeminiClient:
     async def new_chat(self):
         """开始新的会话。
 
-        先尝试点击新建会话按钮，如果失败则通过 URL 导航创建新会话。
+        使用直接 URL 导航方式，避免点击 <a> 标签导致创建新标签页。
+        优先提取新会话按钮的 href 并在当前标签页中导航。
         """
         logger.note("> 开始新会话 ...")
-        try:
-            # 尝试点击新建会话按钮
-            new_chat_btn = await self.page.query_selector(SEL_NEW_CHAT_BUTTON)
-            if new_chat_btn and await new_chat_btn.is_visible():
-                await new_chat_btn.click()
-                await asyncio.sleep(2)
-                self._message_count = 0
-                self._image_mode = False
-                logger.okay("  ✓ 新会话已启动")
-                return
 
-            # 回退：使用 locator 搜索
+        # 先清理已有的多余标签页
+        await self.browser.close_extra_pages()
+
+        try:
+            # 策略 1：提取新会话链接的 href，在当前页面内导航（避免新标签页）
+            href = await self.page.evaluate(
+                """() => {
+                const selectors = [
+                    'a[aria-label*="发起新对话"]',
+                    'a[aria-label*="New chat"]',
+                    'a[href*="/app"]',
+                ];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.href) return el.href;
+                }
+                return null;
+            }"""
+            )
+
+            target_url = href or GEMINI_URL
+            logger.mesg(f"  导航到: {target_url}")
+            await self.page.goto(
+                target_url,
+                wait_until="domcontentloaded",
+                timeout=self.config.page_load_timeout,
+            )
             try:
-                new_chat_locator = self.page.locator(
-                    'button:has-text("New chat"), button:has-text("发起新对话"), '
-                    'a:has-text("New chat"), a:has-text("发起新对话")'
-                ).first
-                await new_chat_locator.click(timeout=5000)
-                await asyncio.sleep(2)
-                self._message_count = 0
-                self._image_mode = False
-                logger.okay("  ✓ 新会话已启动")
-                return
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 pass
 
-            # 最终回退：直接导航到 Gemini URL
-            await self.browser.navigate_to_gemini()
             await asyncio.sleep(2)
             self._message_count = 0
             self._image_mode = False
-            logger.okay("  ✓ 新会话已启动（通过导航）")
+
+            # 清理导航可能产生的多余标签页
+            await self.browser.close_extra_pages()
+
+            logger.okay("  ✓ 新会话已启动")
 
         except Exception as e:
-            logger.warn(f"  × 新建会话失败: {e}，尝试导航回退")
-            await self.browser.navigate_to_gemini()
+            logger.warn(f"  ⚠ 新建会话失败: {e}，回退到基础 URL")
+            try:
+                await self.browser.navigate_to_gemini()
+            except Exception:
+                pass
+            await asyncio.sleep(2)
             self._message_count = 0
             self._image_mode = False
 
@@ -1019,11 +1033,16 @@ class GeminiClient:
     async def _extract_images(self, download_base64: bool = True) -> list[dict]:
         """从最新响应中提取图片数据。
 
+        支持多种图片来源：
+        - 标准 <img> 标签（含 http/https/blob/data URL）
+        - Canvas 元素（转换为 base64）
+        - Blob URL（在页面内通过 canvas 转换，避免 URL 失效）
+
         Args:
-            download_base64: 是否将图片下载为 base64（对于生成的图片很有用）
+            download_base64: 是否将图片下载为 base64（http/https URL）
 
         Returns:
-            图片数据字典列表。
+            图片数据字典列表，每个字典可能包含 base64_data 和 mime_type。
         """
         images_data = []
         try:
@@ -1034,11 +1053,22 @@ class GeminiClient:
 
             last_response = model_responses[-1]
 
-            # 等待图片加载完成（最长 15 秒）
-            for attempt in range(30):
-                images = await last_response.query_selector_all("img")
-                if not images:
-                    break
+            # 等待图片加载完成（最长 20 秒）
+            for attempt in range(40):
+                has_images = await self.page.evaluate(
+                    """(container) => {
+                        const imgs = container.querySelectorAll('img');
+                        const canvases = container.querySelectorAll('canvas');
+                        return imgs.length > 0 || canvases.length > 0;
+                    }""",
+                    last_response,
+                )
+                if not has_images:
+                    if attempt >= 5:
+                        break
+                    await asyncio.sleep(0.5)
+                    continue
+
                 all_loaded = await self.page.evaluate(
                     """(container) => {
                         const imgs = container.querySelectorAll('img');
@@ -1053,47 +1083,117 @@ class GeminiClient:
                     break
                 await asyncio.sleep(0.5)
 
-            images = await last_response.query_selector_all("img")
+            # 统一使用 JS 提取所有图片数据（效率更高，减少 round-trip）
+            images_data = await self.page.evaluate(
+                """(container) => {
+                    const results = [];
 
-            for img in images:
-                try:
-                    img_data = await self.page.evaluate(
-                        """(el) => ({
-                            src: el.src || el.getAttribute('src') || '',
-                            alt: el.alt || el.getAttribute('alt') || '',
-                            width: el.naturalWidth || el.width || 0,
-                            height: el.naturalHeight || el.height || 0,
-                        })""",
-                        img,
-                    )
-                    if img_data.get("src"):
-                        # 对于非 data: URL 的大图片，尝试下载为 base64
-                        src = img_data["src"]
-                        width = img_data.get("width", 0)
-                        height = img_data.get("height", 0)
+                    // 1. 提取 <img> 标签
+                    const imgs = container.querySelectorAll('img');
+                    for (const img of imgs) {
+                        const src = img.src || img.getAttribute('src') || '';
+                        if (!src) continue;
 
-                        if (
-                            download_base64
-                            and not src.startswith("data:")
-                            and width >= 50
-                            and height >= 50
-                        ):
-                            try:
-                                dl_result = await self.browser.download_image_as_base64(
-                                    src
+                        const width = img.naturalWidth || img.width || 0;
+                        const height = img.naturalHeight || img.height || 0;
+
+                        // 跳过小图标 (< 50px)
+                        if (width > 0 && height > 0 && (width < 50 || height < 50)) continue;
+
+                        const entry = {
+                            src: src,
+                            alt: img.alt || img.getAttribute('alt') || '',
+                            width: width,
+                            height: height,
+                            type: 'img',
+                        };
+
+                        // 对于 data: URL，直接提取 base64
+                        if (src.startsWith('data:')) {
+                            const parts = src.split(',');
+                            if (parts.length >= 2) {
+                                const mimeMatch = parts[0].match(/data:([^;]+)/);
+                                entry.mime_type = mimeMatch ? mimeMatch[1] : 'image/png';
+                                entry.base64_data = parts.slice(1).join(',');
+                            }
+                        }
+
+                        // 对于 blob: URL，通过 canvas 转换为 base64（blob URL 会失效）
+                        if (src.startsWith('blob:') && img.complete && img.naturalWidth > 0) {
+                            try {
+                                const canvas = document.createElement('canvas');
+                                canvas.width = img.naturalWidth;
+                                canvas.height = img.naturalHeight;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(img, 0, 0);
+                                const dataUrl = canvas.toDataURL('image/png');
+                                const b64 = dataUrl.split(',')[1];
+                                if (b64) {
+                                    entry.base64_data = b64;
+                                    entry.mime_type = 'image/png';
+                                }
+                            } catch(e) {
+                                // CORS 限制，标记需要后续通过 fetch 下载
+                                entry.needs_download = true;
+                            }
+                        }
+
+                        results.push(entry);
+                    }
+
+                    // 2. 提取 <canvas> 元素（Gemini 可能用 canvas 渲染生成的图片）
+                    const canvases = container.querySelectorAll('canvas');
+                    for (const canvas of canvases) {
+                        if (canvas.width < 50 || canvas.height < 50) continue;
+                        try {
+                            const dataUrl = canvas.toDataURL('image/png');
+                            const b64 = dataUrl.split(',')[1];
+                            if (b64 && b64.length > 100) {
+                                results.push({
+                                    src: '',
+                                    alt: 'canvas-image',
+                                    width: canvas.width,
+                                    height: canvas.height,
+                                    type: 'canvas',
+                                    base64_data: b64,
+                                    mime_type: 'image/png',
+                                });
+                            }
+                        } catch(e) {
+                            // Canvas might be tainted by CORS
+                        }
+                    }
+
+                    return results;
+                }""",
+                last_response,
+            )
+
+            # 对于需要下载的图片（http/https URL 或 CORS 限制的 blob URL），
+            # 使用 browser 方法在页面上下文中通过 fetch 下载
+            if download_base64:
+                for img_data in images_data:
+                    src = img_data.get("src", "")
+                    if (
+                        src
+                        and not src.startswith("data:")
+                        and not img_data.get("base64_data")
+                        and (
+                            img_data.get("needs_download")
+                            or not src.startswith("blob:")
+                        )
+                        and img_data.get("width", 0) >= 50
+                        and img_data.get("height", 0) >= 50
+                    ):
+                        try:
+                            dl_result = await self.browser.download_image_as_base64(src)
+                            if dl_result.get("base64_data"):
+                                img_data["base64_data"] = dl_result["base64_data"]
+                                img_data["mime_type"] = dl_result.get(
+                                    "mime_type", "image/png"
                                 )
-                                if dl_result.get("base64_data"):
-                                    img_data["base64_data"] = dl_result["base64_data"]
-                                    img_data["mime_type"] = dl_result.get(
-                                        "mime_type", "image/png"
-                                    )
-                            except Exception as dl_err:
-                                logger.warn(f"  × 下载图片失败: {dl_err}")
-
-                        images_data.append(img_data)
-                except Exception as e:
-                    logger.warn(f"  × 提取单个图片出错: {e}")
-                    continue
+                        except Exception as dl_err:
+                            logger.warn(f"  × 下载图片失败: {dl_err}")
 
         except Exception as e:
             logger.warn(f"  × 提取图片出错: {e}")
@@ -1118,6 +1218,9 @@ class GeminiClient:
             raise GeminiPageError("客户端未启动，请先调用 start()。")
 
         await self.ensure_logged_in()
+
+        # 清理多余标签页
+        await self.browser.close_extra_pages()
 
         logger.note(f"> 发送消息: {logstr.mesg(brk(text[:100]))}")
 
@@ -1146,13 +1249,8 @@ class GeminiClient:
             image_data_list=images_data if images_data else None,
         )
 
-        # 补充图片的 base64 数据（如果 images_data 中有）
-        if images_data:
-            for img_dict, img_obj in zip(images_data, response.images):
-                if "base64_data" in img_dict and not img_obj.base64_data:
-                    img_obj.base64_data = img_dict["base64_data"]
-                if "mime_type" in img_dict and img_obj.mime_type == "image/png":
-                    img_obj.mime_type = img_dict.get("mime_type", "image/png")
+        # 图片数据已由 parser.parse_images_from_elements() 完整处理，
+        # 包括 base64_data 和 mime_type，无需再额外补充。
 
         # 使用后重置图片模式
         if image_mode:
@@ -1186,6 +1284,57 @@ class GeminiClient:
         """
         logger.note(f"> 生成图片: {logstr.mesg(brk(prompt[:100]))}")
         return await self.send_message(prompt, image_mode=True, download_images=True)
+
+    def save_images(
+        self,
+        response: GeminiResponse,
+        output_dir: str = "data/images",
+        prefix: str = "",
+    ) -> list[str]:
+        """将响应中的图片保存到磁盘。
+
+        参数:
+            response: 包含图片的 GeminiResponse
+            output_dir: 保存目录（默认 data/images）
+            prefix: 文件名前缀
+
+        返回:
+            保存成功的文件路径列表
+        """
+        if not response.images:
+            logger.mesg("  没有图片需要保存")
+            return []
+
+        from pathlib import Path
+
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        saved_paths = []
+        timestamp = int(time.time())
+
+        for i, img in enumerate(response.images):
+            if not img.base64_data:
+                logger.warn(f"  × 图片 #{i+1} 无 base64 数据，跳过")
+                continue
+
+            ext = img.get_extension()
+            prefix_part = f"{prefix}_" if prefix else ""
+            filename = f"{prefix_part}{timestamp}_{i+1}.{ext}"
+            filepath = output_path / filename
+
+            try:
+                img.save_to_file(str(filepath))
+                saved_paths.append(str(filepath))
+                size_info = f" ({img.width}x{img.height})" if img.width else ""
+                logger.okay(f"  + 图片已保存: {filepath}{size_info}")
+            except Exception as e:
+                logger.warn(f"  × 保存图片 #{i+1} 失败: {e}")
+
+        if saved_paths:
+            logger.okay(f"  ✓ 共保存 {len(saved_paths)} 张图片到 {output_dir}")
+
+        return saved_paths
 
     async def screenshot(self, path: str = None) -> bytes:
         """对当前状态截图。"""

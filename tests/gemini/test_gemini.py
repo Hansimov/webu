@@ -971,55 +971,443 @@ class TestAPIModels:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 集成测试（需要浏览器）
+# 单元测试：图片保存
 # ═══════════════════════════════════════════════════════════════════
+
+
+class TestImageSaving:
+    def test_get_extension_png(self):
+        img = GeminiImage(mime_type="image/png")
+        assert img.get_extension() == "png"
+
+    def test_get_extension_jpeg(self):
+        img = GeminiImage(mime_type="image/jpeg")
+        assert img.get_extension() == "jpg"
+
+    def test_get_extension_webp(self):
+        img = GeminiImage(mime_type="image/webp")
+        assert img.get_extension() == "webp"
+
+    def test_get_extension_gif(self):
+        img = GeminiImage(mime_type="image/gif")
+        assert img.get_extension() == "gif"
+
+    def test_get_extension_svg(self):
+        img = GeminiImage(mime_type="image/svg+xml")
+        assert img.get_extension() == "svg"
+
+    def test_get_extension_unknown(self):
+        img = GeminiImage(mime_type="image/tiff")
+        assert img.get_extension() == "png"  # 默认 png
+
+    def test_save_to_file_success(self):
+        import base64
+
+        # 创建一个简单的 1x1 PNG (最小有效 PNG)
+        png_data = base64.b64encode(
+            b"\x89PNG\r\n\x1a\n"
+            + b"\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            + b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+            + b"\x00\x00\x00\x0cIDATx"
+            + b"\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N"
+            + b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        ).decode()
+
+        img = GeminiImage(base64_data=png_data, mime_type="image/png")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = str(Path(tmpdir) / "test_img.png")
+            result = img.save_to_file(filepath)
+            assert result is True
+            assert Path(filepath).exists()
+            assert Path(filepath).stat().st_size > 0
+
+    def test_save_to_file_no_data(self):
+        img = GeminiImage(url="https://example.com/img.png")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = str(Path(tmpdir) / "test_img.png")
+            result = img.save_to_file(filepath)
+            assert result is False
+            assert not Path(filepath).exists()
+
+    def test_save_to_file_creates_dirs(self):
+        import base64
+
+        data = base64.b64encode(b"fake image data").decode()
+        img = GeminiImage(base64_data=data, mime_type="image/png")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = str(Path(tmpdir) / "subdir" / "deep" / "test_img.png")
+            result = img.save_to_file(filepath)
+            assert result is True
+            assert Path(filepath).exists()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 单元测试：解析器 - 预提取 base64 数据处理
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestParserBase64Handling:
+    def setup_method(self):
+        self.parser = GeminiResponseParser()
+
+    def test_parse_images_with_pre_extracted_base64(self):
+        """预提取的 base64 数据应正确传递到 GeminiImage。"""
+        images_data = [
+            {
+                "src": "https://example.com/img.png",
+                "alt": "Generated",
+                "width": 512,
+                "height": 512,
+                "base64_data": "iVBORw0KGgoAAAANSUhEUg==",
+                "mime_type": "image/png",
+            }
+        ]
+        images = self.parser.parse_images_from_elements(images_data)
+        assert len(images) == 1
+        assert images[0].base64_data == "iVBORw0KGgoAAAANSUhEUg=="
+        assert images[0].mime_type == "image/png"
+        assert images[0].url == "https://example.com/img.png"
+
+    def test_parse_images_canvas_no_src(self):
+        """来自 canvas 的图片没有 src，但有 base64 数据，应被正确处理。"""
+        images_data = [
+            {
+                "src": "",
+                "alt": "canvas-image",
+                "width": 256,
+                "height": 256,
+                "base64_data": "CANVAS_BASE64_DATA==",
+                "mime_type": "image/png",
+                "type": "canvas",
+            }
+        ]
+        images = self.parser.parse_images_from_elements(images_data)
+        assert len(images) == 1
+        assert images[0].base64_data == "CANVAS_BASE64_DATA=="
+        assert images[0].mime_type == "image/png"
+        assert images[0].url == ""
+
+    def test_parse_images_blob_converted(self):
+        """blob URL 转换后应只保留 base64 数据。"""
+        images_data = [
+            {
+                "src": "blob:https://gemini.google.com/abc123",
+                "alt": "Generated Image",
+                "width": 1024,
+                "height": 1024,
+                "base64_data": "BLOB_CONVERTED_BASE64==",
+                "mime_type": "image/png",
+            }
+        ]
+        images = self.parser.parse_images_from_elements(images_data)
+        assert len(images) == 1
+        assert images[0].base64_data == "BLOB_CONVERTED_BASE64=="
+        # blob URL 不是 data: URL，所以保留在 url 字段
+        assert "blob:" in images[0].url
+
+    def test_parse_images_mixed_sources(self):
+        """混合来源的图片（URL、data、canvas）应全部正确处理。"""
+        images_data = [
+            {
+                "src": "https://example.com/photo.jpg",
+                "alt": "Photo",
+                "width": 200,
+                "height": 200,
+                "base64_data": "DOWNLOADED_B64==",
+                "mime_type": "image/jpeg",
+            },
+            {
+                "src": "data:image/png;base64,INLINE_DATA==",
+                "alt": "Inline",
+                "width": 100,
+                "height": 100,
+            },
+            {
+                "src": "",
+                "alt": "Canvas",
+                "width": 300,
+                "height": 300,
+                "base64_data": "CANVAS_B64==",
+                "mime_type": "image/png",
+            },
+        ]
+        images = self.parser.parse_images_from_elements(images_data)
+        assert len(images) == 3
+
+        # URL 图片 with downloaded base64
+        assert images[0].url == "https://example.com/photo.jpg"
+        assert images[0].base64_data == "DOWNLOADED_B64=="
+        assert images[0].mime_type == "image/jpeg"
+
+        # data: URL 图片
+        assert images[1].url == ""
+        assert images[1].base64_data == "INLINE_DATA=="
+        assert images[1].mime_type == "image/png"
+
+        # Canvas 图片
+        assert images[2].url == ""
+        assert images[2].base64_data == "CANVAS_B64=="
+
+    def test_parse_images_data_url_takes_priority(self):
+        """data: URL 的 base64 应优先于预提取的 base64_data。"""
+        images_data = [
+            {
+                "src": "data:image/jpeg;base64,DATA_URL_B64==",
+                "alt": "test",
+                "width": 100,
+                "height": 100,
+                "base64_data": "PRE_EXTRACTED_B64==",
+                "mime_type": "image/png",
+            }
+        ]
+        images = self.parser.parse_images_from_elements(images_data)
+        assert len(images) == 1
+        # data: URL 的数据应优先
+        assert images[0].base64_data == "DATA_URL_B64=="
+        assert images[0].mime_type == "image/jpeg"
+
+    def test_full_parse_with_base64_data(self):
+        """完整解析应正确处理带 base64 的 image_data_list。"""
+        html = "<p>Here is your image</p>"
+        images_data = [
+            {
+                "src": "",
+                "alt": "Generated",
+                "width": 512,
+                "height": 512,
+                "base64_data": "GENERATED_IMAGE_DATA==",
+                "mime_type": "image/png",
+                "type": "canvas",
+            }
+        ]
+        response = self.parser.parse(html, images_data)
+        assert len(response.images) == 1
+        assert response.images[0].base64_data == "GENERATED_IMAGE_DATA=="
+        assert "image" in response.text.lower() or "here" in response.text.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 单元测试：客户端 save_images
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestSaveImages:
+    def test_save_images_empty_response(self):
+        """无图片时应返回空列表。"""
+        import base64
+
+        from webu.gemini.client import GeminiClient
+
+        client = GeminiClient.__new__(GeminiClient)
+        response = GeminiResponse()
+        paths = client.save_images(response, output_dir="/tmp/test_empty")
+        assert paths == []
+
+    def test_save_images_with_data(self):
+        """有 base64 数据的图片应被保存。"""
+        import base64
+
+        from webu.gemini.client import GeminiClient
+
+        client = GeminiClient.__new__(GeminiClient)
+
+        b64 = base64.b64encode(b"fake png data").decode()
+        response = GeminiResponse(
+            text="test",
+            images=[
+                GeminiImage(
+                    base64_data=b64, mime_type="image/png", width=100, height=100
+                ),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = client.save_images(response, output_dir=tmpdir, prefix="test")
+            assert len(paths) == 1
+            assert Path(paths[0]).exists()
+            assert "test_" in Path(paths[0]).name
+
+    def test_save_images_skip_no_base64(self):
+        """无 base64 数据的图片应被跳过。"""
+        from webu.gemini.client import GeminiClient
+
+        client = GeminiClient.__new__(GeminiClient)
+
+        response = GeminiResponse(
+            text="test",
+            images=[
+                GeminiImage(url="https://example.com/img.png", width=100, height=100),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = client.save_images(response, output_dir=tmpdir)
+            assert len(paths) == 0
+
+    def test_save_images_multiple(self):
+        """多张图片应全部保存。"""
+        import base64
+
+        from webu.gemini.client import GeminiClient
+
+        client = GeminiClient.__new__(GeminiClient)
+
+        b64 = base64.b64encode(b"image data").decode()
+        response = GeminiResponse(
+            images=[
+                GeminiImage(
+                    base64_data=b64, mime_type="image/png", width=100, height=100
+                ),
+                GeminiImage(
+                    base64_data=b64, mime_type="image/jpeg", width=200, height=200
+                ),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = client.save_images(response, output_dir=tmpdir, prefix="multi")
+            assert len(paths) == 2
+            assert paths[0].endswith(".png")
+            assert paths[1].endswith(".jpg")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 集成测试（需要浏览器）— 使用 module 级别共享 fixture
+# ═══════════════════════════════════════════════════════════════════
+
+# 使用 module 级别的 fixture 避免每个测试创建/销毁浏览器实例
+_shared_client = None
+
+
+@pytest.fixture(scope="module")
+async def shared_client():
+    """模块级别共享的 GeminiClient，所有集成测试复用同一个浏览器实例。"""
+    from webu.gemini.client import GeminiClient
+
+    client = GeminiClient(config={"headless": False})
+    await client.start()
+    yield client
+    await client.stop()
 
 
 @pytest.mark.integration
 class TestBrowserIntegration:
     """这些测试需要运行中的浏览器和网络访问。
     运行方式: pytest -m integration
+
+    所有测试共享同一个浏览器实例，避免创建多余标签页。
     """
 
-    @pytest.fixture
-    async def client(self):
-        from webu.gemini.client import GeminiClient
-
-        client = GeminiClient(config={"headless": False})
-        await client.start()
-        yield client
-        await client.stop()
+    @pytest.mark.asyncio
+    async def test_browser_launch(self, shared_client):
+        assert shared_client.is_ready
+        assert shared_client.page is not None
 
     @pytest.mark.asyncio
-    async def test_browser_launch(self, client):
-        assert client.is_ready
-        assert client.page is not None
-
-    @pytest.mark.asyncio
-    async def test_login_check(self, client):
-        status = await client.check_login_status()
+    async def test_login_check(self, shared_client):
+        status = await shared_client.check_login_status()
         assert "logged_in" in status
         assert "message" in status
 
     @pytest.mark.asyncio
-    async def test_screenshot(self, client):
+    async def test_screenshot(self, shared_client):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = str(Path(tmpdir) / "test_screenshot.png")
-            data = await client.screenshot(path=path)
+            data = await shared_client.screenshot(path=path)
             assert data is not None
             assert Path(path).exists()
 
     @pytest.mark.asyncio
-    async def test_get_status(self, client):
-        status = await client.get_status()
+    async def test_get_status(self, shared_client):
+        status = await shared_client.get_status()
         assert "is_ready" in status
         assert status["is_ready"] is True
 
     @pytest.mark.asyncio
-    async def test_page_info(self, client):
-        info = await client.browser.get_page_info()
+    async def test_page_info(self, shared_client):
+        info = await shared_client.browser.get_page_info()
         assert "url" in info
         assert "title" in info
+
+    @pytest.mark.asyncio
+    async def test_new_chat_no_extra_tabs(self, shared_client):
+        """新会话不应创建多余标签页。"""
+        pages_before = len(shared_client.browser.context.pages)
+        await shared_client.new_chat()
+        # 清理后应只有一个标签页
+        pages_after = len(shared_client.browser.context.pages)
+        assert pages_after <= pages_before
+        assert pages_after == 1
+
+    @pytest.mark.asyncio
+    async def test_close_extra_pages(self, shared_client):
+        """close_extra_pages 应正确清理多余标签页。"""
+        await shared_client.browser.close_extra_pages()
+        assert len(shared_client.browser.context.pages) == 1
+
+
+@pytest.mark.integration
+class TestChatIntegration:
+    """聊天功能集成测试。运行方式: pytest -m integration
+
+    这些测试需要已登录的 Gemini 账号。
+    """
+
+    @pytest.mark.asyncio
+    async def test_send_text_message(self, shared_client):
+        """发送简单文本消息并获取响应。"""
+        await shared_client.new_chat()
+        response = await shared_client.send_message("Hello, say 'Hi' back briefly.")
+        assert response is not None
+        assert len(response.text) > 0
+        assert not response.is_error
+
+    @pytest.mark.asyncio
+    async def test_send_message_with_code(self, shared_client):
+        """发送需要代码回复的消息。"""
+        await shared_client.new_chat()
+        response = await shared_client.send_message(
+            "Write a Python function that returns 42. Keep it short."
+        )
+        assert response is not None
+        assert len(response.text) > 0
+        # 可能包含代码块
+        if response.code_blocks:
+            assert "42" in response.code_blocks[0].code
+
+    @pytest.mark.asyncio
+    async def test_send_message_preserves_single_tab(self, shared_client):
+        """发送消息后应保持单标签页。"""
+        await shared_client.new_chat()
+        await shared_client.send_message("Say hello")
+        pages = len(shared_client.browser.context.pages)
+        assert pages == 1
+
+
+@pytest.mark.integration
+class TestImageIntegration:
+    """图片生成集成测试。运行方式: pytest -m integration"""
+
+    @pytest.mark.asyncio
+    async def test_generate_and_save_image(self, shared_client):
+        """生成图片并保存到磁盘。"""
+        await shared_client.new_chat()
+        response = await shared_client.generate_image(
+            "Draw a simple red circle on white background"
+        )
+        assert response is not None
+
+        if response.images:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                paths = shared_client.save_images(
+                    response, output_dir=tmpdir, prefix="test_gen"
+                )
+                # 如果有 base64 数据，应该能保存
+                for path in paths:
+                    assert Path(path).exists()
+                    assert Path(path).stat().st_size > 0
 
 
 @pytest.mark.integration
