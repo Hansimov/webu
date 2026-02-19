@@ -1,18 +1,18 @@
 [project]
 name = "webu"
-version = "0.6.3"
+version = "0.7"
 authors = [
     { name="Hansimov" },
 ]
 description = "Web Utils for browsing and scraping"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.6"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy"]
+dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright"]
 
 [project.urls]
 Homepage = "https://github.com/Hansimov/webu"
