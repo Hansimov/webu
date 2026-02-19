@@ -106,8 +106,12 @@ SEL_SEND_BUTTON = (
 )
 
 # ── 工具和模型选择 ───────────────────────────────────────────
-# 工具按钮
-SEL_TOOLS_BUTTON = 'button[aria-label*="Tools" i], ' 'button[aria-label*="工具"]'
+# 工具按钮（toolbox-drawer 按钮，而非零态意图卡片）
+SEL_TOOLS_BUTTON = (
+    "button.toolbox-drawer-button, "  # 实际 DOM class
+    'button[aria-label="工具"], '  # 精确匹配（避免匹配卡片的 "点按即可使用工具"）
+    'button[aria-label="Tools"]'
+)
 
 # 图片生成 — 零态卡片 + 工具抽屉
 SEL_IMAGE_GEN_OPTION = (
@@ -163,13 +167,14 @@ SEL_RESPONSE_CODE_BLOCKS = "message-content pre code, " ".response-container pre
 
 # ── 加载/流式传输状态 ────────────────────────────────────────
 # 加载指示器（Gemini 思考中）
+# 注意: 不要包含 div[class*="thinking"]，因为思考模式的响应中
+# 有永久的 "thinking" 区域，匹配后会导致 is_loading 一直为 True
 SEL_LOADING_INDICATOR = (
     "mat-progress-bar, "
     ".loading-indicator, "
     ".thinking-indicator, "
     '[class*="loading-spinner"], '
-    '[class*="progress-bar"], '
-    'div[class*="thinking"]'
+    '[class*="progress-bar"]'
 )
 
 # 停止生成按钮（流式输出时可见）
@@ -230,12 +235,20 @@ SEL_CHAT_LIST_ITEM = (
 )
 
 # ── 模式选项（下拉菜单中）────────────────────────────────────
+# 实际 DOM: <button role="menuitemradio" class="bard-mode-list-button">
 SEL_MODE_OPTION = (
-    'div[role="option"], '
-    'div[role="listbox"] button, '
-    "mat-option, "
-    'div[class*="mode-option"], '
-    'button[class*="mode-option"]'
+    'button[role="menuitemradio"], '  # 实际 DOM role
+    "button.bard-mode-list-button, "  # 实际 DOM class
+    '[data-test-id^="bard-mode-option"], '  # test-id
+    'div[role="option"], '  # 兼容
+    "mat-option"
+)
+
+# ── 工具选项（工具抽屉菜单中）────────────────────────────────
+# 实际 DOM: <button role="menuitemcheckbox" class="toolbox-drawer-item-list-button">
+SEL_TOOL_OPTION = (
+    'button[role="menuitemcheckbox"], '  # 实际 DOM role
+    "button.toolbox-drawer-item-list-button"  # 实际 DOM class
 )
 
 # ── 用户消息和模型消息容器 ───────────────────────────────────

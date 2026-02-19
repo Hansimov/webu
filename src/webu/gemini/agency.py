@@ -26,6 +26,7 @@ from .constants import (
     SEL_INPUT_AREA,
     SEL_SEND_BUTTON,
     SEL_TOOLS_BUTTON,
+    SEL_TOOL_OPTION,
     SEL_IMAGE_GEN_OPTION,
     SEL_MODEL_SELECTOR,
     SEL_RESPONSE_CONTAINER,
@@ -125,13 +126,21 @@ class GeminiAgency:
     async def start(self) -> "GeminiAgency":
         """启动 Gemini Agency（启动浏览器并导航）。"""
         logger.note("> 启动 GeminiAgency ...")
-        await self.browser.start()
-        await self.browser.navigate_to_gemini()
-        await asyncio.sleep(3)
-        self.is_ready = True
-        self._message_count = 0
-        logger.okay("  ✓ GeminiAgency 就绪")
-        return self
+        try:
+            await self.browser.start()
+            await self.browser.navigate_to_gemini()
+            await asyncio.sleep(3)
+            self.is_ready = True
+            self._message_count = 0
+            logger.okay("  ✓ GeminiAgency 就绪")
+            return self
+        except Exception as e:
+            logger.err(f"  × GeminiAgency 启动失败: {e}")
+            try:
+                await self.browser.stop()
+            except Exception:
+                pass
+            raise
 
     async def stop(self):
         """停止 GeminiAgency。"""
@@ -346,11 +355,15 @@ class GeminiAgency:
             self._image_mode = False
             return {"status": "ok", "chat_id": self._extract_chat_id(self.page.url)}
 
+    @with_retry(max_retries=2)
     async def switch_chat(self, chat_id: str) -> dict:
         """切换到指定 ID 的聊天会话。
 
         通过 URL 直接导航到 /app/{chat_id}。
         """
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
         logger.note(f"> 切换到会话: {chat_id}")
 
         target_url = f"https://gemini.google.com/app/{chat_id}"
@@ -439,18 +452,42 @@ class GeminiAgency:
             await selector_btn.click()
             await asyncio.sleep(0.8)
 
-            # 在下拉菜单中查找并点击目标模式
-            mode_option = await self._find_element_with_fallback(
-                css_selector=SEL_MODE_OPTION,
-                text_patterns=[mode],
-                element_types="div, button, mat-option, [role='option']",
-                description=f"模式选项 '{mode}'",
+            # 在下拉菜单中查找目标模式（实际 DOM 使用 role="menuitemradio"）
+            clicked = await self.page.evaluate(
+                """(mode) => {
+                    // 在 bard-mode-list-button 中查找包含目标模式名的按钮
+                    const buttons = document.querySelectorAll(
+                        'button[role="menuitemradio"], button.bard-mode-list-button'
+                    );
+                    for (const btn of buttons) {
+                        const title = btn.querySelector('.mode-title');
+                        const text = (title || btn).textContent.trim();
+                        if (text.includes(mode)) {
+                            btn.click();
+                            return { found: true, text: text };
+                        }
+                    }
+                    // 回退：在所有 data-test-id 匹配的元素中查找
+                    const testBtn = document.querySelector(
+                        '[data-test-id="bard-mode-option-' + mode + '"]'
+                    );
+                    if (testBtn) {
+                        testBtn.click();
+                        return { found: true, text: mode, via: 'test-id' };
+                    }
+                    return { found: false };
+                }""",
+                mode,
             )
-            await mode_option.click()
-            await asyncio.sleep(1)
 
+            if not clicked or not clicked.get("found"):
+                raise GeminiPageError(f"找不到模式选项 '{mode}'")
+
+            await asyncio.sleep(1)
             logger.okay(f"  ✓ 模式已设置为: {mode}")
             return {"status": "ok", "mode": mode}
+        except GeminiPageError:
+            raise
         except Exception as e:
             raise GeminiPageError(f"设置模式失败: {e}")
 
@@ -461,30 +498,33 @@ class GeminiAgency:
     async def get_tool(self) -> dict:
         """获取当前聊天窗口的活动工具。
 
-        检查工具按钮区域的状态来确定当前工具。
+        检查 toolbox-drawer 按钮区域的状态来确定当前工具。
         """
         if not self.is_ready:
             raise GeminiPageError("Agency 未启动。")
 
         try:
-            # 检查是否有活动工具指示器
             active_tool = await self.page.evaluate(
                 """() => {
-                // 检查工具区域中带有 active/selected 状态的元素
-                const toolIndicators = document.querySelectorAll(
-                    '[class*="tool-active"], [class*="active-tool"], ' +
-                    '.tool-chip, [class*="selected-tool"]'
+                // 1. 检查 toolbox-drawer-item-deselect-button（选中工具时出现）
+                const deselectBtns = document.querySelectorAll(
+                    'button.toolbox-drawer-item-deselect-button'
                 );
-                for (const el of toolIndicators) {
-                    const text = (el.textContent || '').trim();
-                    if (text) return text;
+                for (const btn of deselectBtns) {
+                    if (btn.offsetParent !== null || btn.offsetWidth > 0) {
+                        const text = (btn.textContent || '').trim();
+                        if (text) return text;
+                    }
                 }
 
-                // 检查是否在图片生成模式（特定 UI 元素）
-                const imgMode = document.querySelector(
-                    '[class*="image-gen"], [data-tool="image"]'
+                // 2. 检查 toolbox-drawer-button 是否有 has-selected-item 类
+                const drawerBtn = document.querySelector(
+                    'button.toolbox-drawer-button.has-selected-item'
                 );
-                if (imgMode) return '生成图片';
+                if (drawerBtn) {
+                    const label = drawerBtn.getAttribute('aria-label') || '';
+                    if (label && label !== '工具') return label;
+                }
 
                 return '';
             }"""
@@ -500,31 +540,44 @@ class GeminiAgency:
         """设置聊天窗口的工具。
 
         Args:
-            tool: 工具名称，如 "Deep Research", "生成图片", "创作音乐"
+            tool: 工具名称，如 "Deep Research", "生成图片", "创作音乐", "Canvas"
         """
         logger.note(f"> 设置工具: {tool}")
         if not self.is_ready:
             raise GeminiPageError("Agency 未启动。")
 
         try:
-            # 点击工具按钮打开抽屉
+            # 点击 toolbox-drawer 按钮打开工具菜单
             tools_btn = await self._find_element_with_fallback(
                 css_selector=SEL_TOOLS_BUTTON,
-                text_patterns=["工具", "Tools"],
-                element_types="button",
+                text_patterns=None,
                 description="工具按钮",
             )
             await tools_btn.click()
             await asyncio.sleep(1)
 
-            # 在抽屉中查找并点击目标工具
-            tool_option = await self._find_element_with_fallback(
-                css_selector=SEL_IMAGE_GEN_OPTION,
-                text_patterns=[tool],
-                element_types="button, span, div, [role='menuitem']",
-                description=f"工具选项 '{tool}'",
+            # 在工具菜单中查找目标工具（实际 DOM 使用 role="menuitemcheckbox"）
+            clicked = await self.page.evaluate(
+                """(tool) => {
+                    const buttons = document.querySelectorAll(
+                        'button[role="menuitemcheckbox"], ' +
+                        'button.toolbox-drawer-item-list-button'
+                    );
+                    for (const btn of buttons) {
+                        const text = (btn.textContent || '').trim();
+                        if (text.includes(tool) || tool.includes(text.split(' ')[0])) {
+                            btn.click();
+                            return { found: true, text: text };
+                        }
+                    }
+                    return { found: false };
+                }""",
+                tool,
             )
-            await tool_option.click()
+
+            if not clicked or not clicked.get("found"):
+                raise GeminiPageError(f"找不到工具选项 '{tool}'")
+
             await asyncio.sleep(1)
 
             # 如果是图片生成，更新内部状态
@@ -533,6 +586,8 @@ class GeminiAgency:
 
             logger.okay(f"  ✓ 工具已设置为: {tool}")
             return {"status": "ok", "tool": tool}
+        except GeminiPageError:
+            raise
         except Exception as e:
             raise GeminiPageError(f"设置工具失败: {e}")
 
@@ -966,23 +1021,7 @@ class GeminiAgency:
         """通过选择工具启用图片生成模式。"""
         logger.note("> 启用图片生成模式 ...")
         try:
-            tools_btn = await self._find_element_with_fallback(
-                css_selector=SEL_TOOLS_BUTTON,
-                text_patterns=["工具", "Tools"],
-                element_types="button",
-                description="工具按钮",
-            )
-            await tools_btn.click()
-            await asyncio.sleep(1)
-
-            img_option = await self._find_element_with_fallback(
-                css_selector=SEL_IMAGE_GEN_OPTION,
-                text_patterns=["生成图片", "Generate image"],
-                element_types="button, span, div, [role='menuitem']",
-                description="图片生成选项",
-            )
-            await img_option.click()
-            await asyncio.sleep(1)
+            result = await self.set_tool("生成图片")
             self._image_mode = True
             logger.okay("  ✓ 图片生成模式已启用")
         except GeminiImageGenerationError:
@@ -1179,10 +1218,13 @@ class GeminiAgency:
             )
             if not actual:
                 return False
-            check_len = min(20, len(expected_text) // 2)
+            # 将期望文本规范化（去除多余空白和换行）用于比较
+            normalized_expected = " ".join(expected_text.split())
+            normalized_actual = " ".join(actual.split())
+            check_len = min(20, len(normalized_expected) // 2)
             return (
-                expected_text[:check_len] in actual
-                or len(actual) >= len(expected_text) * 0.5
+                normalized_expected[:check_len] in normalized_actual
+                or len(normalized_actual) >= len(normalized_expected) * 0.5
             )
         except Exception:
             return False
@@ -1199,9 +1241,21 @@ class GeminiAgency:
         await asyncio.sleep(0.2)
 
         # 策略 1: keyboard.type()
+        # 注意: Gemini 输入框中 Enter 会提交消息，所以多行文本
+        # 需要用 Shift+Enter 来换行
         await input_area.focus()
         await asyncio.sleep(0.1)
-        await self.page.keyboard.type(text, delay=10)
+        if "\n" in text:
+            # 逐行输入，用 Shift+Enter 换行
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                if line:
+                    await self.page.keyboard.type(line, delay=10)
+                if i < len(lines) - 1:
+                    await self.page.keyboard.press("Shift+Enter")
+                    await asyncio.sleep(0.05)
+        else:
+            await self.page.keyboard.type(text, delay=10)
         await asyncio.sleep(0.5)
 
         if await self._verify_input_content(input_area, text):
@@ -1228,7 +1282,9 @@ class GeminiAgency:
                 }
                 if (target) {
                     target.focus();
-                    target.innerHTML = '<p>' + text + '</p>';
+                    // 多行文本用 <p> 标签分行
+                    const lines = text.split('\\n');
+                    target.innerHTML = lines.map(l => '<p>' + l + '</p>').join('');
                     target.dispatchEvent(new Event('input', {bubbles: true}));
                     target.dispatchEvent(new Event('change', {bubbles: true}));
                     target.dispatchEvent(new Event('compositionend', {bubbles: true}));
@@ -1382,7 +1438,7 @@ class GeminiAgency:
                 submit_ok = True
 
         if not submit_ok:
-            logger.warn(f"  ⚠ 提交验证未通过 (via {sent_via})")
+            logger.warn(f"  ⚠ 提交验证未通过 (via {sent_via})，但继续等待")
 
     async def _count_response_containers(self) -> int:
         """计算页面上的模型响应数量。"""
@@ -1509,14 +1565,20 @@ class GeminiAgency:
             resp = await self._get_latest_response_content()
             current_content = resp.get("html", "")
 
-            if (
-                current_content == last_content
-                and not is_loading
-                and not is_generating
-                and len(current_content) > 0
-            ):
+            content_stable = (
+                current_content == last_content and len(current_content) > 0
+            )
+
+            if content_stable and not is_loading and not is_generating:
+                # 理想情况：内容稳定，无加载、无生成
                 stable_count += 1
                 if stable_count >= 3:
+                    break
+            elif content_stable and not is_generating:
+                # 次优情况：内容稳定且停止按钮消失，但 loading 指示器
+                # 仍在（如思考模式的永久 thinking 区域）
+                stable_count += 1
+                if stable_count >= 5:
                     break
             else:
                 stable_count = 0

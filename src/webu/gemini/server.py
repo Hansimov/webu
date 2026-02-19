@@ -387,6 +387,21 @@ def create_gemini_server(
             logger.err(f"  × 重启失败: {e}")
             raise HTTPException(status_code=500, detail=f"重启失败: {e}")
 
+    # ── 调试: JS 执行 ────────────────────────────────────────
+
+    class EvaluateRequest(BaseModel):
+        js: str = Field(..., description="要在页面中执行的 JavaScript 代码")
+
+    @app.post("/evaluate", tags=["调试"])
+    async def evaluate_js(req: EvaluateRequest):
+        """在浏览器页面中执行 JavaScript 并返回结果（仅用于调试）。"""
+        _ensure_ready()
+        try:
+            result = await agency.page.evaluate(req.js)
+            return {"status": "ok", "result": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
     return app
 
 

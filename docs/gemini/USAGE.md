@@ -512,22 +512,36 @@ async def safe_chat():
 ```bash
 cd /path/to/webu
 
-# Server/Client 单元测试
-pytest tests/gemini/test_server_client.py -v --tb=short -m "not integration"
-
-# Gemini 模块单元测试
-pytest tests/gemini/test_gemini.py -v --tb=short -m "not integration"
+# Gemini 模块全量单元测试 (128 tests)
+pytest tests/gemini/test_gemini.py -v --tb=short
 
 # TCP 代理测试
-pytest tests/gemini/test_tcp_proxy.py -v --tb=short -m "not integration"
+pytest tests/gemini/test_tcp_proxy.py -v --tb=short
 ```
 
-### 运行集成测试（需要浏览器）
+### 运行实时端到端测试（需要运行中的 Server）
+
+先启动服务器：
 ```bash
-pytest tests/gemini/test_gemini.py -v -m integration
+python -m webu.gemini.run start
 ```
 
-### 运行所有测试
+再运行测试：
+```bash
+# 基础功能测试 (15 tests)
+# 覆盖: health, browser_status, screenshot, get/set_mode, get/set_tool,
+# get/set/add/clear_input, get_messages, get_attachments, new_chat, send_message
+python tests/gemini/test_live.py
+
+# 全场景端到端测试 (6 scenarios)
+# 覆盖: 模式轮换(快速→思考→Pro), 工具轮换(生成图片→Canvas→Deep Research),
+# 多轮对话, 新建聊天重置, 输入框边界情况(特殊字符/多行/追加), 思考模式发送
+python tests/gemini/test_live_scenarios.py
+```
+
+测试截图保存在 `data/debug/` 和 `data/debug/scenarios/` 目录。
+
+### 运行所有单元测试
 ```bash
 pytest tests/gemini/ -v
 ```
