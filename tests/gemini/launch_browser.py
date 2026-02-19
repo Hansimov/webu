@@ -1,15 +1,13 @@
-"""启动带 noVNC 的 Gemini 浏览器，用于远程可视化交互。
+"""持久化 Gemini 浏览器服务。
+
+启动 Chrome + Xvnc + noVNC，保持运行。
+测试脚本通过 CDP 连接到已运行的浏览器，无需重启。
 
 用法:
     python -m tests.gemini.launch_browser
 
-启动 Chrome，包含:
-- Xvnc 虚拟显示 (用于远程可视化访问)
-- noVNC Web 查看器 (基于浏览器的 VNC，地址 http://<hostname>:30004/vnc.html)
-- CDP TCP 代理 (DevTools 地址 http://<hostname>:30001/json)
-
-通过 noVNC 可视化访问浏览器，导航到 gemini.google.com，
-登录你的 Google 账号。登录会话将持久化保存在用户数据目录中。
+启动后打开 VNC 登录:
+    http://xeon:30004/vnc.html?autoconnect=true&resize=remote
 
 按 Ctrl+C 停止。
 """
@@ -17,9 +15,28 @@
 import asyncio
 import signal
 import socket
+import json
+from pathlib import Path
 
 from webu.gemini.browser import GeminiBrowser
 from webu.gemini.config import GeminiConfig
+from webu.gemini.constants import GEMINI_URL
+from tclogger import logger
+
+# 这个文件记录浏览器运行状态，供 test_interactive 检测
+STATE_FILE = (
+    Path(__file__).parent.parent.parent / ".chats" / "gemini" / "browser_state.json"
+)
+
+
+def save_state(state: dict):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def clear_state():
+    if STATE_FILE.exists():
+        STATE_FILE.unlink()
 
 
 async def main():
@@ -27,7 +44,6 @@ async def main():
     browser = GeminiBrowser(config=config)
     hostname = socket.gethostname()
 
-    # 优雅处理 Ctrl+C
     stop_event = asyncio.Event()
 
     def signal_handler():
@@ -40,23 +56,80 @@ async def main():
 
     try:
         await browser.start()
+        await browser.navigate_to_gemini()
 
         novnc_port = config.novnc_port
         cdp_port = config.browser_port
-        print(f"\n{'=' * 60}")
-        print(f"浏览器已运行！在你的浏览器中打开:")
-        print(
-            f"  http://{hostname}:{novnc_port}/vnc.html"
-            f"?autoconnect=true&resize=remote"
-        )
-        print(f"{'=' * 60}")
-        print(f"按 Ctrl+C 停止。\n")
+        internal_port = cdp_port + 10  # _INTERNAL_PORT_OFFSET
 
-        # 持续运行直到收到信号
-        await stop_event.wait()
+        # 保存运行状态
+        save_state(
+            {
+                "running": True,
+                "cdp_url": f"http://127.0.0.1:{internal_port}",
+                "external_port": cdp_port,
+                "novnc_port": novnc_port,
+                "hostname": hostname,
+            }
+        )
+
+        logger.note("=" * 60)
+        logger.note("  Gemini 浏览器持久运行中")
+        logger.note(
+            f"  VNC:  http://{hostname}:{novnc_port}/vnc.html?autoconnect=true&resize=remote"
+        )
+        logger.note(f"  CDP:  http://127.0.0.1:{internal_port}")
+        logger.note(f"  状态: {STATE_FILE}")
+        logger.note("  按 Ctrl+C 停止")
+        logger.note("=" * 60)
+
+        # 轮询登录状态
+        from webu.gemini.client import GeminiClient
+
+        client = GeminiClient.__new__(GeminiClient)
+        client.config = config
+        client.browser = browser
+        client.is_ready = True
+        client._image_mode = False
+        client._message_count = 0
+        from webu.gemini.parser import GeminiResponseParser
+
+        client.parser = GeminiResponseParser()
+
+        logged_in = False
+        while not stop_event.is_set():
+            if not logged_in:
+                try:
+                    status = await client.check_login_status()
+                    if status["logged_in"]:
+                        logged_in = True
+                        logger.okay(f"  ✓ 已登录: {status['message']}")
+                        save_state(
+                            {
+                                "running": True,
+                                "logged_in": True,
+                                "cdp_url": f"http://127.0.0.1:{internal_port}",
+                                "external_port": cdp_port,
+                                "novnc_port": novnc_port,
+                                "hostname": hostname,
+                            }
+                        )
+                        logger.note("  浏览器保持运行中... (Ctrl+C 停止)")
+                    else:
+                        logger.mesg(f"  等待登录... ({status['message']})")
+                except Exception as e:
+                    logger.warn(f"  状态检测异常: {e}")
+
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=10)
+                break
+            except asyncio.TimeoutError:
+                pass
 
     finally:
+        clear_state()
         await browser.stop()
+        logger.okay("  浏览器已停止")
 
 
 if __name__ == "__main__":

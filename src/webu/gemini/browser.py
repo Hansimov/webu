@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import os
 import re
 import signal
@@ -19,7 +20,7 @@ from tclogger import logger, logstr, norm_path
 from .config import GeminiConfig
 from .constants import GEMINI_URL, GEMINI_NAVIGATION_TIMEOUT, GEMINI_CHROME_EXECUTABLE
 from .constants import GEMINI_NOVNC_DIR
-from .errors import GeminiBrowserError, GeminiNetworkError
+from .errors import GeminiBrowserError, GeminiNetworkError, GeminiImageDownloadError
 
 
 # Chrome 默认用户数据目录
@@ -415,6 +416,8 @@ class GeminiBrowser:
             "--no-sandbox",
             "--disable-gpu",
             "--disable-extensions",
+            "--start-maximized",
+            "--window-size=1920,1080",
             "--disable-background-networking",
             "--disable-default-apps",
             "--disable-component-update",
@@ -505,7 +508,7 @@ class GeminiBrowser:
                     self.page = await self.context.new_page()
             else:
                 self.context = await self.browser.new_context(
-                    viewport={"width": 1400, "height": 900},
+                    viewport={"width": 1920, "height": 1080},
                     locale="zh-CN",
                     timezone_id="Asia/Shanghai",
                 )
@@ -632,10 +635,116 @@ class GeminiBrowser:
         """对当前页面截图。"""
         if not self.page:
             raise GeminiBrowserError("没有活动页面可以截图。")
-        screenshot_bytes = await self.page.screenshot(path=path, full_page=True)
+        screenshot_bytes = await self.page.screenshot(path=path, full_page=False)
         if path:
             logger.okay(f"  + 截图已保存: {path}")
         return screenshot_bytes
+
+    async def download_image_as_base64(self, image_url: str) -> dict:
+        """通过浏览器上下文下载图片并转为 base64。
+
+        使用浏览器的 page.evaluate() 在页面上下文中通过 fetch API 下载图片，
+        这样可以自动携带 Cookie 和会话信息。
+
+        支持的 URL 类型：
+        - data: URL（直接提取 base64）
+        - blob: URL（通过 canvas 提取）
+        - http/https URL（通过 fetch 下载）
+
+        Returns:
+            dict: {"base64_data": str, "mime_type": str}
+        """
+        if not self.page:
+            raise GeminiBrowserError("没有活动页面，无法下载图片。")
+
+        try:
+            # data: URL - 直接提取
+            if image_url.startswith("data:"):
+                parts = image_url.split(",", 1)
+                if len(parts) == 2:
+                    import re as _re
+
+                    mime_match = _re.match(r"data:([^;]+)", parts[0])
+                    mime_type = mime_match.group(1) if mime_match else "image/png"
+                    return {"base64_data": parts[1], "mime_type": mime_type}
+
+            # 使用 page.evaluate 在浏览器中下载
+            result = await self.page.evaluate(
+                """async (url) => {
+                    try {
+                        // blob: URL - 使用 Image + Canvas
+                        if (url.startsWith('blob:')) {
+                            return await new Promise((resolve, reject) => {
+                                const img = new Image();
+                                img.crossOrigin = 'anonymous';
+                                img.onload = () => {
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = img.naturalWidth;
+                                    canvas.height = img.naturalHeight;
+                                    const ctx = canvas.getContext('2d');
+                                    ctx.drawImage(img, 0, 0);
+                                    const dataUrl = canvas.toDataURL('image/png');
+                                    const base64 = dataUrl.split(',')[1];
+                                    resolve({base64_data: base64, mime_type: 'image/png'});
+                                };
+                                img.onerror = () => reject(new Error('Failed to load blob image'));
+                                img.src = url;
+                            });
+                        }
+
+                        // http/https URL - 使用 fetch
+                        const response = await fetch(url);
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+                        const blob = await response.blob();
+                        const mime_type = blob.type || 'image/png';
+
+                        return await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                const base64 = reader.result.split(',')[1];
+                                resolve({base64_data: base64, mime_type: mime_type});
+                            };
+                            reader.onerror = () => reject(new Error('FileReader failed'));
+                            reader.readAsDataURL(blob);
+                        });
+                    } catch (e) {
+                        return {error: e.message || String(e)};
+                    }
+                }""",
+                image_url,
+            )
+
+            if result and result.get("error"):
+                raise GeminiImageDownloadError(
+                    f"浏览器内图片下载失败: {result['error']}",
+                    details={"url": image_url},
+                )
+
+            return result or {"base64_data": "", "mime_type": "image/png"}
+
+        except GeminiImageDownloadError:
+            raise
+        except Exception as e:
+            raise GeminiImageDownloadError(
+                f"下载图片失败: {e}",
+                details={"url": image_url},
+            )
+
+    async def get_page_info(self) -> dict:
+        """获取当前页面的基本信息，用于调试。"""
+        if not self.page:
+            return {"error": "没有活动页面"}
+
+        try:
+            return {
+                "url": self.page.url,
+                "title": await self.page.title(),
+                "viewport": self.page.viewport_size,
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     async def __aenter__(self):
         await self.start()

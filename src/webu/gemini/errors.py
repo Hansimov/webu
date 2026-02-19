@@ -70,3 +70,17 @@ class GeminiPageError(GeminiError):
 
     def __init__(self, message: str = "页面交互失败。", details: dict = None):
         super().__init__(message, details)
+
+
+class GeminiRateLimitError(GeminiError):
+    """触发速率限制时抛出。"""
+
+    def __init__(self, message: str = "已达到 Gemini 速率限制。", details: dict = None):
+        super().__init__(message, details)
+
+
+class GeminiImageDownloadError(GeminiError):
+    """图片下载失败时抛出。"""
+
+    def __init__(self, message: str = "图片下载失败。", details: dict = None):
+        super().__init__(message, details)

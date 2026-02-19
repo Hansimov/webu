@@ -15,6 +15,7 @@ from .errors import (
     GeminiTimeoutError,
     GeminiImageGenerationError,
     GeminiPageError,
+    GeminiRateLimitError,
 )
 from ..fastapis.styles import setup_swagger_ui
 
@@ -26,6 +27,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="发送给 Gemini 的消息文本")
     new_chat: bool = Field(False, description="是否先开始新会话")
     image_mode: bool = Field(False, description="是否使用图片生成模式")
+    download_images: bool = Field(True, description="是否将图片下载为 base64")
 
 
 class ImageRequest(BaseModel):
@@ -67,6 +69,12 @@ class StatusResponse(BaseModel):
     message: str = ""
     is_ready: bool = False
     is_logged_in: bool = False
+    message_count: int = 0
+
+
+class HealthResponse(BaseModel):
+    status: str = "ok"
+    version: str = "1.0.0"
 
 
 # ── 应用工厂 ────────────────────────────────────────────────────
@@ -97,13 +105,28 @@ def create_gemini_app(
 
     app = FastAPI(
         title="Gemini 自动化 API",
-        description="通过浏览器自动化 Google Gemini 交互的 API",
+        description="通过浏览器自动化 Google Gemini 交互的 API。\n\n"
+        "支持文本聊天、图片生成、会话管理和状态查询。",
         version="1.0.0",
         lifespan=lifespan,
     )
     setup_swagger_ui(app)
 
+    # ── 辅助函数 ─────────────────────────────────────────────
+    def _ensure_client_ready():
+        """检查客户端是否就绪，未就绪则抛出 503 错误。"""
+        if not client or not client.is_ready:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini 客户端未就绪。请稍后重试或检查浏览器状态。",
+            )
+
     # ── 接口 ─────────────────────────────────────────────────────
+
+    @app.get("/health", response_model=HealthResponse, tags=["系统"])
+    async def health_check():
+        """健康检查接口。无需客户端就绪。"""
+        return HealthResponse(status="ok", version="1.0.0")
 
     @app.get("/status", response_model=StatusResponse, tags=["系统"])
     async def get_status():
@@ -116,6 +139,7 @@ def create_gemini_app(
                 login_status = await client.check_login_status()
                 result.is_logged_in = login_status["logged_in"]
                 result.message = login_status["message"]
+                result.message_count = client._message_count
             except Exception as e:
                 result.message = f"检查状态出错: {e}"
         else:
@@ -125,8 +149,7 @@ def create_gemini_app(
     @app.get("/login-status", response_model=LoginStatusResponse, tags=["认证"])
     async def get_login_status():
         """检查用户是否已登录 Gemini。"""
-        if not client or not client.is_ready:
-            raise HTTPException(status_code=503, detail="Gemini 客户端未就绪")
+        _ensure_client_ready()
         try:
             status = await client.check_login_status()
             return LoginStatusResponse(**status)
@@ -135,9 +158,12 @@ def create_gemini_app(
 
     @app.post("/chat", response_model=ChatResponse, tags=["聊天"])
     async def send_chat(req: ChatRequest):
-        """向 Gemini 发送消息并获取响应。"""
-        if not client or not client.is_ready:
-            raise HTTPException(status_code=503, detail="Gemini 客户端未就绪")
+        """向 Gemini 发送消息并获取响应。
+
+        支持普通文本聊天和图片生成模式。
+        可选择是否下载图片为 base64 数据。
+        """
+        _ensure_client_ready()
 
         try:
             if req.new_chat:
@@ -146,6 +172,7 @@ def create_gemini_app(
             response = await client.send_message(
                 text=req.message,
                 image_mode=req.image_mode,
+                download_images=req.download_images,
             )
 
             return ChatResponse(
@@ -161,6 +188,8 @@ def create_gemini_app(
 
         except GeminiLoginRequiredError as e:
             raise HTTPException(status_code=401, detail=str(e))
+        except GeminiRateLimitError as e:
+            raise HTTPException(status_code=429, detail=str(e))
         except GeminiTimeoutError as e:
             raise HTTPException(status_code=504, detail=str(e))
         except GeminiError as e:
@@ -171,9 +200,11 @@ def create_gemini_app(
 
     @app.post("/generate-image", response_model=ChatResponse, tags=["图片"])
     async def generate_image(req: ImageRequest):
-        """使用 Gemini 生成图片。"""
-        if not client or not client.is_ready:
-            raise HTTPException(status_code=503, detail="Gemini 客户端未就绪")
+        """使用 Gemini 生成图片。
+
+        自动启用图片生成工具并下载生成的图片为 base64 数据。
+        """
+        _ensure_client_ready()
 
         try:
             if req.new_chat:
@@ -194,6 +225,8 @@ def create_gemini_app(
 
         except GeminiLoginRequiredError as e:
             raise HTTPException(status_code=401, detail=str(e))
+        except GeminiRateLimitError as e:
+            raise HTTPException(status_code=429, detail=str(e))
         except GeminiTimeoutError as e:
             raise HTTPException(status_code=504, detail=str(e))
         except GeminiImageGenerationError as e:
@@ -207,8 +240,7 @@ def create_gemini_app(
     @app.post("/new-chat", tags=["聊天"])
     async def start_new_chat():
         """开始新的会话。"""
-        if not client or not client.is_ready:
-            raise HTTPException(status_code=503, detail="Gemini 客户端未就绪")
+        _ensure_client_ready()
         try:
             await client.new_chat()
             return {"status": "ok", "message": "新会话已启动"}
@@ -218,14 +250,27 @@ def create_gemini_app(
     @app.post("/screenshot", tags=["调试"])
     async def take_screenshot(path: str = None):
         """对当前浏览器状态截图。"""
-        if not client or not client.is_ready:
-            raise HTTPException(status_code=503, detail="Gemini 客户端未就绪")
+        _ensure_client_ready()
         try:
             save_path = path or "data/gemini_screenshot.png"
             await client.screenshot(path=save_path)
             return {"status": "ok", "path": save_path}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/restart", tags=["系统"])
+    async def restart_client():
+        """重启 Gemini 客户端。"""
+        nonlocal client
+        try:
+            if client:
+                await client.stop()
+            client = GeminiClient(config=gemini_config.config)
+            await client.start()
+            return {"status": "ok", "message": "客户端已重启"}
+        except Exception as e:
+            logger.err(f"  × 重启失败: {e}")
+            raise HTTPException(status_code=500, detail=f"重启失败: {e}")
 
     return app
 

@@ -116,8 +116,27 @@ async def image_example():
             print(f"替代文本: {img.alt}")
             if img.base64_data:
                 print(f"Base64 数据: {img.base64_data[:50]}...")
+                print(f"MIME 类型: {img.mime_type}")
 
 asyncio.run(image_example())
+```
+
+发送消息时也可以下载图片（默认启用）：
+```python
+async def chat_with_images():
+    async with GeminiClient() as client:
+        # download_images=True 时自动下载图片为 base64
+        response = await client.send_message(
+            "生成一张猫咪图片",
+            download_images=True,  # 默认值
+        )
+        for img in response.images:
+            if img.base64_data:
+                # 可直接用于显示或保存
+                import base64
+                data = base64.b64decode(img.base64_data)
+                with open("cat.png", "wb") as f:
+                    f.write(data)
 ```
 
 ### 5. 多轮对话
@@ -164,6 +183,18 @@ python -m webu.gemini.api
 
 ### API 接口
 
+#### 健康检查
+```bash
+curl http://localhost:30002/health
+```
+响应：
+```json
+{
+  "status": "ok",
+  "version": "1.0.0"
+}
+```
+
 #### 检查状态
 ```bash
 curl http://localhost:30002/status
@@ -174,7 +205,8 @@ curl http://localhost:30002/status
   "status": "ok",
   "message": "用户已登录 (PRO)",
   "is_ready": true,
-  "is_logged_in": true
+  "is_logged_in": true,
+  "message_count": 5
 }
 ```
 
@@ -182,7 +214,7 @@ curl http://localhost:30002/status
 ```bash
 curl -X POST http://localhost:30002/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "解释 Python 装饰器", "new_chat": true}'
+  -d '{"message": "解释 Python 装饰器", "new_chat": true, "download_images": true}'
 ```
 响应：
 ```json
@@ -213,6 +245,11 @@ curl -X POST http://localhost:30002/new-chat
 #### 调试截图
 ```bash
 curl -X POST "http://localhost:30002/screenshot?path=debug.png"
+```
+
+#### 重启客户端
+```bash
+curl -X POST http://localhost:30002/restart
 ```
 
 ### Swagger UI
@@ -258,6 +295,8 @@ from webu.gemini import (
     GeminiTimeoutError,
     GeminiResponseParseError,
     GeminiImageGenerationError,
+    GeminiRateLimitError,
+    GeminiImageDownloadError,
 )
 
 async def safe_chat():
@@ -266,14 +305,21 @@ async def safe_chat():
             response = await client.send_message("你好")
         except GeminiLoginRequiredError:
             print("请先登录！")
+        except GeminiRateLimitError as e:
+            print(f"触发速率限制: {e}")
+            print(f"详情: {e.details}")
         except GeminiNetworkError as e:
             print(f"网络问题: {e}")
             print(f"代理: {e.details.get('proxy')}")
         except GeminiTimeoutError as e:
             print(f"超时: {e.details.get('timeout_ms')}ms")
+        except GeminiImageDownloadError as e:
+            print(f"图片下载失败: {e}")
         except GeminiError as e:
             print(f"一般错误: {e}")
 ```
+
+**注意**：`GeminiPageError` 和 `PlaywrightTimeoutError` 会被 `with_retry()` 装饰器自动重试（默认 3 次，指数退避）。`GeminiLoginRequiredError` 和 `GeminiRateLimitError` 不会重试。
 
 ## 测试
 

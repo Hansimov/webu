@@ -8,4 +8,9 @@ from .errors import (
     GeminiTimeoutError,
     GeminiResponseParseError,
     GeminiImageGenerationError,
+    GeminiBrowserError,
+    GeminiPageError,
+    GeminiRateLimitError,
+    GeminiImageDownloadError,
 )
+from .parser import GeminiResponse, GeminiResponseParser, GeminiImage, GeminiCodeBlock

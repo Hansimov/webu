@@ -32,41 +32,162 @@ GEMINI_NAVIGATION_TIMEOUT = 30000
 # 轮询间隔（毫秒）
 GEMINI_POLL_INTERVAL = 500
 
+# 重试配置
+GEMINI_MAX_RETRIES = 3
+GEMINI_RETRY_DELAY = 1.0  # 秒
+
+# ═══════════════════════════════════════════════════════════════
 # Gemini 页面元素的 CSS 选择器
-# 登录状态检测
-SEL_LOGIN_AVATAR = 'img[class*="profile"], img[data-src*="googleusercontent"], a[aria-label*="Google"], img.gb_q'
-SEL_LOGIN_BUTTON = 'a[href*="accounts.google.com"], a[data-action="sign in"]'
-SEL_PRO_BADGE = 'span:has-text("PRO"), div:has-text("PRO")'
+# 每组选择器按优先级排列，用逗号分隔作为 CSS 选择器组
+# ═══════════════════════════════════════════════════════════════
 
-# 侧边栏
-SEL_SIDEBAR_TOGGLE = 'button[aria-label*="menu"], button[aria-label*="菜单"], button[mattooltip*="menu"], button[mattooltip*="菜单"]'
-SEL_NEW_CHAT_BUTTON = 'button:has-text("New chat"), button:has-text("发起新对话"), a:has-text("New chat"), a:has-text("发起新对话")'
+# ── 登录状态检测 ─────────────────────────────────────────────
+# Google Bar 头像和 PRO 徽章（已登录时可见）
+SEL_LOGIN_AVATAR = (
+    "img.gb_q, "  # Google Bar 标准头像
+    'img[data-src*="googleusercontent"], '  # Google 头像 CDN
+    'a[aria-label*="Google Account"], '  # 英文界面
+    'a[aria-label*="Google 账号"], '  # 中文界面
+    'img[class*="profile-avatar"], '  # 通用头像类名
+    'div[class*="avatar"] img'  # 头像容器内的图片
+)
 
-# 聊天输入
-SEL_INPUT_AREA = '.ql-editor[contenteditable="true"], div[contenteditable="true"][role="textbox"], rich-textarea div[contenteditable="true"]'
-SEL_SEND_BUTTON = 'button[aria-label*="Send"], button[aria-label*="发送"], button[mattooltip*="Send"], button[mattooltip*="发送"], button.send-button'
+# 登录/注册按钮（未登录时可见）
+SEL_LOGIN_BUTTON = (
+    'a[href*="accounts.google.com/ServiceLogin"], '
+    'a[href*="accounts.google.com"][data-action="sign in"], '
+    'a[data-action="sign in"], '
+    'button[data-action="sign in"]'
+)
 
-# 工具和模型选择
-SEL_TOOLS_BUTTON = 'button:has-text("工具"), button:has-text("Tools")'
-SEL_IMAGE_GEN_OPTION = 'button:has-text("生成图片"), button:has-text("Generate image"), span:has-text("生成图片"), span:has-text("Generate image")'
+# PRO 订阅标识
+SEL_PRO_BADGE = (
+    '[class*="upgrade-badge"], ' '[class*="pro-badge"], ' '[data-badge="pro"]'
+)
+
+# ── 侧边栏 ──────────────────────────────────────────────────
+# 侧边栏切换按钮（汉堡菜单图标）
+SEL_SIDEBAR_TOGGLE = (
+    'button[aria-label*="Main menu"], '
+    'button[aria-label*="主菜单"], '
+    'button[aria-label*="menu" i], '
+    'button[aria-label*="菜单"], '
+    'button[mattooltip*="menu" i], '
+    'button[mattooltip*="菜单"]'
+)
+
+# 新建会话按钮
+SEL_NEW_CHAT_BUTTON = (
+    'a[aria-label*="发起新对话"], '  # 实际 DOM: <a> 标签
+    'a[aria-label*="New chat"], '
+    'button[aria-label*="New chat"], '
+    'button[aria-label*="发起新对话"]'
+)
+
+# ── 聊天输入 ─────────────────────────────────────────────────
+# 输入框（Gemini 使用 contenteditable rich text 编辑器）
+SEL_INPUT_AREA = (
+    'rich-textarea div.ql-editor[contenteditable="true"], '  # Quill 编辑器
+    'div.ql-editor[contenteditable="true"], '  # Quill 无 rich-textarea 包裹
+    'rich-textarea div[contenteditable="true"], '  # rich-textarea 内
+    'div[contenteditable="true"][role="textbox"], '  # 通用 textbox
+    'div[contenteditable="true"][aria-label*="prompt" i], '  # 英文
+    'div[contenteditable="true"][aria-label*="输入"]'  # 中文
+)
+
+# 发送按钮
+SEL_SEND_BUTTON = (
+    'button[aria-label*="Send" i], '
+    'button[aria-label*="发送"], '
+    'button[mattooltip*="Send" i], '
+    'button[mattooltip*="发送"], '
+    "button.send-button, "
+    'button[data-test-id="send-button"]'
+)
+
+# ── 工具和模型选择 ───────────────────────────────────────────
+# 工具按钮
+SEL_TOOLS_BUTTON = 'button[aria-label*="Tools" i], ' 'button[aria-label*="工具"]'
+
+# 图片生成 — 零态卡片 + 工具抽屉
+SEL_IMAGE_GEN_OPTION = (
+    'button[aria-label*="制作图片"], '  # 零态卡片
+    'button[aria-label*="Generate image" i], '  # 英文零态卡片
+    'toolbox-drawer button[aria-label*="image" i], '  # 工具抽屉中的选项
+    'button[data-test-id="image-generation"], '
+    '[role="menuitem"]'
+)
+
+# 模型/模式选择器（实际 DOM: button[aria-label="打开模式选择器"] text="快速"）
 SEL_MODEL_SELECTOR = (
-    'button:has-text("Pro"), button[aria-label*="model"], div[role="listbox"]'
+    'button[aria-label*="模式选择器"], '  # 中文
+    'button[aria-label*="mode selector" i], '  # 英文
+    "button.input-area-switch, "  # class 名
+    'button[aria-label*="model" i], '
+    'button[data-test-id="model-selector"], '
+    'div[role="listbox"]'
 )
 
-# 响应区域
+# PRO 徽章/按钮（disabled=True 表示已是 PRO 用户）
+SEL_PRO_BUTTON = (
+    "button.pillbox-btn, "  # 实际 DOM class
+    "button.gds-pillbox-button"
+)
+
+# ── 响应区域 ─────────────────────────────────────────────────
+# 响应容器（包含完整的模型回复）
 SEL_RESPONSE_CONTAINER = (
-    'message-content, .response-container, .model-response-text, div[class*="response"]'
+    "message-content, "
+    "model-response, "
+    ".response-container, "
+    ".model-response-text, "
+    'div[class*="response-container"], '
+    'div[class*="model-response"]'
 )
+
+# 响应中的文本区域
 SEL_RESPONSE_TEXT = (
-    "message-content .markdown, .response-container .markdown, .model-response-text"
+    "message-content .markdown, "
+    "message-content .markdown-main-panel, "
+    ".response-container .markdown, "
+    ".model-response-text"
 )
-SEL_RESPONSE_IMAGES = "message-content img, .response-container img"
-SEL_RESPONSE_CODE_BLOCKS = "message-content pre code, .response-container pre code"
 
-# 加载/流式传输指示器
-SEL_LOADING_INDICATOR = '.loading-indicator, mat-progress-bar, .thinking-indicator, [class*="loading"], [class*="progress"]'
-SEL_STOP_BUTTON = 'button[aria-label*="Stop"], button[aria-label*="停止"]'
+# 响应中的图片
+SEL_RESPONSE_IMAGES = (
+    "message-content img, " ".response-container img, " "model-response img"
+)
 
-# 错误指示器
-SEL_ERROR_MESSAGE = '.error-message, div[class*="error"], .snackbar-error'
-SEL_QUOTA_WARNING = 'div:has-text("quota"), div:has-text("limit"), div:has-text("配额")'
+# 响应中的代码块
+SEL_RESPONSE_CODE_BLOCKS = "message-content pre code, " ".response-container pre code"
+
+# ── 加载/流式传输状态 ────────────────────────────────────────
+# 加载指示器（Gemini 思考中）
+SEL_LOADING_INDICATOR = (
+    "mat-progress-bar, "
+    ".loading-indicator, "
+    ".thinking-indicator, "
+    '[class*="loading-spinner"], '
+    '[class*="progress-bar"], '
+    'div[class*="thinking"]'
+)
+
+# 停止生成按钮（流式输出时可见）
+SEL_STOP_BUTTON = (
+    'button[aria-label*="Stop" i], '
+    'button[aria-label*="停止"], '
+    'button[mattooltip*="Stop" i], '
+    'button[mattooltip*="停止"]'
+)
+
+# ── 错误指示器 ───────────────────────────────────────────────
+SEL_ERROR_MESSAGE = (
+    ".error-message, "
+    'div[class*="error-message"], '
+    ".snackbar-error, "
+    'div[class*="error-container"]'
+)
+
+SEL_QUOTA_WARNING = (
+    'div[class*="quota"], ' 'div[class*="rate-limit"], ' 'div[class*="limit-warning"]'
+)
