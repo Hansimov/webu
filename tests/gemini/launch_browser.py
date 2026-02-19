@@ -84,23 +84,23 @@ async def main():
         logger.note("=" * 60)
 
         # 轮询登录状态
-        from webu.gemini.client import GeminiClient
+        from webu.gemini.agency import GeminiAgency
 
-        client = GeminiClient.__new__(GeminiClient)
-        client.config = config
-        client.browser = browser
-        client.is_ready = True
-        client._image_mode = False
-        client._message_count = 0
+        agency = GeminiAgency.__new__(GeminiAgency)
+        agency.config = config
+        agency.browser = browser
+        agency.is_ready = True
+        agency._image_mode = False
+        agency._message_count = 0
         from webu.gemini.parser import GeminiResponseParser
 
-        client.parser = GeminiResponseParser()
+        agency.parser = GeminiResponseParser()
 
         logged_in = False
         while not stop_event.is_set():
             if not logged_in:
                 try:
-                    status = await client.check_login_status()
+                    status = await agency.check_login_status()
                     if status["logged_in"]:
                         logged_in = True
                         logger.okay(f"  ✓ 已登录: {status['message']}")

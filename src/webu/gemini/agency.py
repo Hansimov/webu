@@ -1,0 +1,1670 @@
+"""GeminiAgency: 浏览器交互代理层。
+
+封装所有与 Gemini 网页的浏览器交互逻辑，提供清晰的接口供 FastAPI 服务器调用。
+"""
+
+import asyncio
+import functools
+import time
+
+from pathlib import Path
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from tclogger import logger, logstr, brk
+
+from .browser import GeminiBrowser
+from .config import GeminiConfig, GeminiConfigType
+from .constants import (
+    GEMINI_URL,
+    GEMINI_POLL_INTERVAL,
+    GEMINI_MAX_RETRIES,
+    GEMINI_RETRY_DELAY,
+    SEL_LOGIN_AVATAR,
+    SEL_LOGIN_BUTTON,
+    SEL_PRO_BADGE,
+    SEL_SIDEBAR_TOGGLE,
+    SEL_NEW_CHAT_BUTTON,
+    SEL_INPUT_AREA,
+    SEL_SEND_BUTTON,
+    SEL_TOOLS_BUTTON,
+    SEL_IMAGE_GEN_OPTION,
+    SEL_MODEL_SELECTOR,
+    SEL_RESPONSE_CONTAINER,
+    SEL_RESPONSE_TEXT,
+    SEL_RESPONSE_IMAGES,
+    SEL_RESPONSE_CODE_BLOCKS,
+    SEL_LOADING_INDICATOR,
+    SEL_STOP_BUTTON,
+    SEL_ERROR_MESSAGE,
+    SEL_QUOTA_WARNING,
+    SEL_FILE_UPLOAD_BUTTON,
+    SEL_FILE_UPLOAD_INPUT,
+    SEL_ATTACHMENT_CHIP,
+    SEL_ATTACHMENT_REMOVE,
+    SEL_CHAT_LIST_ITEM,
+    SEL_MODE_OPTION,
+    SEL_USER_MESSAGE,
+    SEL_MODEL_MESSAGE,
+)
+from .errors import (
+    GeminiError,
+    GeminiLoginRequiredError,
+    GeminiNetworkError,
+    GeminiTimeoutError,
+    GeminiResponseParseError,
+    GeminiImageGenerationError,
+    GeminiPageError,
+    GeminiRateLimitError,
+)
+from .parser import GeminiResponse, GeminiResponseParser
+
+
+# ── 重试装饰器 ───────────────────────────────────────────────
+
+
+def with_retry(
+    max_retries: int = GEMINI_MAX_RETRIES, delay: float = GEMINI_RETRY_DELAY
+):
+    """为异步方法添加重试逻辑的装饰器。
+
+    在遇到 GeminiPageError 或 PlaywrightTimeoutError 时自动重试。
+    不重试 GeminiLoginRequiredError 和 GeminiRateLimitError。
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except (GeminiLoginRequiredError, GeminiRateLimitError):
+                    raise  # 不重试认证和限流错误
+                except (GeminiPageError, PlaywrightTimeoutError) as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        logger.warn(f"  ⚠ 操作失败 (尝试 {attempt}/{max_retries}): {e}")
+                        await asyncio.sleep(delay * attempt)
+                    else:
+                        raise
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        logger.warn(f"  ⚠ 意外错误 (尝试 {attempt}/{max_retries}): {e}")
+                        await asyncio.sleep(delay * attempt)
+                    else:
+                        raise
+
+        return wrapper
+
+    return decorator
+
+
+class GeminiAgency:
+    """与 Gemini Web 界面交互的浏览器代理层。
+
+    封装所有页面交互逻辑，为 FastAPI 服务器提供统一接口：
+    - 浏览器状态查询
+    - 聊天会话管理（新建、切换）
+    - 模式和工具管理
+    - 输入框操作（清空、设置、追加、读取）
+    - 消息发送（同步/异步）
+    - 文件上传/管理
+    - 聊天消息解析
+    """
+
+    def __init__(self, config: GeminiConfigType = None, config_path: str = None):
+        self.config = GeminiConfig(config=config, config_path=config_path)
+        self.browser = GeminiBrowser(config=self.config)
+        self.parser = GeminiResponseParser()
+        self.is_ready = False
+        self._image_mode = False
+        self._message_count = 0
+
+    # ── 生命周期 ──────────────────────────────────────────────
+
+    async def start(self) -> "GeminiAgency":
+        """启动 Gemini Agency（启动浏览器并导航）。"""
+        logger.note("> 启动 GeminiAgency ...")
+        await self.browser.start()
+        await self.browser.navigate_to_gemini()
+        await asyncio.sleep(3)
+        self.is_ready = True
+        self._message_count = 0
+        logger.okay("  ✓ GeminiAgency 就绪")
+        return self
+
+    async def stop(self):
+        """停止 GeminiAgency。"""
+        logger.note("> 停止 GeminiAgency ...")
+        self.is_ready = False
+        self._message_count = 0
+        await self.browser.stop()
+        logger.okay("  ✓ GeminiAgency 已停止")
+
+    @property
+    def page(self) -> Page:
+        return self.browser.page
+
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.stop()
+        return False
+
+    # ══════════════════════════════════════════════════════════
+    # 浏览器状态
+    # ══════════════════════════════════════════════════════════
+
+    async def browser_status(self) -> dict:
+        """返回浏览器实例的全面状态信息。
+
+        包括是否已登录、当前页面 URL、当前模式和工具等。
+        """
+        status = {
+            "is_ready": self.is_ready,
+            "message_count": self._message_count,
+            "image_mode": self._image_mode,
+        }
+
+        # 浏览器底层状态
+        status["browser"] = self.browser.get_status()
+
+        if not self.is_ready:
+            return status
+
+        # 页面信息
+        try:
+            status["page"] = await self.browser.get_page_info()
+        except Exception as e:
+            status["page"] = {"error": str(e)}
+
+        # 登录状态
+        try:
+            login = await self.check_login_status()
+            status["login"] = login
+        except Exception as e:
+            status["login"] = {"error": str(e)}
+
+        # 当前模式
+        try:
+            mode = await self.get_mode()
+            status["mode"] = mode
+        except Exception:
+            status["mode"] = {"mode": "unknown"}
+
+        # 当前工具
+        try:
+            tool = await self.get_tool()
+            status["tool"] = tool
+        except Exception:
+            status["tool"] = {"tool": "none"}
+
+        return status
+
+    # ══════════════════════════════════════════════════════════
+    # 登录检测
+    # ══════════════════════════════════════════════════════════
+
+    async def check_login_status(self) -> dict:
+        """检查用户是否已登录 Gemini。
+
+        多策略检测：URL → 头像 → 登录按钮 → 输入框 → 文本搜索。
+        """
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动，请先调用 start()。")
+
+        result = {"logged_in": False, "is_pro": False, "message": ""}
+
+        try:
+            current_url = self.page.url
+            if "consent.google.com" in current_url:
+                result["message"] = "在 Google 同意页面，请在浏览器中接受 Cookie。"
+                return result
+            if "accounts.google.com" in current_url:
+                result["message"] = "用户在登录页面，请完成登录。"
+                return result
+
+            # 头像检测
+            avatar = await self.page.query_selector(SEL_LOGIN_AVATAR)
+            if avatar and await avatar.is_visible():
+                result["logged_in"] = True
+                result["message"] = "用户已登录"
+                # Pro 检测
+                try:
+                    pro_badge = await self.page.query_selector(SEL_PRO_BADGE)
+                    if pro_badge:
+                        result["is_pro"] = True
+                    else:
+                        pro_locator = self.page.locator("text=PRO").first
+                        try:
+                            if await pro_locator.is_visible(timeout=2000):
+                                result["is_pro"] = True
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                if result["is_pro"]:
+                    result["message"] = "用户已登录 (PRO)"
+                return result
+
+            # 登录按钮检测
+            login_btn = await self.page.query_selector(SEL_LOGIN_BUTTON)
+            if login_btn and await login_btn.is_visible():
+                result["message"] = "用户未登录，请手动登录。"
+                return result
+
+            # 输入框检测（仅登录后可见）
+            input_area = await self.page.query_selector(SEL_INPUT_AREA)
+            if input_area and await input_area.is_visible():
+                result["logged_in"] = True
+                result["message"] = "用户已登录"
+                return result
+
+            # 文本搜索
+            try:
+                sign_in_locator = self.page.locator(
+                    'a:has-text("Sign in"), a:has-text("登录")'
+                ).first
+                if await sign_in_locator.is_visible(timeout=3000):
+                    result["message"] = "用户未登录，页面显示登录链接。"
+                    return result
+            except Exception:
+                pass
+
+            result["message"] = "无法确定登录状态，请检查浏览器。"
+            return result
+        except Exception as e:
+            result["message"] = f"检查登录状态出错: {e}"
+            return result
+
+    async def ensure_logged_in(self):
+        """确保用户已登录，未登录则抛出错误。"""
+        status = await self.check_login_status()
+        if not status["logged_in"]:
+            raise GeminiLoginRequiredError(status["message"])
+        return status
+
+    # ══════════════════════════════════════════════════════════
+    # 聊天会话管理
+    # ══════════════════════════════════════════════════════════
+
+    @with_retry(max_retries=2)
+    async def new_chat(self) -> dict:
+        """开始新的聊天会话。
+
+        通过 URL 导航到 Gemini 首页来创建新会话，避免新标签页问题。
+        """
+        logger.note("> 创建新会话 ...")
+        await self.browser.close_extra_pages()
+
+        try:
+            href = await self.page.evaluate(
+                """() => {
+                const selectors = [
+                    'a[aria-label*="发起新对话"]',
+                    'a[aria-label*="New chat"]',
+                    'a[href*="/app"]',
+                ];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.href) return el.href;
+                }
+                return null;
+            }"""
+            )
+
+            target_url = href or GEMINI_URL
+            await self.page.goto(
+                target_url,
+                wait_until="domcontentloaded",
+                timeout=self.config.page_load_timeout,
+            )
+            try:
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+            self._message_count = 0
+            self._image_mode = False
+            await self.browser.close_extra_pages()
+
+            # 提取当前 URL 作为聊天 ID
+            chat_id = self._extract_chat_id(self.page.url)
+            logger.okay("  ✓ 新会话已创建")
+            return {"status": "ok", "chat_id": chat_id}
+
+        except Exception as e:
+            logger.warn(f"  ⚠ 新建会话失败: {e}，回退到基础 URL")
+            try:
+                await self.browser.navigate_to_gemini()
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+            self._message_count = 0
+            self._image_mode = False
+            return {"status": "ok", "chat_id": self._extract_chat_id(self.page.url)}
+
+    async def switch_chat(self, chat_id: str) -> dict:
+        """切换到指定 ID 的聊天会话。
+
+        通过 URL 直接导航到 /app/{chat_id}。
+        """
+        logger.note(f"> 切换到会话: {chat_id}")
+
+        target_url = f"https://gemini.google.com/app/{chat_id}"
+        try:
+            await self.page.goto(
+                target_url,
+                wait_until="domcontentloaded",
+                timeout=self.config.page_load_timeout,
+            )
+            try:
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+            self._message_count = 0
+            self._image_mode = False
+            logger.okay(f"  ✓ 已切换到会话: {chat_id}")
+            return {"status": "ok", "chat_id": chat_id}
+        except Exception as e:
+            raise GeminiPageError(f"切换会话失败: {e}")
+
+    def _extract_chat_id(self, url: str) -> str:
+        """从 Gemini URL 提取聊天会话 ID。"""
+        import re
+
+        match = re.search(r"/app/([a-zA-Z0-9_-]+)", url)
+        return match.group(1) if match else ""
+
+    # ══════════════════════════════════════════════════════════
+    # 模式管理
+    # ══════════════════════════════════════════════════════════
+
+    async def get_mode(self) -> dict:
+        """获取当前聊天窗口的模式（如 快速/思考/Pro）。
+
+        通过读取模式选择器按钮的文本来确定当前模式。
+        """
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            # 查找模式选择器并读取当前值
+            selector = await self.page.query_selector(SEL_MODEL_SELECTOR)
+            if selector:
+                text = await selector.text_content()
+                if text:
+                    mode = text.strip()
+                    return {"mode": mode}
+
+            # 回退：搜索包含模式名称的按钮
+            for mode_name in ["Pro", "快速", "思考", "Flash", "Think"]:
+                try:
+                    locator = self.page.locator(f'button:has-text("{mode_name}")').first
+                    if await locator.is_visible(timeout=1000):
+                        # 检查是否是模式选择器按钮（而非其他按钮）
+                        aria = await locator.get_attribute("aria-label")
+                        if aria and ("模式" in aria or "mode" in aria.lower()):
+                            return {"mode": mode_name}
+                except Exception:
+                    continue
+
+            return {"mode": "unknown"}
+        except Exception as e:
+            logger.warn(f"  × 获取模式失败: {e}")
+            return {"mode": "unknown", "error": str(e)}
+
+    @with_retry(max_retries=2)
+    async def set_mode(self, mode: str) -> dict:
+        """设置聊天窗口的模式。
+
+        Args:
+            mode: 模式名称，如 "快速", "思考", "Pro"
+        """
+        logger.note(f"> 设置模式: {mode}")
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            # 点击模式选择器打开下拉菜单
+            selector_btn = await self._find_element_with_fallback(
+                css_selector=SEL_MODEL_SELECTOR,
+                text_patterns=["快速", "思考", "Pro", "Flash", "Think"],
+                element_types="button",
+                description="模式选择器",
+            )
+            await selector_btn.click()
+            await asyncio.sleep(0.8)
+
+            # 在下拉菜单中查找并点击目标模式
+            mode_option = await self._find_element_with_fallback(
+                css_selector=SEL_MODE_OPTION,
+                text_patterns=[mode],
+                element_types="div, button, mat-option, [role='option']",
+                description=f"模式选项 '{mode}'",
+            )
+            await mode_option.click()
+            await asyncio.sleep(1)
+
+            logger.okay(f"  ✓ 模式已设置为: {mode}")
+            return {"status": "ok", "mode": mode}
+        except Exception as e:
+            raise GeminiPageError(f"设置模式失败: {e}")
+
+    # ══════════════════════════════════════════════════════════
+    # 工具管理
+    # ══════════════════════════════════════════════════════════
+
+    async def get_tool(self) -> dict:
+        """获取当前聊天窗口的活动工具。
+
+        检查工具按钮区域的状态来确定当前工具。
+        """
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            # 检查是否有活动工具指示器
+            active_tool = await self.page.evaluate(
+                """() => {
+                // 检查工具区域中带有 active/selected 状态的元素
+                const toolIndicators = document.querySelectorAll(
+                    '[class*="tool-active"], [class*="active-tool"], ' +
+                    '.tool-chip, [class*="selected-tool"]'
+                );
+                for (const el of toolIndicators) {
+                    const text = (el.textContent || '').trim();
+                    if (text) return text;
+                }
+
+                // 检查是否在图片生成模式（特定 UI 元素）
+                const imgMode = document.querySelector(
+                    '[class*="image-gen"], [data-tool="image"]'
+                );
+                if (imgMode) return '生成图片';
+
+                return '';
+            }"""
+            )
+            tool = active_tool or "none"
+            return {"tool": tool}
+        except Exception as e:
+            logger.warn(f"  × 获取工具失败: {e}")
+            return {"tool": "none", "error": str(e)}
+
+    @with_retry(max_retries=2)
+    async def set_tool(self, tool: str) -> dict:
+        """设置聊天窗口的工具。
+
+        Args:
+            tool: 工具名称，如 "Deep Research", "生成图片", "创作音乐"
+        """
+        logger.note(f"> 设置工具: {tool}")
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            # 点击工具按钮打开抽屉
+            tools_btn = await self._find_element_with_fallback(
+                css_selector=SEL_TOOLS_BUTTON,
+                text_patterns=["工具", "Tools"],
+                element_types="button",
+                description="工具按钮",
+            )
+            await tools_btn.click()
+            await asyncio.sleep(1)
+
+            # 在抽屉中查找并点击目标工具
+            tool_option = await self._find_element_with_fallback(
+                css_selector=SEL_IMAGE_GEN_OPTION,
+                text_patterns=[tool],
+                element_types="button, span, div, [role='menuitem']",
+                description=f"工具选项 '{tool}'",
+            )
+            await tool_option.click()
+            await asyncio.sleep(1)
+
+            # 如果是图片生成，更新内部状态
+            if any(k in tool for k in ["图片", "image", "Image"]):
+                self._image_mode = True
+
+            logger.okay(f"  ✓ 工具已设置为: {tool}")
+            return {"status": "ok", "tool": tool}
+        except Exception as e:
+            raise GeminiPageError(f"设置工具失败: {e}")
+
+    # ══════════════════════════════════════════════════════════
+    # 输入框操作
+    # ══════════════════════════════════════════════════════════
+
+    async def clear_input(self) -> dict:
+        """清空聊天窗口的输入框。"""
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            input_area = await self._find_input_area()
+            await input_area.click()
+            await asyncio.sleep(0.2)
+            await self.page.keyboard.press("Control+a")
+            await self.page.keyboard.press("Backspace")
+            await asyncio.sleep(0.2)
+            logger.okay("  ✓ 输入框已清空")
+            return {"status": "ok"}
+        except Exception as e:
+            raise GeminiPageError(f"清空输入框失败: {e}")
+
+    async def set_input(self, text: str) -> dict:
+        """清空输入框并设置新的输入内容。"""
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        logger.note(f"> 设置输入: {logstr.mesg(brk(text[:80]))}")
+        try:
+            await self._type_message(text)
+            return {"status": "ok", "text": text}
+        except Exception as e:
+            raise GeminiPageError(f"设置输入失败: {e}")
+
+    async def add_input(self, text: str) -> dict:
+        """在输入框的现有内容后追加内容。"""
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        logger.note(f"> 追加输入: {logstr.mesg(brk(text[:80]))}")
+        try:
+            await self._append_text(text)
+            return {"status": "ok", "text": text}
+        except Exception as e:
+            raise GeminiPageError(f"追加输入失败: {e}")
+
+    async def get_input(self) -> dict:
+        """获取输入框中的当前内容。"""
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            input_area = await self._find_input_area()
+            content = await self.page.evaluate(
+                "(el) => (el.innerText || el.textContent || '').trim()",
+                input_area,
+            )
+            return {"text": content}
+        except Exception as e:
+            raise GeminiPageError(f"获取输入内容失败: {e}")
+
+    # ══════════════════════════════════════════════════════════
+    # 消息发送
+    # ══════════════════════════════════════════════════════════
+
+    @with_retry(max_retries=2)
+    async def send_input(self, wait_response: bool = True) -> dict:
+        """发送输入框中的当前内容。
+
+        Args:
+            wait_response: True=等待 Gemini 响应后返回（同步），
+                          False=发送后立即返回（异步）
+        """
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        await self.ensure_logged_in()
+        await self.browser.close_extra_pages()
+
+        logger.note("> 发送输入 ...")
+
+        # 提交消息
+        await self._submit_message()
+
+        if not wait_response:
+            self._message_count += 1
+            return {"status": "ok", "message": "已发送，不等待响应"}
+
+        # 等待响应
+        timeout = (
+            self.config.image_generation_timeout
+            if self._image_mode
+            else self.config.response_timeout
+        )
+        response_html = await self._wait_for_response(timeout=timeout)
+        images_data = await self._extract_images(download_base64=True)
+
+        response = self.parser.parse(
+            html_content=response_html,
+            image_data_list=images_data if images_data else None,
+        )
+
+        if self._image_mode:
+            self._image_mode = False
+
+        self._message_count += 1
+
+        return {
+            "status": "ok",
+            "response": response.to_dict(),
+        }
+
+    @with_retry(max_retries=2)
+    async def send_message(
+        self, text: str, image_mode: bool = False, download_images: bool = True
+    ) -> GeminiResponse:
+        """便捷方法：设置输入并发送，等待响应。
+
+        Args:
+            text: 要发送的消息文本
+            image_mode: 是否使用图片生成模式
+            download_images: 是否将响应中的图片下载为 base64
+        """
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动，请先调用 start()。")
+
+        await self.ensure_logged_in()
+        await self.browser.close_extra_pages()
+
+        logger.note(f"> 发送消息: {logstr.mesg(brk(text[:100]))}")
+
+        if image_mode and not self._image_mode:
+            await self.enable_image_generation()
+
+        await self._type_message(text)
+        await self._submit_message()
+
+        timeout = (
+            self.config.image_generation_timeout
+            if image_mode or self._image_mode
+            else self.config.response_timeout
+        )
+        response_html = await self._wait_for_response(timeout=timeout)
+        images_data = await self._extract_images(download_base64=download_images)
+
+        response = self.parser.parse(
+            html_content=response_html,
+            image_data_list=images_data if images_data else None,
+        )
+
+        if image_mode:
+            self._image_mode = False
+
+        self._message_count += 1
+
+        logger.mesg(f"  文本长度: {len(response.text)}")
+        if response.images:
+            logger.mesg(f"  图片数: {len(response.images)}")
+        if response.code_blocks:
+            logger.mesg(f"  代码块数: {len(response.code_blocks)}")
+
+        return response
+
+    async def generate_image(self, prompt: str) -> GeminiResponse:
+        """便捷方法：图片生成。"""
+        logger.note(f"> 生成图片: {logstr.mesg(brk(prompt[:100]))}")
+        return await self.send_message(prompt, image_mode=True, download_images=True)
+
+    # ══════════════════════════════════════════════════════════
+    # 文件上传/管理
+    # ══════════════════════════════════════════════════════════
+
+    async def attach(self, file_path: str) -> dict:
+        """在聊天窗口中上传一个文件。
+
+        Args:
+            file_path: 要上传的文件路径
+        """
+        logger.note(f"> 上传文件: {file_path}")
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        filepath = Path(file_path)
+        if not filepath.exists():
+            raise GeminiPageError(f"文件不存在: {file_path}")
+
+        try:
+            # 查找文件上传按钮并点击
+            upload_btn = await self._find_element_with_fallback(
+                css_selector=SEL_FILE_UPLOAD_BUTTON,
+                text_patterns=["上传", "Upload", "添加文件", "Add file", "附件"],
+                element_types="button",
+                description="文件上传按钮",
+            )
+
+            # 监听文件选择器对话框
+            async with self.page.expect_file_chooser(timeout=10000) as fc_info:
+                await upload_btn.click()
+            file_chooser = await fc_info.value
+            await file_chooser.set_files(str(filepath.resolve()))
+            await asyncio.sleep(2)
+
+            logger.okay(f"  ✓ 文件已上传: {filepath.name}")
+            return {
+                "status": "ok",
+                "file_name": filepath.name,
+                "file_size": filepath.stat().st_size,
+            }
+        except Exception as e:
+            # 回退：直接设置 input[type=file]
+            try:
+                file_input = await self.page.query_selector(SEL_FILE_UPLOAD_INPUT)
+                if file_input:
+                    await file_input.set_input_files(str(filepath.resolve()))
+                    await asyncio.sleep(2)
+                    logger.okay(f"  ✓ 文件已上传 (回退): {filepath.name}")
+                    return {
+                        "status": "ok",
+                        "file_name": filepath.name,
+                        "file_size": filepath.stat().st_size,
+                    }
+            except Exception:
+                pass
+            raise GeminiPageError(f"上传文件失败: {e}")
+
+    async def detach(self) -> dict:
+        """清空聊天窗口中已上传的所有文件。"""
+        logger.note("> 清除附件 ...")
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            removed = 0
+            # 查找所有附件的删除按钮
+            chips = await self.page.query_selector_all(SEL_ATTACHMENT_CHIP)
+            for chip in chips:
+                try:
+                    # 每个 chip 内或附近的移除按钮
+                    remove_btn = await chip.query_selector(SEL_ATTACHMENT_REMOVE)
+                    if remove_btn and await remove_btn.is_visible():
+                        await remove_btn.click()
+                        removed += 1
+                        await asyncio.sleep(0.5)
+                except Exception:
+                    continue
+
+            # 如果没有通过 chip 内按钮删除，尝试全局查找
+            if removed == 0:
+                remove_btns = await self.page.query_selector_all(SEL_ATTACHMENT_REMOVE)
+                for btn in remove_btns:
+                    try:
+                        if await btn.is_visible():
+                            await btn.click()
+                            removed += 1
+                            await asyncio.sleep(0.5)
+                    except Exception:
+                        continue
+
+            logger.okay(f"  ✓ 已移除 {removed} 个附件")
+            return {"status": "ok", "removed_count": removed}
+        except Exception as e:
+            raise GeminiPageError(f"清除附件失败: {e}")
+
+    async def get_attachments(self) -> dict:
+        """获取聊天窗口中已上传的文件列表。"""
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            attachments = await self.page.evaluate(
+                """() => {
+                const chips = document.querySelectorAll(
+                    '.attachment-chip, [class*="attachment-chip"], ' +
+                    '[class*="file-chip"], [class*="upload-chip"], ' +
+                    '[class*="uploaded-file"]'
+                );
+                const results = [];
+                for (const chip of chips) {
+                    const name = chip.textContent?.trim() || '';
+                    const typeEl = chip.querySelector('[class*="type"], [class*="ext"]');
+                    const sizeEl = chip.querySelector('[class*="size"]');
+                    results.push({
+                        name: name,
+                        type: typeEl?.textContent?.trim() || '',
+                        size: sizeEl?.textContent?.trim() || '',
+                    });
+                }
+                return results;
+            }"""
+            )
+            return {"attachments": attachments or []}
+        except Exception as e:
+            logger.warn(f"  × 获取附件列表失败: {e}")
+            return {"attachments": [], "error": str(e)}
+
+    # ══════════════════════════════════════════════════════════
+    # 聊天消息解析
+    # ══════════════════════════════════════════════════════════
+
+    async def get_messages(self) -> dict:
+        """获取聊天窗口中的所有消息列表。
+
+        解析页面上的用户消息和模型响应，返回结构化数据。
+        """
+        if not self.is_ready:
+            raise GeminiPageError("Agency 未启动。")
+
+        try:
+            messages = await self.page.evaluate(
+                """() => {
+                const results = [];
+
+                // 获取所有会话轮次 (每轮包含 user-query + model-response)
+                const turns = document.querySelectorAll(
+                    'conversation-turn, .conversation-turn, ' +
+                    '[class*="conversation-turn"]'
+                );
+
+                if (turns.length > 0) {
+                    for (const turn of turns) {
+                        // 用户消息
+                        const userQuery = turn.querySelector(
+                            'user-query, .user-query, [class*="user-message"]'
+                        );
+                        if (userQuery) {
+                            const content = userQuery.querySelector(
+                                '.query-text, [class*="query-content"], ' +
+                                '[class*="user-text"]'
+                            );
+                            results.push({
+                                role: 'user',
+                                content: (content || userQuery).innerText?.trim() || '',
+                                html: (content || userQuery).innerHTML || '',
+                            });
+                        }
+
+                        // 模型响应
+                        const modelResp = turn.querySelector(
+                            'model-response, .model-response'
+                        );
+                        if (modelResp) {
+                            const msgContent = modelResp.querySelector('message-content');
+                            const target = msgContent || modelResp;
+
+                            // 提取图片
+                            const images = [];
+                            const imgs = target.querySelectorAll('img');
+                            for (const img of imgs) {
+                                if (img.width > 50 || img.naturalWidth > 50) {
+                                    images.push({
+                                        src: img.src || '',
+                                        alt: img.alt || '',
+                                        width: img.naturalWidth || img.width || 0,
+                                        height: img.naturalHeight || img.height || 0,
+                                    });
+                                }
+                            }
+
+                            // 提取代码块
+                            const codeBlocks = [];
+                            const pres = target.querySelectorAll('pre code');
+                            for (const code of pres) {
+                                let lang = '';
+                                for (const cls of code.classList) {
+                                    if (cls.startsWith('language-')) {
+                                        lang = cls.slice(9);
+                                        break;
+                                    }
+                                }
+                                codeBlocks.push({
+                                    language: lang,
+                                    code: code.textContent || '',
+                                });
+                            }
+
+                            results.push({
+                                role: 'model',
+                                content: target.innerText?.trim() || '',
+                                html: target.innerHTML || '',
+                                images: images,
+                                code_blocks: codeBlocks,
+                            });
+                        }
+                    }
+                } else {
+                    // 回退：分别查找 user-query 和 model-response
+                    const userMsgs = document.querySelectorAll(
+                        'user-query, .user-query, [class*="user-message"]'
+                    );
+                    const modelMsgs = document.querySelectorAll(
+                        'model-response, .model-response'
+                    );
+
+                    const maxLen = Math.max(userMsgs.length, modelMsgs.length);
+                    for (let i = 0; i < maxLen; i++) {
+                        if (i < userMsgs.length) {
+                            results.push({
+                                role: 'user',
+                                content: userMsgs[i].innerText?.trim() || '',
+                                html: userMsgs[i].innerHTML || '',
+                            });
+                        }
+                        if (i < modelMsgs.length) {
+                            const mc = modelMsgs[i].querySelector('message-content');
+                            const target = mc || modelMsgs[i];
+                            results.push({
+                                role: 'model',
+                                content: target.innerText?.trim() || '',
+                                html: target.innerHTML || '',
+                            });
+                        }
+                    }
+                }
+
+                return results;
+            }"""
+            )
+            return {"messages": messages or []}
+        except Exception as e:
+            logger.warn(f"  × 获取消息列表失败: {e}")
+            return {"messages": [], "error": str(e)}
+
+    # ══════════════════════════════════════════════════════════
+    # 图片生成模式
+    # ══════════════════════════════════════════════════════════
+
+    @with_retry(max_retries=2)
+    async def enable_image_generation(self):
+        """通过选择工具启用图片生成模式。"""
+        logger.note("> 启用图片生成模式 ...")
+        try:
+            tools_btn = await self._find_element_with_fallback(
+                css_selector=SEL_TOOLS_BUTTON,
+                text_patterns=["工具", "Tools"],
+                element_types="button",
+                description="工具按钮",
+            )
+            await tools_btn.click()
+            await asyncio.sleep(1)
+
+            img_option = await self._find_element_with_fallback(
+                css_selector=SEL_IMAGE_GEN_OPTION,
+                text_patterns=["生成图片", "Generate image"],
+                element_types="button, span, div, [role='menuitem']",
+                description="图片生成选项",
+            )
+            await img_option.click()
+            await asyncio.sleep(1)
+            self._image_mode = True
+            logger.okay("  ✓ 图片生成模式已启用")
+        except GeminiImageGenerationError:
+            raise
+        except Exception as e:
+            raise GeminiImageGenerationError(f"启用图片生成失败: {e}")
+
+    # ══════════════════════════════════════════════════════════
+    # 工具方法
+    # ══════════════════════════════════════════════════════════
+
+    async def screenshot(self, path: str = None) -> bytes:
+        """对当前状态截图。"""
+        return await self.browser.screenshot(path=path)
+
+    def save_images(
+        self,
+        response: GeminiResponse,
+        output_dir: str = "data/images",
+        prefix: str = "",
+    ) -> list[str]:
+        """将响应中的图片保存到磁盘。"""
+        if not response.images:
+            logger.mesg("  没有图片需要保存")
+            return []
+
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        saved_paths = []
+        timestamp = int(time.time())
+        for i, img in enumerate(response.images):
+            if not img.base64_data:
+                continue
+            ext = img.get_extension()
+            prefix_part = f"{prefix}_" if prefix else ""
+            filename = f"{prefix_part}{timestamp}_{i + 1}.{ext}"
+            filepath = output_path / filename
+            try:
+                img.save_to_file(str(filepath))
+                saved_paths.append(str(filepath))
+                logger.okay(f"  + 图片已保存: {filepath}")
+            except Exception as e:
+                logger.warn(f"  × 保存图片 #{i + 1} 失败: {e}")
+
+        if saved_paths:
+            logger.okay(f"  ✓ 共保存 {len(saved_paths)} 张图片到 {output_dir}")
+        return saved_paths
+
+    # ══════════════════════════════════════════════════════════
+    # 内部辅助方法
+    # ══════════════════════════════════════════════════════════
+
+    async def _find_element_with_fallback(
+        self,
+        css_selector: str = None,
+        text_patterns: list[str] = None,
+        element_types: str = "button",
+        description: str = "element",
+    ):
+        """使用多种策略查找页面元素。
+
+        策略按优先级：
+        1. CSS 选择器（query_selector）
+        2. 文本内容匹配（locator + filter）
+        3. 抛出 GeminiPageError
+        """
+        if css_selector:
+            selectors = [s.strip() for s in css_selector.split(",")]
+            for sel in selectors:
+                try:
+                    el = await self.page.query_selector(sel)
+                    if el and await el.is_visible():
+                        return el
+                except Exception:
+                    continue
+
+        if text_patterns:
+            for pattern in text_patterns:
+                try:
+                    locator = (
+                        self.page.locator(element_types).filter(has_text=pattern).first
+                    )
+                    if await locator.is_visible(timeout=3000):
+                        return await locator.element_handle()
+                except Exception:
+                    continue
+
+        raise GeminiPageError(f"找不到{description}。")
+
+    async def _find_input_area(self):
+        """查找聊天输入框。"""
+        selectors = [s.strip() for s in SEL_INPUT_AREA.split(",")]
+        for sel in selectors:
+            try:
+                el = await self.page.query_selector(sel)
+                if el and await el.is_visible():
+                    return el
+            except Exception:
+                continue
+
+        try:
+            el = await self.page.query_selector('[contenteditable="true"]')
+            if el and await el.is_visible():
+                return el
+        except Exception:
+            pass
+
+        try:
+            locator = self.page.locator('[contenteditable="true"]').first
+            if await locator.is_visible(timeout=5000):
+                return await locator.element_handle()
+        except Exception:
+            pass
+
+        raise GeminiPageError("找不到聊天输入框。")
+
+    async def _find_send_button(self):
+        """查找发送按钮。"""
+        selectors = [s.strip() for s in SEL_SEND_BUTTON.split(",")]
+        for sel in selectors:
+            try:
+                el = await self.page.query_selector(sel)
+                if el and await el.is_visible():
+                    return el
+            except Exception:
+                continue
+
+        try:
+            el = await self.page.query_selector('button[type="submit"]')
+            if el and await el.is_visible():
+                return el
+        except Exception:
+            pass
+
+        # 回退：在 input area 容器附近查找
+        try:
+            send_btn = await self.page.evaluate(
+                """() => {
+                const containers = document.querySelectorAll(
+                    '.input-area-container, rich-textarea, .input-buttons-wrapper, ' +
+                    '.input-area, [class*="input-area"]'
+                );
+                for (const c of containers) {
+                    const parent = c.closest('.input-area-container') || c.parentElement;
+                    if (!parent) continue;
+                    const btns = parent.querySelectorAll('button');
+                    for (const btn of btns) {
+                        if (btn.offsetParent === null && btn.offsetWidth === 0) continue;
+                        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                        const tooltip = (btn.getAttribute('mattooltip') || '').toLowerCase();
+                        if (label.includes('send') || label.includes('发送') ||
+                            tooltip.includes('send') || tooltip.includes('发送') ||
+                            label.includes('submit') || label.includes('提交')) {
+                            return {found: true};
+                        }
+                    }
+                }
+                return {found: false};
+            }"""
+            )
+            if send_btn and send_btn.get("found"):
+                for sel in [
+                    '.input-area-container button[aria-label*="Send" i]',
+                    '.input-area-container button[aria-label*="发送"]',
+                    '.input-area-container button[mattooltip*="Send" i]',
+                    '.input-area-container button[mattooltip*="发送"]',
+                ]:
+                    try:
+                        el = await self.page.query_selector(sel)
+                        if el and await el.is_visible():
+                            return el
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        for text in ["Send", "发送", "Submit", "提交"]:
+            try:
+                locator = self.page.locator(f'button[aria-label*="{text}"]').first
+                if await locator.is_visible(timeout=3000):
+                    return await locator.element_handle()
+            except Exception:
+                continue
+
+        raise GeminiPageError("找不到发送按钮。")
+
+    async def _verify_input_content(self, input_area, expected_text: str) -> bool:
+        """验证输入框是否包含期望的文本。"""
+        try:
+            actual = await self.page.evaluate(
+                "(el) => (el.innerText || el.textContent || '').trim()",
+                input_area,
+            )
+            if not actual:
+                return False
+            check_len = min(20, len(expected_text) // 2)
+            return (
+                expected_text[:check_len] in actual
+                or len(actual) >= len(expected_text) * 0.5
+            )
+        except Exception:
+            return False
+
+    async def _type_message(self, text: str):
+        """在输入框中输入消息（清空后输入），带验证和回退策略。"""
+        input_area = await self._find_input_area()
+        await input_area.click()
+        await asyncio.sleep(0.3)
+
+        # 清空
+        await self.page.keyboard.press("Control+a")
+        await self.page.keyboard.press("Backspace")
+        await asyncio.sleep(0.2)
+
+        # 策略 1: keyboard.type()
+        await input_area.focus()
+        await asyncio.sleep(0.1)
+        await self.page.keyboard.type(text, delay=10)
+        await asyncio.sleep(0.5)
+
+        if await self._verify_input_content(input_area, text):
+            return
+
+        # 策略 2: JS innerHTML
+        await self.page.evaluate(
+            """(args) => {
+                const [selector, text] = args;
+                const editors = document.querySelectorAll(selector);
+                let target = null;
+                for (const el of editors) {
+                    if (el.offsetParent !== null || el.offsetWidth > 0) {
+                        target = el; break;
+                    }
+                }
+                if (!target) {
+                    const all = document.querySelectorAll('[contenteditable="true"]');
+                    for (const el of all) {
+                        if (el.offsetParent !== null || el.offsetWidth > 0) {
+                            target = el; break;
+                        }
+                    }
+                }
+                if (target) {
+                    target.focus();
+                    target.innerHTML = '<p>' + text + '</p>';
+                    target.dispatchEvent(new Event('input', {bubbles: true}));
+                    target.dispatchEvent(new Event('change', {bubbles: true}));
+                    target.dispatchEvent(new Event('compositionend', {bubbles: true}));
+                }
+            }""",
+            [SEL_INPUT_AREA.replace(", ", ",").split(",")[0], text],
+        )
+        await asyncio.sleep(0.5)
+
+        input_area = await self._find_input_area()
+        if await self._verify_input_content(input_area, text):
+            return
+
+        # 策略 3: execCommand
+        await input_area.click()
+        await asyncio.sleep(0.2)
+        await self.page.keyboard.press("Control+a")
+        await self.page.keyboard.press("Backspace")
+        await asyncio.sleep(0.1)
+        await self.page.evaluate(
+            "(text) => { document.execCommand('insertText', false, text); }", text
+        )
+        await asyncio.sleep(0.5)
+
+        input_area = await self._find_input_area()
+        if await self._verify_input_content(input_area, text):
+            return
+
+        # 策略 4: clipboard paste
+        await input_area.click()
+        await asyncio.sleep(0.2)
+        await self.page.keyboard.press("Control+a")
+        await self.page.keyboard.press("Backspace")
+        await asyncio.sleep(0.1)
+        await self.page.evaluate(
+            """async (text) => {
+                try { await navigator.clipboard.writeText(text); }
+                catch(e) {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                }
+            }""",
+            text,
+        )
+        await self.page.keyboard.press("Control+v")
+        await asyncio.sleep(0.5)
+
+        input_area = await self._find_input_area()
+        if await self._verify_input_content(input_area, text):
+            return
+
+        raise GeminiPageError("无法将文本输入到聊天输入框，所有策略均失败。")
+
+    async def _append_text(self, text: str):
+        """在输入框的现有内容后追加文本（不清空）。"""
+        input_area = await self._find_input_area()
+        await input_area.click()
+        await asyncio.sleep(0.2)
+
+        # 移动光标到末尾
+        await self.page.keyboard.press("End")
+        await self.page.keyboard.press("Control+End")
+        await asyncio.sleep(0.1)
+
+        # 追加文本
+        await self.page.keyboard.type(text, delay=10)
+        await asyncio.sleep(0.3)
+
+    async def _submit_message(self):
+        """提交已输入的消息，带验证。"""
+        # 记录提交前内容
+        pre_submit_content = ""
+        try:
+            input_area = await self._find_input_area()
+            pre_submit_content = await self.page.evaluate(
+                "(el) => (el.innerText || el.textContent || '').trim()",
+                input_area,
+            )
+        except Exception:
+            pass
+
+        if not pre_submit_content:
+            logger.warn("  ⚠ 提交前输入框为空")
+
+        # 尝试点击发送按钮
+        sent_via = None
+        try:
+            send_btn = await self._find_send_button()
+            await send_btn.click()
+            sent_via = "button"
+        except GeminiPageError:
+            await self.page.keyboard.press("Enter")
+            sent_via = "enter"
+
+        await asyncio.sleep(1.5)
+
+        # 验证提交成功
+        submit_ok = False
+        post_content = ""
+
+        try:
+            input_area = await self._find_input_area()
+            post_content = await self.page.evaluate(
+                "(el) => (el.innerText || el.textContent || '').trim()",
+                input_area,
+            )
+            if len(post_content) < len(pre_submit_content) * 0.3:
+                submit_ok = True
+        except Exception:
+            pass
+
+        if not submit_ok:
+            try:
+                loading = await self.page.query_selector(SEL_LOADING_INDICATOR)
+                if loading and await loading.is_visible():
+                    submit_ok = True
+            except Exception:
+                pass
+
+        if not submit_ok:
+            try:
+                stop_btn = await self.page.query_selector(SEL_STOP_BUTTON)
+                if stop_btn and await stop_btn.is_visible():
+                    submit_ok = True
+            except Exception:
+                pass
+
+        if not submit_ok:
+            await asyncio.sleep(2)
+            activity = await self.page.evaluate(
+                """() => {
+                    const userMsgs = document.querySelectorAll(
+                        'user-query, .user-query, [class*="user-message"]'
+                    );
+                    const thinking = document.querySelectorAll(
+                        'mat-progress-bar, [class*="loading"], [class*="thinking"], ' +
+                        '[class*="progress"], .response-streaming'
+                    );
+                    return {
+                        user_msgs: userMsgs.length,
+                        thinking: thinking.length,
+                        any_activity: userMsgs.length > 0 || thinking.length > 0,
+                    };
+                }"""
+            )
+            if activity.get("any_activity"):
+                submit_ok = True
+
+        if not submit_ok:
+            logger.warn(f"  ⚠ 提交验证未通过 (via {sent_via})")
+
+    async def _count_response_containers(self) -> int:
+        """计算页面上的模型响应数量。"""
+        return await self.page.evaluate(
+            "() => document.querySelectorAll('model-response').length"
+        )
+
+    async def _get_latest_response_content(self) -> dict:
+        """获取最新模型响应的内容。"""
+        return await self.page.evaluate(
+            """() => {
+            const mrs = document.querySelectorAll('model-response');
+            if (mrs.length === 0) return {html: '', text: '', length: 0};
+            const last = mrs[mrs.length - 1];
+            const mc = last.querySelector('message-content');
+            if (mc) {
+                return {html: mc.innerHTML, text: (mc.innerText||'').trim(), length: mc.innerHTML.length};
+            }
+            const md = last.querySelector('.markdown, .markdown-main-panel, .response-text');
+            if (md) {
+                return {html: md.innerHTML, text: (md.innerText||'').trim(), length: md.innerHTML.length};
+            }
+            return {html: last.innerHTML, text: (last.innerText||'').trim(), length: last.innerHTML.length};
+        }"""
+        )
+
+    async def _check_for_errors(self) -> str | None:
+        """检查页面上的错误消息或配额警告。"""
+        error_el = await self.page.query_selector(SEL_ERROR_MESSAGE)
+        if error_el:
+            try:
+                if await error_el.is_visible():
+                    error_text = await error_el.text_content()
+                    if error_text and error_text.strip():
+                        return error_text.strip()
+            except Exception:
+                pass
+
+        quota_el = await self.page.query_selector(SEL_QUOTA_WARNING)
+        if quota_el:
+            try:
+                if await quota_el.is_visible():
+                    quota_text = await quota_el.text_content()
+                    if quota_text and quota_text.strip():
+                        return f"配额限制: {quota_text.strip()}"
+            except Exception:
+                pass
+
+        return None
+
+    async def _wait_for_response(self, timeout: int = None) -> str:
+        """等待 Gemini 完成响应生成，使用多信号检测。"""
+        timeout = timeout or self.config.response_timeout
+        t_start = time.time()
+        elapsed = 0
+
+        initial_count = await self._count_response_containers()
+        logger.note("> 等待响应 ...")
+
+        # 阶段 1：等待响应开始
+        response_started = False
+        while elapsed < timeout:
+            error_msg = await self._check_for_errors()
+            if error_msg:
+                if any(k in error_msg.lower() for k in ["quota", "limit", "配额"]):
+                    raise GeminiRateLimitError(error_msg)
+                raise GeminiPageError(f"Gemini 错误: {error_msg}")
+
+            current_count = await self._count_response_containers()
+            if current_count > initial_count:
+                response_started = True
+                break
+
+            loading = await self.page.query_selector(SEL_LOADING_INDICATOR)
+            if loading:
+                try:
+                    if await loading.is_visible():
+                        response_started = True
+                        break
+                except Exception:
+                    pass
+
+            resp = await self._get_latest_response_content()
+            if resp.get("length", 0) > 10:
+                response_started = True
+                break
+
+            await asyncio.sleep(GEMINI_POLL_INTERVAL / 1000)
+            elapsed = (time.time() - t_start) * 1000
+
+        if not response_started:
+            raise GeminiTimeoutError(
+                "等待响应开始超时，可能输入未成功提交。", timeout_ms=timeout
+            )
+
+        # 阶段 2：等待响应完成
+        logger.mesg("  响应已开始，等待完成 ...")
+        stable_count = 0
+        last_content = ""
+        last_content_length = 0
+
+        while elapsed < timeout:
+            error_msg = await self._check_for_errors()
+            if error_msg:
+                if any(k in error_msg.lower() for k in ["quota", "limit", "配额"]):
+                    raise GeminiRateLimitError(error_msg)
+
+            is_loading = False
+            loading = await self.page.query_selector(SEL_LOADING_INDICATOR)
+            if loading:
+                try:
+                    is_loading = await loading.is_visible()
+                except Exception:
+                    pass
+
+            is_generating = False
+            stop_btn = await self.page.query_selector(SEL_STOP_BUTTON)
+            if stop_btn:
+                try:
+                    is_generating = await stop_btn.is_visible()
+                except Exception:
+                    pass
+
+            resp = await self._get_latest_response_content()
+            current_content = resp.get("html", "")
+
+            if (
+                current_content == last_content
+                and not is_loading
+                and not is_generating
+                and len(current_content) > 0
+            ):
+                stable_count += 1
+                if stable_count >= 3:
+                    break
+            else:
+                stable_count = 0
+                last_content = current_content
+
+            current_length = len(current_content)
+            if current_length > last_content_length + 100:
+                logger.mesg(f"  接收中... ({current_length} chars)")
+                last_content_length = current_length
+
+            await asyncio.sleep(GEMINI_POLL_INTERVAL / 1000)
+            elapsed = (time.time() - t_start) * 1000
+
+        if elapsed >= timeout:
+            logger.warn("  ⚠ 响应可能不完整（已超时）")
+
+        total_s = time.time() - t_start
+        logger.okay(f"  ✓ 响应已收到 ({total_s:.1f}s)")
+        return last_content
+
+    async def _extract_images(self, download_base64: bool = True) -> list[dict]:
+        """从最新响应中提取图片数据。"""
+        images_data = []
+        try:
+            model_responses = await self.page.query_selector_all("model-response")
+            if not model_responses:
+                return images_data
+
+            last_response = model_responses[-1]
+
+            # 等待图片加载
+            for attempt in range(40):
+                has_images = await self.page.evaluate(
+                    """(container) => {
+                        const imgs = container.querySelectorAll('img');
+                        const canvases = container.querySelectorAll('canvas');
+                        return imgs.length > 0 || canvases.length > 0;
+                    }""",
+                    last_response,
+                )
+                if not has_images:
+                    if attempt >= 5:
+                        break
+                    await asyncio.sleep(0.5)
+                    continue
+
+                all_loaded = await self.page.evaluate(
+                    """(container) => {
+                        const imgs = container.querySelectorAll('img');
+                        if (imgs.length === 0) return true;
+                        return Array.from(imgs).every(img =>
+                            img.complete && (img.naturalHeight > 0 || img.src.startsWith('data:'))
+                        );
+                    }""",
+                    last_response,
+                )
+                if all_loaded:
+                    break
+                await asyncio.sleep(0.5)
+
+            images_data = await self.page.evaluate(
+                """(container) => {
+                    const results = [];
+                    const imgs = container.querySelectorAll('img');
+                    for (const img of imgs) {
+                        const src = img.src || img.getAttribute('src') || '';
+                        if (!src) continue;
+                        const width = img.naturalWidth || img.width || 0;
+                        const height = img.naturalHeight || img.height || 0;
+                        if (width > 0 && height > 0 && (width < 50 || height < 50)) continue;
+                        const entry = {
+                            src, alt: img.alt || '', width, height, type: 'img',
+                        };
+                        if (src.startsWith('data:')) {
+                            const parts = src.split(',');
+                            if (parts.length >= 2) {
+                                const mimeMatch = parts[0].match(/data:([^;]+)/);
+                                entry.mime_type = mimeMatch ? mimeMatch[1] : 'image/png';
+                                entry.base64_data = parts.slice(1).join(',');
+                            }
+                        }
+                        if (src.startsWith('blob:') && img.complete && img.naturalWidth > 0) {
+                            try {
+                                const canvas = document.createElement('canvas');
+                                canvas.width = img.naturalWidth;
+                                canvas.height = img.naturalHeight;
+                                canvas.getContext('2d').drawImage(img, 0, 0);
+                                const b64 = canvas.toDataURL('image/png').split(',')[1];
+                                if (b64) { entry.base64_data = b64; entry.mime_type = 'image/png'; }
+                            } catch(e) { entry.needs_download = true; }
+                        }
+                        results.push(entry);
+                    }
+                    const canvases = container.querySelectorAll('canvas');
+                    for (const canvas of canvases) {
+                        if (canvas.width < 50 || canvas.height < 50) continue;
+                        try {
+                            const b64 = canvas.toDataURL('image/png').split(',')[1];
+                            if (b64 && b64.length > 100) {
+                                results.push({
+                                    src: '', alt: 'canvas-image',
+                                    width: canvas.width, height: canvas.height,
+                                    type: 'canvas', base64_data: b64, mime_type: 'image/png',
+                                });
+                            }
+                        } catch(e) {}
+                    }
+                    return results;
+                }""",
+                last_response,
+            )
+
+            if download_base64:
+                for img_data in images_data:
+                    src = img_data.get("src", "")
+                    if (
+                        src
+                        and not src.startswith("data:")
+                        and not img_data.get("base64_data")
+                        and (
+                            img_data.get("needs_download")
+                            or not src.startswith("blob:")
+                        )
+                        and img_data.get("width", 0) >= 50
+                        and img_data.get("height", 0) >= 50
+                    ):
+                        try:
+                            dl = await self.browser.download_image_as_base64(src)
+                            if dl.get("base64_data"):
+                                img_data["base64_data"] = dl["base64_data"]
+                                img_data["mime_type"] = dl.get("mime_type", "image/png")
+                        except Exception as dl_err:
+                            logger.warn(f"  × 下载图片失败: {dl_err}")
+        except Exception as e:
+            logger.warn(f"  × 提取图片出错: {e}")
+
+        return images_data
+
+    async def toggle_sidebar(self):
+        """切换侧边栏开/关。"""
+        try:
+            toggle_btn = await self.page.query_selector(SEL_SIDEBAR_TOGGLE)
+            if toggle_btn and await toggle_btn.is_visible():
+                await toggle_btn.click()
+                await asyncio.sleep(0.5)
+                return
+            toggle_locator = self.page.locator(SEL_SIDEBAR_TOGGLE).first
+            await toggle_locator.click(timeout=5000)
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.warn(f"  × 切换侧边栏失败: {e}")

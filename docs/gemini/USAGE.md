@@ -50,42 +50,45 @@ config = GeminiConfig.create_default_config()
 
 ```python
 import asyncio
-from webu.gemini import GeminiClient
+from webu.gemini import GeminiAgency
 
 async def first_login():
-    client = GeminiClient()
-    await client.start()
+    agency = GeminiAgency()
+    await agency.start()
 
     # 检查登录状态
-    status = await client.check_login_status()
+    status = await agency.check_login_status()
     print(status)
     # 如果未登录: {"logged_in": False, "message": "用户未登录..."}
     # → 在浏览器窗口中手动登录
 
     # 手动登录后再次检查
-    status = await client.check_login_status()
+    status = await agency.check_login_status()
     print(status)
     # {"logged_in": True, "is_pro": True, "message": "用户已登录 (PRO)"}
 
     # 保持浏览器打开以完成登录
     input("登录后按 Enter 键...")
-    await client.stop()
+    await agency.stop()
 
 asyncio.run(first_login())
 ```
 
 登录一次后会话会被保存，跨重启持续有效。
 
-### 3. 发送聊天消息
+### 3. 发送聊天消息（直接使用 Agency）
 
 ```python
 import asyncio
-from webu.gemini import GeminiClient
+from webu.gemini import GeminiAgency
 
 async def chat_example():
-    async with GeminiClient() as client:
+    agency = GeminiAgency()
+    await agency.start()
+
+    try:
         # 发送消息
-        response = await client.send_message("Python 是什么？")
+        response = await agency.send_message("Python 是什么？")
 
         # 访问响应数据
         print(response.text)        # 纯文本
@@ -95,19 +98,53 @@ async def chat_example():
 
         # 转为字典（用于 JSON 序列化）
         print(response.to_dict())
+    finally:
+        await agency.stop()
 
 asyncio.run(chat_example())
 ```
 
-### 4. 生成图片
+### 4. 使用 HTTP 客户端（通过 Server）
+
+如果 Server 已启动（见下方"CLI 管理"），可使用 HTTP 客户端：
+
+```python
+from webu.gemini import GeminiClient, GeminiClientConfig
+
+# 连接到运行中的 Server
+config = GeminiClientConfig(host="127.0.0.1", port=30002)
+client = GeminiClient(config)
+
+# 检查状态
+status = client.browser_status()
+print(status)
+
+# 发送消息（便捷方法：自动 set_input + send_input）
+result = client.send_message("Python 是什么？")
+print(result)
+
+# 细粒度操作
+client.set_input("解释量子计算")
+result = client.send_input(wait_response=True)
+print(result)
+
+# 获取消息历史
+messages = client.get_messages()
+print(messages)
+```
+
+### 5. 生成图片
 
 ```python
 import asyncio
-from webu.gemini import GeminiClient
+from webu.gemini import GeminiAgency
 
 async def image_example():
-    async with GeminiClient() as client:
-        response = await client.generate_image(
+    agency = GeminiAgency()
+    await agency.start()
+
+    try:
+        response = await agency.generate_image(
             "一只戴礼帽的可爱猫咪，水彩画风格"
         )
 
@@ -117,6 +154,8 @@ async def image_example():
             if img.base64_data:
                 print(f"Base64 数据: {img.base64_data[:50]}...")
                 print(f"MIME 类型: {img.mime_type}")
+    finally:
+        await agency.stop()
 
 asyncio.run(image_example())
 ```
@@ -124,9 +163,12 @@ asyncio.run(image_example())
 发送消息时也可以下载图片（默认启用）：
 ```python
 async def chat_with_images():
-    async with GeminiClient() as client:
+    agency = GeminiAgency()
+    await agency.start()
+
+    try:
         # download_images=True 时自动下载图片为 base64
-        response = await client.send_message(
+        response = await agency.send_message(
             "生成一张猫咪图片",
             download_images=True,  # 默认值
         )
@@ -137,51 +179,123 @@ async def chat_with_images():
                 data = base64.b64decode(img.base64_data)
                 with open("cat.png", "wb") as f:
                     f.write(data)
+    finally:
+        await agency.stop()
 ```
 
-### 5. 多轮对话
+### 6. 多轮对话
 
 ```python
 import asyncio
-from webu.gemini import GeminiClient
+from webu.gemini import GeminiAgency
 
 async def conversation():
-    async with GeminiClient() as client:
+    agency = GeminiAgency()
+    await agency.start()
+
+    try:
         # 开始新对话
-        await client.new_chat()
+        await agency.new_chat()
 
         # 第 1 轮
-        r1 = await client.send_message("介绍一下机器学习")
+        r1 = await agency.send_message("介绍一下机器学习")
         print(r1.markdown)
 
         # 第 2 轮（在同一对话中继续）
-        r2 = await client.send_message("什么是神经网络？")
+        r2 = await agency.send_message("什么是神经网络？")
         print(r2.markdown)
 
         # 重新开始
-        await client.new_chat()
-        r3 = await client.send_message("新话题：解释量子计算")
+        await agency.new_chat()
+        r3 = await agency.send_message("新话题：解释量子计算")
         print(r3.markdown)
+    finally:
+        await agency.stop()
 
 asyncio.run(conversation())
 ```
 
-## REST API
-
-### 启动 API 服务器
+### 7. 模式和工具管理
 
 ```python
-from webu.gemini.api import run_gemini_api
-run_gemini_api()
+import asyncio
+from webu.gemini import GeminiAgency
+
+async def mode_tool_example():
+    agency = GeminiAgency()
+    await agency.start()
+
+    try:
+        # 获取/设置模式
+        mode = await agency.get_mode()
+        print(f"当前模式: {mode}")
+
+        await agency.set_mode("Pro")
+
+        # 获取/设置工具
+        tool = await agency.get_tool()
+        print(f"当前工具: {tool}")
+
+        await agency.set_tool("生成图片")
+    finally:
+        await agency.stop()
+
+asyncio.run(mode_tool_example())
+```
+
+### 8. 附件操作
+
+```python
+import asyncio
+from webu.gemini import GeminiAgency
+
+async def attachment_example():
+    agency = GeminiAgency()
+    await agency.start()
+
+    try:
+        # 上传附件
+        await agency.attach("/path/to/document.pdf")
+
+        # 查看附件
+        attachments = await agency.get_attachments()
+        print(attachments)
+
+        # 移除附件
+        await agency.detach()
+    finally:
+        await agency.stop()
+
+asyncio.run(attachment_example())
+```
+
+## REST API (Server)
+
+### 启动服务器
+
+**方式一：CLI 管理器（推荐）**
+```bash
+# 启动浏览器 + API 服务器
+python -m webu.gemini.run start
+
+# 查看状态
+python -m webu.gemini.run status
+
+# 重启
+python -m webu.gemini.run restart
+
+# 停止
+python -m webu.gemini.run stop
+```
+
+**方式二：直接启动**
+```python
+from webu.gemini.server import run_gemini_server
+run_gemini_server()
 # 服务器启动在 http://0.0.0.0:30002
 ```
 
-或从命令行：
-```bash
-python -m webu.gemini.api
-```
-
-### API 接口
+### API 端点
 
 #### 健康检查
 ```bash
@@ -191,64 +305,131 @@ curl http://localhost:30002/health
 ```json
 {
   "status": "ok",
-  "version": "1.0.0"
+  "version": "2.0.0"
 }
 ```
 
-#### 检查状态
+#### 浏览器状态
 ```bash
-curl http://localhost:30002/status
+curl http://localhost:30002/browser_status
 ```
 响应：
+```json
+{
+  "is_ready": true,
+  "browser": {"is_started": true, "has_display": true, "has_page": true},
+  "login": {"logged_in": true, "is_pro": true},
+  "mode": {"mode": "Pro"},
+  "tool": {"tool": "none"}
+}
+```
+
+#### 聊天管理
+```bash
+# 新建聊天
+curl -X POST http://localhost:30002/new_chat
+
+# 切换聊天
+curl -X POST http://localhost:30002/switch_chat \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "abc123"}'
+```
+
+#### 模式和工具
+```bash
+# 获取/设置模式
+curl http://localhost:30002/get_mode
+curl -X POST http://localhost:30002/set_mode \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "Pro"}'
+
+# 获取/设置工具
+curl http://localhost:30002/get_tool
+curl -X POST http://localhost:30002/set_tool \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "生成图片"}'
+```
+
+#### 输入操作
+```bash
+# 设置输入内容
+curl -X POST http://localhost:30002/set_input \
+  -H "Content-Type: application/json" \
+  -d '{"text": "解释 Python 装饰器"}'
+
+# 追加输入内容
+curl -X POST http://localhost:30002/add_input \
+  -H "Content-Type: application/json" \
+  -d '{"text": "，并给出示例代码"}'
+
+# 获取输入框内容
+curl http://localhost:30002/get_input
+
+# 清空输入框
+curl -X POST http://localhost:30002/clear_input
+```
+
+#### 发送消息
+```bash
+# 同步发送（等待 Gemini 回复后返回结果）
+curl -X POST http://localhost:30002/send_input \
+  -H "Content-Type: application/json" \
+  -d '{"wait_response": true}'
+
+# 异步发送（立即返回，不等待回复）
+curl -X POST http://localhost:30002/send_input \
+  -H "Content-Type: application/json" \
+  -d '{"wait_response": false}'
+```
+同步响应：
 ```json
 {
   "status": "ok",
-  "message": "用户已登录 (PRO)",
-  "is_ready": true,
-  "is_logged_in": true,
-  "message_count": 5
+  "response": {
+    "text": "Python 装饰器是...",
+    "markdown": "## Python 装饰器\n\n...",
+    "images": [],
+    "code_blocks": [{"language": "python", "code": "@my_decorator\ndef hello():..."}]
+  }
 }
 ```
 
-#### 发送聊天消息
+#### 附件操作
 ```bash
-curl -X POST http://localhost:30002/chat \
+# 上传附件
+curl -X POST http://localhost:30002/attach \
   -H "Content-Type: application/json" \
-  -d '{"message": "解释 Python 装饰器", "new_chat": true, "download_images": true}'
+  -d '{"file_path": "/path/to/document.pdf"}'
+
+# 获取附件列表
+curl http://localhost:30002/get_attachments
+
+# 移除所有附件
+curl -X POST http://localhost:30002/detach
+```
+
+#### 获取消息历史
+```bash
+curl http://localhost:30002/get_messages
 ```
 响应：
 ```json
 {
-  "success": true,
-  "text": "Python 装饰器是...",
-  "markdown": "## Python 装饰器\n\nPython 装饰器是...",
-  "images": [],
-  "code_blocks": [
-    {"language": "python", "code": "@my_decorator\ndef hello():\n    print('hello')"}
-  ],
-  "error": ""
+  "messages": [
+    {"role": "user", "content": "解释装饰器"},
+    {"role": "model", "content": "装饰器是..."}
+  ]
 }
 ```
 
-#### 生成图片
+#### 调试工具
 ```bash
-curl -X POST http://localhost:30002/generate-image \
+# 截图
+curl -X POST http://localhost:30002/screenshot \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "日落时的山景"}'
-```
+  -d '{"path": "debug.png"}'
 
-#### 新建对话
-```bash
-curl -X POST http://localhost:30002/new-chat
-```
-
-#### 调试截图
-```bash
-curl -X POST "http://localhost:30002/screenshot?path=debug.png"
-```
-
-#### 重启客户端
-```bash
+# 重启 Agency
 curl -X POST http://localhost:30002/restart
 ```
 
@@ -300,23 +481,27 @@ from webu.gemini import (
 )
 
 async def safe_chat():
-    async with GeminiClient() as client:
-        try:
-            response = await client.send_message("你好")
-        except GeminiLoginRequiredError:
-            print("请先登录！")
-        except GeminiRateLimitError as e:
-            print(f"触发速率限制: {e}")
-            print(f"详情: {e.details}")
-        except GeminiNetworkError as e:
-            print(f"网络问题: {e}")
-            print(f"代理: {e.details.get('proxy')}")
-        except GeminiTimeoutError as e:
-            print(f"超时: {e.details.get('timeout_ms')}ms")
-        except GeminiImageDownloadError as e:
-            print(f"图片下载失败: {e}")
-        except GeminiError as e:
-            print(f"一般错误: {e}")
+    agency = GeminiAgency()
+    await agency.start()
+
+    try:
+        response = await agency.send_message("你好")
+    except GeminiLoginRequiredError:
+        print("请先登录！")
+    except GeminiRateLimitError as e:
+        print(f"触发速率限制: {e}")
+        print(f"详情: {e.details}")
+    except GeminiNetworkError as e:
+        print(f"网络问题: {e}")
+        print(f"代理: {e.details.get('proxy')}")
+    except GeminiTimeoutError as e:
+        print(f"超时: {e.details.get('timeout_ms')}ms")
+    except GeminiImageDownloadError as e:
+        print(f"图片下载失败: {e}")
+    except GeminiError as e:
+        print(f"一般错误: {e}")
+    finally:
+        await agency.stop()
 ```
 
 **注意**：`GeminiPageError` 和 `PlaywrightTimeoutError` 会被 `with_retry()` 装饰器自动重试（默认 3 次，指数退避）。`GeminiLoginRequiredError` 和 `GeminiRateLimitError` 不会重试。
@@ -326,7 +511,15 @@ async def safe_chat():
 ### 运行单元测试（不需要浏览器）
 ```bash
 cd /path/to/webu
-pytest tests/gemini/test_gemini.py tests/gemini/test_tcp_proxy.py -v --tb=short -m "not integration"
+
+# Server/Client 单元测试
+pytest tests/gemini/test_server_client.py -v --tb=short -m "not integration"
+
+# Gemini 模块单元测试
+pytest tests/gemini/test_gemini.py -v --tb=short -m "not integration"
+
+# TCP 代理测试
+pytest tests/gemini/test_tcp_proxy.py -v --tb=short -m "not integration"
 ```
 
 ### 运行集成测试（需要浏览器）
@@ -336,7 +529,7 @@ pytest tests/gemini/test_gemini.py -v -m integration
 
 ### 运行所有测试
 ```bash
-pytest tests/gemini/test_gemini.py -v
+pytest tests/gemini/ -v
 ```
 
 ## 故障排除

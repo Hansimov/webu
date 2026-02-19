@@ -793,7 +793,7 @@ class TestRetryDecorator:
     @pytest.mark.asyncio
     async def test_retry_on_page_error(self):
         """GeminiPageError 应触发重试。"""
-        from webu.gemini.client import with_retry
+        from webu.gemini.agency import with_retry
 
         call_count = 0
 
@@ -812,7 +812,7 @@ class TestRetryDecorator:
     @pytest.mark.asyncio
     async def test_retry_no_retry_on_login_error(self):
         """GeminiLoginRequiredError 不应重试。"""
-        from webu.gemini.client import with_retry
+        from webu.gemini.agency import with_retry
 
         call_count = 0
 
@@ -830,7 +830,7 @@ class TestRetryDecorator:
     @pytest.mark.asyncio
     async def test_retry_no_retry_on_rate_limit(self):
         """GeminiRateLimitError 不应重试。"""
-        from webu.gemini.client import with_retry
+        from webu.gemini.agency import with_retry
 
         call_count = 0
 
@@ -848,7 +848,7 @@ class TestRetryDecorator:
     @pytest.mark.asyncio
     async def test_retry_exhaustion(self):
         """超过最大重试次数应抛出最后的错误。"""
-        from webu.gemini.client import with_retry
+        from webu.gemini.agency import with_retry
 
         call_count = 0
 
@@ -866,7 +866,7 @@ class TestRetryDecorator:
     @pytest.mark.asyncio
     async def test_retry_success_on_first_try(self):
         """首次成功不应触发重试。"""
-        from webu.gemini.client import with_retry
+        from webu.gemini.agency import with_retry
 
         call_count = 0
 
@@ -920,34 +920,28 @@ class TestConstants:
 
 
 class TestAPIModels:
-    def test_chat_request_model(self):
-        from webu.gemini.api import ChatRequest
+    """测试 server.py 中的请求/响应模型。"""
 
-        req = ChatRequest(message="hello")
-        assert req.message == "hello"
-        assert req.new_chat is False
-        assert req.image_mode is False
-        assert req.download_images is True
+    def test_send_input_request_model(self):
+        from webu.gemini.server import SendInputRequest
 
-    def test_chat_request_all_fields(self):
-        from webu.gemini.api import ChatRequest
+        req = SendInputRequest()
+        assert req.wait_response is True
 
-        req = ChatRequest(
-            message="test", new_chat=True, image_mode=True, download_images=False
-        )
-        assert req.new_chat is True
-        assert req.image_mode is True
-        assert req.download_images is False
+    def test_send_input_request_all_fields(self):
+        from webu.gemini.server import SendInputRequest
 
-    def test_image_request_model(self):
-        from webu.gemini.api import ImageRequest
+        req = SendInputRequest(wait_response=False)
+        assert req.wait_response is False
 
-        req = ImageRequest(prompt="a cat")
-        assert req.prompt == "a cat"
-        assert req.new_chat is True
+    def test_set_input_request_model(self):
+        from webu.gemini.server import SetInputRequest
+
+        req = SetInputRequest(text="hello")
+        assert req.text == "hello"
 
     def test_chat_response_model(self):
-        from webu.gemini.api import ChatResponse
+        from webu.gemini.server import ChatResponse
 
         resp = ChatResponse(success=True, text="Hello", markdown="Hello")
         assert resp.success is True
@@ -955,19 +949,17 @@ class TestAPIModels:
         assert resp.images == []
 
     def test_status_response_model(self):
-        from webu.gemini.api import StatusResponse
+        from webu.gemini.server import StatusResponse
 
-        resp = StatusResponse(
-            status="ok", is_ready=True, is_logged_in=True, message_count=5
-        )
-        assert resp.message_count == 5
+        resp = StatusResponse(status="ok", data={"is_ready": True})
+        assert resp.data["is_ready"] is True
 
     def test_health_response_model(self):
-        from webu.gemini.api import HealthResponse
+        from webu.gemini.server import HealthResponse
 
         resp = HealthResponse()
         assert resp.status == "ok"
-        assert resp.version == "1.0.0"
+        assert resp.version == "2.0.0"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1198,20 +1190,20 @@ class TestSaveImages:
         """无图片时应返回空列表。"""
         import base64
 
-        from webu.gemini.client import GeminiClient
+        from webu.gemini.agency import GeminiAgency
 
-        client = GeminiClient.__new__(GeminiClient)
+        agency = GeminiAgency.__new__(GeminiAgency)
         response = GeminiResponse()
-        paths = client.save_images(response, output_dir="/tmp/test_empty")
+        paths = agency.save_images(response, output_dir="/tmp/test_empty")
         assert paths == []
 
     def test_save_images_with_data(self):
         """有 base64 数据的图片应被保存。"""
         import base64
 
-        from webu.gemini.client import GeminiClient
+        from webu.gemini.agency import GeminiAgency
 
-        client = GeminiClient.__new__(GeminiClient)
+        agency = GeminiAgency.__new__(GeminiAgency)
 
         b64 = base64.b64encode(b"fake png data").decode()
         response = GeminiResponse(
@@ -1224,16 +1216,16 @@ class TestSaveImages:
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = client.save_images(response, output_dir=tmpdir, prefix="test")
+            paths = agency.save_images(response, output_dir=tmpdir, prefix="test")
             assert len(paths) == 1
             assert Path(paths[0]).exists()
             assert "test_" in Path(paths[0]).name
 
     def test_save_images_skip_no_base64(self):
         """无 base64 数据的图片应被跳过。"""
-        from webu.gemini.client import GeminiClient
+        from webu.gemini.agency import GeminiAgency
 
-        client = GeminiClient.__new__(GeminiClient)
+        agency = GeminiAgency.__new__(GeminiAgency)
 
         response = GeminiResponse(
             text="test",
@@ -1243,16 +1235,16 @@ class TestSaveImages:
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = client.save_images(response, output_dir=tmpdir)
+            paths = agency.save_images(response, output_dir=tmpdir)
             assert len(paths) == 0
 
     def test_save_images_multiple(self):
         """多张图片应全部保存。"""
         import base64
 
-        from webu.gemini.client import GeminiClient
+        from webu.gemini.agency import GeminiAgency
 
-        client = GeminiClient.__new__(GeminiClient)
+        agency = GeminiAgency.__new__(GeminiAgency)
 
         b64 = base64.b64encode(b"image data").decode()
         response = GeminiResponse(
@@ -1267,7 +1259,7 @@ class TestSaveImages:
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = client.save_images(response, output_dir=tmpdir, prefix="multi")
+            paths = agency.save_images(response, output_dir=tmpdir, prefix="multi")
             assert len(paths) == 2
             assert paths[0].endswith(".png")
             assert paths[1].endswith(".jpg")
@@ -1283,13 +1275,13 @@ _shared_client = None
 
 @pytest.fixture(scope="module")
 async def shared_client():
-    """模块级别共享的 GeminiClient，所有集成测试复用同一个浏览器实例。"""
-    from webu.gemini.client import GeminiClient
+    """模块级别共享的 GeminiAgency，所有集成测试复用同一个浏览器实例。"""
+    from webu.gemini.agency import GeminiAgency
 
-    client = GeminiClient(config={"headless": False})
-    await client.start()
-    yield client
-    await client.stop()
+    agency = GeminiAgency(config={"headless": False})
+    await agency.start()
+    yield agency
+    await agency.stop()
 
 
 @pytest.mark.integration
@@ -1321,7 +1313,7 @@ class TestBrowserIntegration:
 
     @pytest.mark.asyncio
     async def test_get_status(self, shared_client):
-        status = await shared_client.get_status()
+        status = await shared_client.browser_status()
         assert "is_ready" in status
         assert status["is_ready"] is True
 
@@ -1423,7 +1415,7 @@ class TestAPIIntegration:
     @pytest.mark.asyncio
     async def test_app_creation(self, app):
         assert app is not None
-        assert app.title == "Gemini 自动化 API"
+        assert app.title == "Gemini 自动化 Server"
 
 
 if __name__ == "__main__":

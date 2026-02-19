@@ -749,6 +749,24 @@ class GeminiBrowser:
         except Exception as e:
             return {"error": str(e)}
 
+    def get_status(self) -> dict:
+        """获取浏览器实例的全面状态信息。"""
+        status = {
+            "is_started": self.is_started,
+            "has_display": self.vdisplay is not None
+            or bool(os.environ.get("DISPLAY", "")),
+            "has_chrome": self.chrome_process is not None
+            and self.chrome_process.poll() is None,
+            "has_tcp_proxy": self._tcp_proxy is not None,
+            "has_novnc": self._websockify_process is not None
+            and self._websockify_process.poll() is None,
+            "has_page": self.page is not None,
+            "browser_port": self.config.browser_port,
+            "vnc_port": self.config.vnc_port,
+            "novnc_port": self.config.novnc_port,
+        }
+        return status
+
     # ── 标签页管理 ─────────────────────────────────────────────
 
     async def _setup_page_handlers(self):

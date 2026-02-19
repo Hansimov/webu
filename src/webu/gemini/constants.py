@@ -191,3 +191,59 @@ SEL_ERROR_MESSAGE = (
 SEL_QUOTA_WARNING = (
     'div[class*="quota"], ' 'div[class*="rate-limit"], ' 'div[class*="limit-warning"]'
 )
+
+# ── 文件上传 ─────────────────────────────────────────────────
+SEL_FILE_UPLOAD_BUTTON = (
+    'button[aria-label*="Upload" i], '
+    'button[aria-label*="上传"], '
+    'button[aria-label*="添加文件"], '
+    'button[aria-label*="Add file" i], '
+    'button[aria-label*="附件"], '
+    'button[aria-label*="Attach" i], '
+    'button[aria-label*="插入文件" i]'
+)
+
+SEL_FILE_UPLOAD_INPUT = 'input[type="file"]'
+
+SEL_ATTACHMENT_CHIP = (
+    ".attachment-chip, "
+    '[class*="attachment-chip"], '
+    '[class*="file-chip"], '
+    'div[class*="upload-chip"], '
+    '[class*="uploaded-file"]'
+)
+
+SEL_ATTACHMENT_REMOVE = (
+    'button[aria-label*="Remove" i], '
+    'button[aria-label*="删除"], '
+    'button[aria-label*="移除"], '
+    'button[aria-label*="取消"]'
+)
+
+# ── 聊天列表（侧边栏）────────────────────────────────────────
+SEL_CHAT_LIST_ITEM = (
+    'a[class*="conversation"], '
+    'a[class*="chat-item"], '
+    'nav a[href*="/app/"], '
+    'div[class*="conversation-list"] a, '
+    'a[class*="nav-link"][href*="/app/"]'
+)
+
+# ── 模式选项（下拉菜单中）────────────────────────────────────
+SEL_MODE_OPTION = (
+    'div[role="option"], '
+    'div[role="listbox"] button, '
+    "mat-option, "
+    'div[class*="mode-option"], '
+    'button[class*="mode-option"]'
+)
+
+# ── 用户消息和模型消息容器 ───────────────────────────────────
+SEL_USER_MESSAGE = (
+    "user-query, "
+    ".user-query, "
+    '[class*="user-message"], '
+    '[class*="query-content"]'
+)
+
+SEL_MODEL_MESSAGE = "model-response, " ".model-response, " '[class*="model-response"]'

@@ -23,7 +23,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 from tclogger import logger, logstr
 
-from webu.gemini.client import GeminiClient
+from webu.gemini.agency import GeminiAgency
 from webu.gemini.config import GeminiConfig
 from webu.gemini.parser import GeminiResponseParser
 from webu.gemini.constants import (
@@ -58,7 +58,7 @@ STATE_FILE = (
 )
 
 
-async def shot(client: GeminiClient, name: str) -> str:
+async def shot(client: GeminiAgency, name: str) -> str:
     """截图并保存到 .chats/gemini/screenshots/，返回路径。"""
     ts = datetime.now().strftime("%H%M%S")
     path = str(SCREENSHOT_DIR / f"{ts}_{name}.png")
@@ -67,8 +67,8 @@ async def shot(client: GeminiClient, name: str) -> str:
     return path
 
 
-async def connect_to_running_browser() -> GeminiClient:
-    """连接到 launch_browser.py 启动的浏览器，返回 GeminiClient。"""
+async def connect_to_running_browser() -> GeminiAgency:
+    """连接到 launch_browser.py 启动的浏览器，返回 GeminiAgency。"""
     if not STATE_FILE.exists():
         raise RuntimeError(
             "浏览器未运行。请先执行: python -m tests.gemini.launch_browser"
@@ -96,9 +96,9 @@ async def connect_to_running_browser() -> GeminiClient:
     # 强制暗色主题
     await page.emulate_media(color_scheme="dark")
 
-    # 构建 GeminiClient（不启动新浏览器）
+    # 构建 GeminiAgency（不启动新浏览器）
     config = GeminiConfig(config_path="configs/gemini.json")
-    client = GeminiClient.__new__(GeminiClient)
+    client = GeminiAgency.__new__(GeminiAgency)
     client.config = config
     client.browser = type(
         "FakeBrowser",
@@ -155,7 +155,7 @@ async def _dl_img(page, url):
     return await GeminiBrowser.download_image_as_base64(b, url)
 
 
-async def disconnect_client(client: GeminiClient):
+async def disconnect_client(client: GeminiAgency):
     """断开 Playwright 连接（不关闭浏览器）。"""
     try:
         if hasattr(client, "_browser_connection"):
@@ -171,7 +171,7 @@ async def disconnect_client(client: GeminiClient):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def step_info(client: GeminiClient):
+async def step_info(client: GeminiAgency):
     """显示页面基本信息和登录状态。"""
     logger.note("=" * 60)
     logger.note("步骤 1: 页面信息 & 登录检测")
@@ -196,7 +196,7 @@ async def step_info(client: GeminiClient):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def step_explore_dom(client: GeminiClient):
+async def step_explore_dom(client: GeminiAgency):
     """深度探索 Gemini 页面真实 DOM 结构，输出到文件供分析。"""
     logger.note("=" * 60)
     logger.note("步骤 3: 深度 DOM 探索")
@@ -414,7 +414,7 @@ async def step_explore_dom(client: GeminiClient):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def step_chat_setup(client: GeminiClient):
+async def step_chat_setup(client: GeminiAgency):
     """新建对话 → 选择图片生成工具 → 确保 PRO 模式。
 
     基于实际 DOM 探索结果重写:
@@ -693,7 +693,7 @@ async def _ensure_pro_mode(page) -> str:
     return current
 
 
-async def step_send_image(client: GeminiClient, new_chat: bool = False):
+async def step_send_image(client: GeminiAgency, new_chat: bool = False):
     """发送图片生成请求，验证 Imagen 完整流程。
 
     Args:
@@ -992,7 +992,7 @@ async def step_send_image(client: GeminiClient, new_chat: bool = False):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def step_send_simple(client: GeminiClient):
+async def step_send_simple(client: GeminiAgency):
     """发送一条简单文本消息，验证完整流程。"""
     logger.note("=" * 60)
     logger.note("步骤 4: 发送简单消息")
@@ -1160,7 +1160,7 @@ async def step_send_simple(client: GeminiClient):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def step_send_code(client: GeminiClient):
+async def step_send_code(client: GeminiAgency):
     """发送需要代码回复的消息，验证代码块解析。"""
     logger.note("=" * 60)
     logger.note("步骤 5: 代码响应")
@@ -1201,7 +1201,7 @@ async def step_send_code(client: GeminiClient):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def step_multi_turn(client: GeminiClient):
+async def step_multi_turn(client: GeminiAgency):
     """在同一会话中发送跟进消息。"""
     logger.note("=" * 60)
     logger.note("步骤 6: 多轮对话")
@@ -1229,13 +1229,13 @@ async def step_multi_turn(client: GeminiClient):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def step_status(client: GeminiClient):
+async def step_status(client: GeminiAgency):
     """获取并打印客户端完整状态。"""
     logger.note("=" * 60)
     logger.note("步骤 7: 状态汇报")
     logger.note("=" * 60)
 
-    status = await client.get_status()
+    status = await client.browser_status()
     for k, v in status.items():
         logger.mesg(f"  {k}: {v}")
     await shot(client, "07_status")

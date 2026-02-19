@@ -12,10 +12,27 @@ src/webu/gemini/
 ├── constants.py     # URL、选择器、超时时间、端口
 ├── errors.py        # 异常层次结构
 ├── config.py        # 配置管理（基于文件，带优先级链）
-├── browser.py       # Playwright 浏览器生命周期（启动、导航、停止）
+├── browser.py       # 底层：Playwright 浏览器 + Xvnc + noVNC 生命周期
 ├── parser.py        # 响应解析（HTML → 文本/Markdown/图片/代码）
-├── client.py        # 高级 Gemini 交互（登录、聊天、图片生成）
-└── api.py           # FastAPI REST 接口
+├── agency.py        # 代理层：封装所有浏览器页面交互逻辑
+├── server.py        # 服务层：FastAPI REST 接口（17 个端点）
+├── client.py        # 客户端层：HTTP 封装，一一对应服务端点
+├── run.py           # 管理层：CLI 启停管理（start/stop/restart/status）
+└── api.py           # 向后兼容层（弃用，重定向到 server.py）
+```
+
+### 四层架构
+
+```
+Browser (browser.py)   ← Playwright + Chrome + Xvnc + noVNC
+    ↑
+Agency (agency.py)     ← 浏览器页面交互（登录、聊天、模式、工具、附件等）
+    ↑
+Server (server.py)     ← FastAPI REST API（17 个端点）
+    ↑
+Client (client.py)     ← Python HTTP 客户端（requests）
+
+Run (run.py)           ← CLI 管理：start/stop/restart/status
 ```
 
 ## 模块职责
@@ -77,40 +94,77 @@ Playwright 浏览器管理：
 
 输出为结构化的 `GeminiResponse` 数据类，带 `to_dict()` 序列化。
 
-### `client.py`
-高级自动化：
+### `agency.py`
+浏览器交互代理层（原 `client.py` 重构更名）：
 
 1. **登录检测**：多策略检查（头像、登录按钮、URL、输入框、Pro 徽章），含可见性验证
-2. **会话管理**：新建会话（按钮点击或 URL 导航回退）
-3. **消息发送**：`_find_element_with_fallback()` 通用元素查找 → 输入消息 → 提交（按钮或回车键）
-4. **响应等待**：容器数量跟踪 + 加载指示器/停止按钮多信号检测 + 内容稳定性检测
-5. **图片生成**：工具菜单导航 → 图片生成选项 → 延长超时
-6. **图片下载**：`_extract_images()` 通过浏览器上下文下载图片为 base64
-7. **模型选择**：确保 Pro 模型处于活动状态
-8. **重试机制**：`with_retry()` 装饰器自动重试 `GeminiPageError`（指数退避），不重试认证/限流错误
-9. **错误检测**：`_check_for_errors()` 检测配额/速率限制警告
-10. **状态跟踪**：`get_status()` 返回就绪状态、登录状态和消息计数
+2. **会话管理**：`new_chat()` 新建会话（按钮点击或 URL 导航回退），`switch_chat()` 切换会话
+3. **模式管理**：`get_mode()` / `set_mode()` 读取/切换聊天模式（快速/思考/Pro）
+4. **工具管理**：`get_tool()` / `set_tool()` 读取/切换工具（Deep Research/生成图片/创作音乐）
+5. **输入管理**：`clear_input()` / `set_input()` / `add_input()` / `get_input()` 操作输入框
+6. **消息发送**：`send_input(wait_response)` 支持同步等待和异步发送两种模式
+7. **附件管理**：`attach()` / `detach()` / `get_attachments()` 文件上传操作
+8. **消息解析**：`get_messages()` 获取当前会话的所有消息列表（用户+模型）
+9. **图片生成**：工具菜单导航 → 图片生成选项 → 延长超时
+10. **图片下载**：`_extract_images()` 通过浏览器上下文下载图片为 base64
+11. **重试机制**：`with_retry()` 装饰器自动重试 `GeminiPageError`（指数退避），不重试认证/限流错误
+12. **错误检测**：`_check_for_errors()` 检测配额/速率限制警告
+13. **状态跟踪**：`browser_status()` 返回浏览器、页面、登录、模式、工具的综合状态
 
-### `api.py`
-FastAPI REST 接口：
+### `server.py`
+FastAPI REST 服务端（替代旧 `api.py`）：
 
 | 接口 | 方法 | 描述 |
 |---|---|---|
-| `/health` | GET | 健康检查（无需客户端） |
-| `/status` | GET | 客户端就绪和登录状态 |
-| `/login-status` | GET | 详细登录状态 |
-| `/chat` | POST | 发送消息，接收解析后的响应 |
-| `/generate-image` | POST | 图片生成并返回解析结果 |
-| `/new-chat` | POST | 开始新会话 |
+| `/health` | GET | 健康检查 |
+| `/browser_status` | GET | 浏览器状态（就绪、登录、模式等） |
+| `/new_chat` | POST | 创建新聊天 |
+| `/switch_chat` | POST | 切换到指定聊天 |
+| `/get_mode` | GET | 获取当前模式 |
+| `/set_mode` | POST | 设置模式（快速/思考/Pro） |
+| `/get_tool` | GET | 获取当前工具 |
+| `/set_tool` | POST | 设置工具 |
+| `/clear_input` | POST | 清空输入框 |
+| `/set_input` | POST | 设置输入内容 |
+| `/add_input` | POST | 追加输入内容 |
+| `/get_input` | GET | 获取输入框内容 |
+| `/send_input` | POST | 发送输入（同步/异步） |
+| `/attach` | POST | 上传附件 |
+| `/detach` | POST | 移除所有附件 |
+| `/get_attachments` | GET | 获取附件列表 |
+| `/get_messages` | GET | 获取消息列表 |
 | `/screenshot` | POST | 调试截图 |
-| `/restart` | POST | 重启客户端连接 |
+| `/restart` | POST | 重启 Agency |
 
 错误响应使用适当的 HTTP 状态码：
 - 401：需要登录
 - 429：触发速率限制
-- 503：客户端未就绪
+- 503：Agency 未就绪
 - 504：超时
 - 500：其他错误
+
+### `client.py`
+HTTP 客户端层（全新实现）：
+
+- `GeminiClientConfig`：连接配置（host、port、timeout、scheme）
+- `GeminiClient`：封装 HTTP 请求，提供与 `server.py` 端点一一对应的 Python API
+- 使用 `requests.Session` 管理连接
+- 支持上下文管理器 (`with GeminiClient() as client:`)
+- 自动错误映射：`ConnectionError`、`TimeoutError`、`RuntimeError`
+- `send_message()` 便捷方法：自动调用 `set_input()` + `send_input()`
+
+### `run.py`
+CLI 运行管理器：
+
+- `GeminiRunner`：同时管理 Browser + Server 的生命周期
+- PID 文件状态管理（`/tmp/gemini_runner.json`）
+- 命令行接口：`python -m webu.gemini.run start|stop|restart|status`
+- 优雅停机：信号处理 (SIGINT/SIGTERM)
+
+### `api.py`（弃用）
+向后兼容层，重定向到 `server.py`：
+- `create_gemini_app` = `create_gemini_server`
+- `run_gemini_api` = `run_gemini_server`
 
 ## 设计决策
 
