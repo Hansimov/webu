@@ -6,3 +6,6 @@ __pycache__
 data/
 ipv6_mirrors/
 ipv6_global_addrs.json
+.chats
+*.lm
+configs/

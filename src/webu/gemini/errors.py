@@ -1,0 +1,72 @@
+class GeminiError(Exception):
+    """所有 Gemini 相关错误的基类。"""
+
+    def __init__(self, message: str = "", details: dict = None):
+        self.message = message
+        self.details = details or {}
+        super().__init__(self.message)
+
+    def __str__(self):
+        if self.details:
+            return f"{self.message} | Details: {self.details}"
+        return self.message
+
+
+class GeminiLoginRequiredError(GeminiError):
+    """用户未登录 Gemini 时抛出。"""
+
+    def __init__(
+        self,
+        message: str = "用户未登录 Gemini，请先手动登录。",
+    ):
+        super().__init__(message)
+
+
+class GeminiNetworkError(GeminiError):
+    """网络连接失败时抛出（如代理问题）。"""
+
+    def __init__(
+        self,
+        message: str = "访问 Gemini 时发生网络错误。",
+        details: dict = None,
+    ):
+        super().__init__(message, details)
+
+
+class GeminiTimeoutError(GeminiError):
+    """操作超时时抛出。"""
+
+    def __init__(self, message: str = "操作超时。", timeout_ms: int = None):
+        details = {"timeout_ms": timeout_ms} if timeout_ms else {}
+        super().__init__(message, details)
+
+
+class GeminiResponseParseError(GeminiError):
+    """无法解析 Gemini 响应时抛出。"""
+
+    def __init__(
+        self, message: str = "解析 Gemini 响应失败。", raw_content: str = None
+    ):
+        details = {"raw_content": raw_content[:500] if raw_content else None}
+        super().__init__(message, details)
+
+
+class GeminiImageGenerationError(GeminiError):
+    """图片生成失败时抛出。"""
+
+    def __init__(self, message: str = "图片生成失败。", details: dict = None):
+        super().__init__(message, details)
+
+
+class GeminiBrowserError(GeminiError):
+    """浏览器操作失败时抛出。"""
+
+    def __init__(self, message: str = "浏览器操作失败。", details: dict = None):
+        super().__init__(message, details)
+
+
+class GeminiPageError(GeminiError):
+    """页面交互失败时抛出。"""
+
+    def __init__(self, message: str = "页面交互失败。", details: dict = None):
+        super().__init__(message, details)
