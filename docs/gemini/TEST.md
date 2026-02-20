@@ -168,8 +168,9 @@ elif resp.status_code != 200:
 ```
 tests/gemini/
 ├── test_gemini.py          # 核心模块单元测试 (1422 行)
+├── test_chatdb.py          # 聊天数据库单元测试 (533 行)
 ├── test_run_server.py      # 运行管理器 + Server/Client 测试 (892 行)
-├── test_server_client.py   # Server ↔ Client 测试 (708 行)
+├── test_server_client.py   # Server ↔ Client 测试 (1000 行)
 ├── test_tcp_proxy.py       # TCP 代理测试 (382 行)
 ├── test_cdp.py             # Chrome DevTools 协议测试 (132 行)
 ├── test_live.py            # 端到端测试脚本 (336 行)
@@ -220,9 +221,19 @@ tests/gemini/
 #### test_server_client.py（Server ↔ Client 测试）
 
 - `TestClientConfig` — 客户端配置
-- Client HTTP mock 测试
-- Server 端点 mock 测试
+- Client HTTP mock 测试（send_message, store_images, download_images, store_screenshot, download_screenshot 等）
+- Server 端点 mock 测试（含 store/download images/screenshot 的 not_ready 测试）
+- `TestChatDBEndpoints` — 聊天数据库 API 端点测试（15 个测试）
 - 完整的 Server ↔ Client 集成测试（标记 `@pytest.mark.integration`）
+
+#### test_chatdb.py（聊天数据库测试，52 个测试）
+
+| 测试类 | 覆盖范围 |
+|---|---|
+| `TestChatMessage` | ChatMessage 数据类的创建、默认值、to_dict/from_dict 序列化 |
+| `TestChatSession` | ChatSession 数据类的创建、to_dict/from_dict、消息列表 |
+| `TestChatDatabase` | 创建/获取/列出/删除聊天，消息 CRUD，标题更新，搜索，统计，持久化 |
+| `TestChatDatabaseEdgeCases` | Unicode 内容、大文本、多消息、深层路径、clear_all |
 
 #### test_tcp_proxy.py
 
@@ -294,7 +305,7 @@ python tests/gemini/test_live_scenarios.py
 遇到问题时随时截图检查页面状态：
 
 ```python
-client.screenshot(path="data/debug/problem.png")
+client.store_screenshot(path="data/debug/problem.png")
 ```
 
 ### JavaScript 控制台

@@ -3,6 +3,8 @@
 测试分为：
 - 单元测试：测试 GeminiClient HTTP 客户端逻辑（mock HTTP）
 - 单元测试：测试 Server 端点逻辑（mock Agency）
+- 单元测试：测试新增的 store/download 图片和截图端点
+- 单元测试：测试聊天数据库 API 端点
 - 集成测试：测试完整的 Server ↔ Client 交互（需要浏览器）
 """
 
@@ -339,8 +341,96 @@ class TestClientMethods:
         mock_session_cls.return_value = mock_session
 
         client = GeminiClient()
-        result = client.screenshot("debug.png")
+        result = client.store_screenshot("debug.png")
         assert result["path"] == "debug.png"
+
+    @patch("webu.gemini.client.requests.Session")
+    def test_store_images(self, mock_session_cls):
+        mock_session = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "image_count": 2,
+            "saved_count": 2,
+            "saved_paths": ["data/images/img_1.png", "data/images/img_2.png"],
+        }
+        mock_resp.raise_for_status.return_value = None
+        mock_session.post.return_value = mock_resp
+        mock_session_cls.return_value = mock_session
+
+        client = GeminiClient()
+        result = client.store_images(output_dir="data/images", prefix="test")
+        assert result["saved_count"] == 2
+
+    @patch("webu.gemini.client.requests.Session")
+    def test_download_images_empty(self, mock_session_cls):
+        mock_session = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "image_count": 0,
+            "download_count": 0,
+            "images": [],
+        }
+        mock_resp.raise_for_status.return_value = None
+        mock_session.post.return_value = mock_resp
+        mock_session_cls.return_value = mock_session
+
+        client = GeminiClient()
+        result = client.download_images(output_dir="/tmp/test_images")
+        assert result["saved_count"] == 0
+
+    @patch("webu.gemini.client.requests.Session")
+    def test_download_images_with_data(self, mock_session_cls):
+        import base64
+
+        # 创建一个假的 1x1 PNG 的 base64
+        fake_png = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
+
+        mock_session = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "image_count": 1,
+            "download_count": 1,
+            "images": [
+                {
+                    "filename": "test_001.png",
+                    "base64_data": fake_png,
+                    "mime_type": "image/png",
+                    "width": 100,
+                    "height": 100,
+                }
+            ],
+        }
+        mock_resp.raise_for_status.return_value = None
+        mock_session.post.return_value = mock_resp
+        mock_session_cls.return_value = mock_session
+
+        client = GeminiClient()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = client.download_images(output_dir=tmpdir, prefix="test")
+            assert result["saved_count"] == 1
+            assert len(result["saved_paths"]) == 1
+            assert Path(result["saved_paths"][0]).exists()
+
+    @patch("webu.gemini.client.requests.Session")
+    def test_download_screenshot(self, mock_session_cls):
+        mock_session = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.content = b"\x89PNG\r\n\x1a\nfake_screenshot"
+        mock_resp.raise_for_status.return_value = None
+        mock_session.post.return_value = mock_resp
+        mock_session_cls.return_value = mock_session
+
+        client = GeminiClient()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = str(Path(tmpdir) / "screenshot.png")
+            result = client.download_screenshot(path)
+            assert result == path
+            assert Path(path).exists()
+            with open(path, "rb") as f:
+                assert f.read() == b"\x89PNG\r\n\x1a\nfake_screenshot"
 
     @patch("webu.gemini.client.requests.Session")
     def test_restart(self, mock_session_cls):
@@ -470,6 +560,208 @@ class TestServerEndpoints:
     def test_send_input_not_ready(self, client):
         resp = client.post("/send_input", json={"wait_response": True})
         assert resp.status_code == 503
+
+    def test_store_images_not_ready(self, client):
+        resp = client.post("/store_images")
+        assert resp.status_code == 503
+
+    def test_download_images_not_ready(self, client):
+        resp = client.post("/download_images")
+        assert resp.status_code == 503
+
+    def test_store_screenshot_not_ready(self, client):
+        resp = client.post("/store_screenshot")
+        assert resp.status_code == 503
+
+    def test_download_screenshot_not_ready(self, client):
+        resp = client.post("/download_screenshot")
+        assert resp.status_code == 503
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 单元测试：ChatDB API 端点
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestChatDBEndpoints:
+    """测试聊天数据库的 REST API 端点。"""
+
+    @pytest.fixture
+    def client(self, tmp_path):
+        from fastapi.testclient import TestClient
+        from webu.gemini.server import create_gemini_server
+
+        mock_agency = MagicMock()
+        mock_agency.start = AsyncMock()
+        mock_agency.stop = AsyncMock()
+        mock_agency.is_ready = False
+        mock_agency._image_mode = False
+        mock_agency._message_count = 0
+
+        # ChatDatabase is instantiated inside create_gemini_server.
+        # Patch the ChatDatabase class so it uses a temp directory.
+        from webu.gemini.chatdb import ChatDatabase
+
+        original_init = ChatDatabase.__init__
+
+        def patched_init(self_db, data_dir=None):
+            original_init(self_db, data_dir=str(tmp_path / "test_chats"))
+
+        with patch("webu.gemini.server.GeminiAgency", return_value=mock_agency):
+            with patch.object(ChatDatabase, "__init__", patched_init):
+                app = create_gemini_server(config={"headless": True})
+                with TestClient(app) as tc:
+                    yield tc
+
+    def test_create_chat(self, client):
+        resp = client.post("/chatdb/create", json={"title": "Test Chat"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "chat_id" in data
+
+    def test_list_chats_empty(self, client):
+        resp = client.get("/chatdb/list")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["chats"] == []
+
+    def test_create_and_list_chats(self, client):
+        client.post("/chatdb/create", json={"title": "Chat 1"})
+        client.post("/chatdb/create", json={"title": "Chat 2"})
+        resp = client.get("/chatdb/list")
+        data = resp.json()
+        assert len(data["chats"]) == 2
+
+    def test_get_chat(self, client):
+        resp = client.post("/chatdb/create", json={"title": "Get Me"})
+        chat_id = resp.json()["chat_id"]
+
+        resp = client.get(f"/chatdb/{chat_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["chat"]["title"] == "Get Me"
+
+    def test_get_chat_not_found(self, client):
+        resp = client.get("/chatdb/nonexistent_id")
+        assert resp.status_code == 404
+
+    def test_delete_chat(self, client):
+        resp = client.post("/chatdb/create", json={"title": "Delete Me"})
+        chat_id = resp.json()["chat_id"]
+
+        resp = client.delete(f"/chatdb/{chat_id}")
+        assert resp.status_code == 200
+
+        resp = client.get(f"/chatdb/{chat_id}")
+        assert resp.status_code == 404
+
+    def test_delete_chat_not_found(self, client):
+        resp = client.delete("/chatdb/nonexistent_id")
+        assert resp.status_code == 404
+
+    def test_update_title(self, client):
+        resp = client.post("/chatdb/create", json={"title": "Old"})
+        chat_id = resp.json()["chat_id"]
+
+        resp = client.put(f"/chatdb/{chat_id}/title", json={"title": "New"})
+        assert resp.status_code == 200
+
+        resp = client.get(f"/chatdb/{chat_id}")
+        assert resp.json()["chat"]["title"] == "New"
+
+    def test_add_message(self, client):
+        resp = client.post("/chatdb/create", json={"title": "Msgs"})
+        chat_id = resp.json()["chat_id"]
+
+        resp = client.post(
+            f"/chatdb/{chat_id}/messages",
+            json={"role": "user", "content": "Hello!"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["message_index"] == 0
+
+    def test_get_messages(self, client):
+        resp = client.post("/chatdb/create", json={"title": "Msgs"})
+        chat_id = resp.json()["chat_id"]
+
+        client.post(
+            f"/chatdb/{chat_id}/messages",
+            json={"role": "user", "content": "Q"},
+        )
+        client.post(
+            f"/chatdb/{chat_id}/messages",
+            json={"role": "model", "content": "A", "files": ["img.png"]},
+        )
+
+        resp = client.get(f"/chatdb/{chat_id}/messages")
+        data = resp.json()
+        assert len(data["messages"]) == 2
+        assert data["messages"][0]["content"] == "Q"
+        assert data["messages"][1]["files"] == ["img.png"]
+
+    def test_get_single_message(self, client):
+        resp = client.post("/chatdb/create")
+        chat_id = resp.json()["chat_id"]
+        client.post(
+            f"/chatdb/{chat_id}/messages",
+            json={"role": "user", "content": "Hello"},
+        )
+        resp = client.get(f"/chatdb/{chat_id}/messages/0")
+        assert resp.status_code == 200
+        assert resp.json()["message"]["content"] == "Hello"
+
+    def test_update_message(self, client):
+        resp = client.post("/chatdb/create")
+        chat_id = resp.json()["chat_id"]
+        client.post(
+            f"/chatdb/{chat_id}/messages",
+            json={"role": "user", "content": "old"},
+        )
+        resp = client.put(
+            f"/chatdb/{chat_id}/messages/0",
+            json={"content": "new"},
+        )
+        assert resp.status_code == 200
+
+        resp = client.get(f"/chatdb/{chat_id}/messages/0")
+        assert resp.json()["message"]["content"] == "new"
+
+    def test_delete_message(self, client):
+        resp = client.post("/chatdb/create")
+        chat_id = resp.json()["chat_id"]
+        client.post(
+            f"/chatdb/{chat_id}/messages",
+            json={"role": "user", "content": "A"},
+        )
+        client.post(
+            f"/chatdb/{chat_id}/messages",
+            json={"role": "model", "content": "B"},
+        )
+        resp = client.delete(f"/chatdb/{chat_id}/messages/0")
+        assert resp.status_code == 200
+
+        resp = client.get(f"/chatdb/{chat_id}/messages")
+        assert len(resp.json()["messages"]) == 1
+        assert resp.json()["messages"][0]["content"] == "B"
+
+    def test_search(self, client):
+        resp = client.post("/chatdb/create", json={"title": "Python 学习"})
+        id1 = resp.json()["chat_id"]
+        resp = client.post("/chatdb/create", json={"title": "Java 入门"})
+        id2 = resp.json()["chat_id"]
+
+        resp = client.post("/chatdb/search", json={"query": "Python"})
+        results = resp.json()["results"]
+        assert len(results) == 1
+        assert results[0]["chat_id"] == id1
+
+    def test_stats(self, client):
+        client.post("/chatdb/create")
+        resp = client.get("/chatdb/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["chat_count"] == 1
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -702,6 +994,237 @@ class TestAgencyIntegration:
             data = await shared_agency.screenshot(path=path)
             assert data is not None
             assert Path(path).exists()
+
+    @pytest.mark.asyncio
+    async def test_save_images_empty(self, shared_agency):
+        """未生成图片时 save_images 返回空列表。"""
+        await shared_agency.new_chat()
+        await shared_agency.send_message("Say 'hello'")
+        from webu.gemini.parser import GeminiResponse
+
+        response = GeminiResponse()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = shared_agency.save_images(response, output_dir=tmpdir)
+            assert len(paths) == 0
+
+
+@pytest.mark.integration
+class TestClientIntegration:
+    """GeminiClient 集成测试 — 连接到运行中的服务器。
+
+    需要先启动服务器: python -m webu.gemini.run start
+    运行: pytest tests/gemini/test_server_client.py -m integration -k TestClientIntegration -v
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_client(self):
+        """在每个测试前创建 client。"""
+        self.client = GeminiClient(
+            GeminiClientConfig(host="127.0.0.1", port=30002, timeout=300)
+        )
+        yield
+        self.client.close()
+
+    def test_health(self):
+        result = self.client.health()
+        assert result["status"] == "ok"
+        assert result["version"] == "4.0.0"
+
+    def test_browser_status(self):
+        result = self.client.browser_status()
+        assert result["status"] == "ok"
+        assert "data" in result
+        assert result["data"]["is_ready"] is True
+
+    def test_store_screenshot(self):
+        """服务器端截图保存。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = str(Path(tmpdir) / "test_store.png")
+            result = self.client.store_screenshot(path)
+            assert result["status"] == "ok"
+            assert Path(result["path"]).exists()
+
+    def test_download_screenshot(self):
+        """下载截图到本地。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = str(Path(tmpdir) / "test_download.png")
+            result = self.client.download_screenshot(path)
+            assert result == path
+            assert Path(path).exists()
+            assert Path(path).stat().st_size > 1000  # PNG 应该有一定大小
+
+    def test_store_images_no_images(self):
+        """无图片时 store_images 返回空。"""
+        self.client.new_chat()
+        import time
+
+        time.sleep(1)
+        self.client.send_message("Say 'hello' in one word", wait_response=True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self.client.store_images(output_dir=tmpdir, prefix="test")
+            assert result["status"] == "ok"
+            assert result["image_count"] == 0
+
+    def test_download_images_no_images(self):
+        """无图片时 download_images 返回空。"""
+        self.client.new_chat()
+        import time
+
+        time.sleep(1)
+        self.client.send_message("Say 'hello' in one word", wait_response=True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = self.client.download_images(output_dir=tmpdir, prefix="test")
+            assert result["status"] == "ok"
+            assert result["image_count"] == 0
+            assert result["saved_count"] == 0
+            assert result["saved_paths"] == []
+
+    def test_chatdb_full_lifecycle(self):
+        """聊天数据库完整生命周期测试。"""
+        # 创建聊天
+        create_result = self.client.chatdb_create(title="集成测试聊天")
+        assert create_result["status"] == "ok"
+        chat_id = create_result["chat_id"]
+        assert len(chat_id) > 0
+
+        try:
+            # 添加消息
+            msg1 = self.client.chatdb_add_message(chat_id, role="user", content="你好")
+            assert msg1["status"] == "ok"
+            assert msg1["message_index"] == 0
+
+            msg2 = self.client.chatdb_add_message(
+                chat_id, role="model", content="你好！有什么可以帮您的？"
+            )
+            assert msg2["status"] == "ok"
+            assert msg2["message_index"] == 1
+
+            # 获取聊天
+            chat = self.client.chatdb_get(chat_id)
+            assert chat["status"] == "ok"
+            assert chat["chat"]["title"] == "集成测试聊天"
+            assert len(chat["chat"]["messages"]) == 2
+
+            # 获取消息
+            msgs = self.client.chatdb_get_messages(chat_id)
+            assert msgs["status"] == "ok"
+            assert len(msgs["messages"]) == 2
+            assert msgs["messages"][0]["role"] == "user"
+            assert msgs["messages"][1]["role"] == "model"
+
+            # 获取单条消息
+            single = self.client.chatdb_get_message(chat_id, 0)
+            assert single["status"] == "ok"
+            assert single["message"]["content"] == "你好"
+
+            # 更新消息
+            self.client.chatdb_update_message(chat_id, 0, content="你好世界")
+            updated = self.client.chatdb_get_message(chat_id, 0)
+            assert updated["message"]["content"] == "你好世界"
+
+            # 更新标题
+            self.client.chatdb_update_title(chat_id, title="更新后的标题")
+            chat2 = self.client.chatdb_get(chat_id)
+            assert chat2["chat"]["title"] == "更新后的标题"
+
+            # 列出聊天
+            chats = self.client.chatdb_list()
+            assert chats["status"] == "ok"
+            found = any(c["chat_id"] == chat_id for c in chats["chats"])
+            assert found, f"聊天 {chat_id} 未在列表中找到"
+
+            # 搜索
+            search = self.client.chatdb_search(query="你好")
+            assert search["status"] == "ok"
+            assert len(search["results"]) > 0
+
+            # 统计
+            stats = self.client.chatdb_stats()
+            assert stats["status"] == "ok"
+            assert stats["total_chats"] >= 1
+            assert stats["total_messages"] >= 2
+
+            # 删除消息
+            del_msg = self.client.chatdb_delete_message(chat_id, 1)
+            assert del_msg["status"] == "ok"
+            msgs_after = self.client.chatdb_get_messages(chat_id)
+            assert len(msgs_after["messages"]) == 1
+
+        finally:
+            # 清理：删除聊天
+            self.client.chatdb_delete(chat_id)
+
+        # 验证删除
+        chats_after = self.client.chatdb_list()
+        not_found = all(c["chat_id"] != chat_id for c in chats_after["chats"])
+        assert not_found, f"聊天 {chat_id} 删除后仍在列表中"
+
+    def test_chatdb_custom_id(self):
+        """使用自定义 chat_id 创建聊天。"""
+        import uuid
+
+        custom_id = f"test_{uuid.uuid4().hex[:8]}"
+        result = self.client.chatdb_create(title="自定义ID测试", chat_id=custom_id)
+        assert result["status"] == "ok"
+        assert result["chat_id"] == custom_id
+
+        try:
+            chat = self.client.chatdb_get(custom_id)
+            assert chat["chat"]["title"] == "自定义ID测试"
+        finally:
+            self.client.chatdb_delete(custom_id)
+
+    def test_chatdb_message_with_files(self):
+        """消息带文件路径引用。"""
+        create = self.client.chatdb_create(title="文件引用测试")
+        chat_id = create["chat_id"]
+
+        try:
+            self.client.chatdb_add_message(
+                chat_id,
+                role="user",
+                content="请看这张图片",
+                files=["data/images/test.png", "data/images/test2.png"],
+            )
+            msg = self.client.chatdb_get_message(chat_id, 0)
+            assert msg["message"]["files"] == [
+                "data/images/test.png",
+                "data/images/test2.png",
+            ]
+        finally:
+            self.client.chatdb_delete(chat_id)
+
+    def test_send_message_and_record(self):
+        """发送消息并保存到 ChatDB。"""
+        import time
+
+        # 新建浏览器聊天并发送消息
+        self.client.new_chat()
+        time.sleep(1)
+        result = self.client.send_message("Say 'test' in one word", wait_response=True)
+        assert result["status"] == "ok"
+
+        response_text = result.get("response", {}).get("text", "")
+        assert len(response_text) > 0
+
+        # 保存到 ChatDB
+        create = self.client.chatdb_create(title="自动保存测试")
+        chat_id = create["chat_id"]
+
+        try:
+            self.client.chatdb_add_message(
+                chat_id, role="user", content="Say 'test' in one word"
+            )
+            self.client.chatdb_add_message(chat_id, role="model", content=response_text)
+
+            # 验证
+            chat = self.client.chatdb_get(chat_id)
+            assert len(chat["chat"]["messages"]) == 2
+            assert chat["chat"]["messages"][0]["role"] == "user"
+            assert chat["chat"]["messages"][1]["role"] == "model"
+            assert len(chat["chat"]["messages"][1]["content"]) > 0
+        finally:
+            self.client.chatdb_delete(chat_id)
 
 
 if __name__ == "__main__":

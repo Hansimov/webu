@@ -366,37 +366,32 @@ async with GeminiAgency() as agency:
 ### 使用 Client / REST API
 
 ```python
-# Client: 通过 download_images 端点下载
+# Client: 通过 store_images 在服务器端保存
 client.set_presets(tool="生成图片")
 client.new_chat()
 client.set_input("画一只猫")
 result = client.send_input(wait_response=True)
 
-# 下载图片到本地
-saved = client.download_images(output_dir="output/images", prefix="cat")
+# 方式一：在服务器端保存图片
+saved = client.store_images(output_dir="output/images", prefix="cat")
+print(saved)  # {"status": "ok", "image_count": 4, "saved_count": 4, "saved_paths": [...]}
+
+# 方式二：下载图片到客户端本地保存
+saved = client.download_images(output_dir="local/images", prefix="cat")
 print(saved)  # {"status": "ok", "image_count": 4, "saved_count": 4, "saved_paths": [...]}
 ```
 
 ```bash
-# REST API
-curl -X POST http://localhost:30002/set_presets \
-  -H "Content-Type: application/json" \
-  -d '{"tool": "image"}'
-
-curl -X POST http://localhost:30002/new_chat
-
-curl -X POST http://localhost:30002/set_input \
-  -H "Content-Type: application/json" \
-  -d '{"text": "画一只猫"}'
-
-curl -X POST http://localhost:30002/send_input \
-  -H "Content-Type: application/json" \
-  -d '{"wait_response": true}'
-
-# 下载图片
-curl -X POST http://localhost:30002/download_images \
+# REST API: 在服务器端保存
+curl -X POST http://localhost:30002/store_images \
   -H "Content-Type: application/json" \
   -d '{"output_dir": "output/images", "prefix": "cat"}'
+
+# REST API: 下载 base64 数据到客户端
+curl -X POST http://localhost:30002/download_images \
+  -H "Content-Type: application/json" \
+  -d '{"prefix": "cat"}'
+# 返回 JSON：{"status": "ok", "images": [{"filename": "cat_xxx_1.jpg", "base64_data": "...", "mime_type": "image/jpeg"}, ...]}
 ```
 
 ## 文件上传
@@ -464,7 +459,7 @@ status = client.browser_status()
 ```bash
 curl http://localhost:30002/browser_status
 curl http://localhost:30002/health
-# {"status": "ok", "version": "3.0.0"}
+# {"status": "ok", "version": "4.0.0"}
 ```
 
 ## 调试工具
@@ -475,14 +470,23 @@ curl http://localhost:30002/health
 # Agency
 await agency.screenshot(path="debug.png")
 
-# Client
-client.screenshot(path="debug.png")
+# Client: 在服务器端保存截图
+client.store_screenshot(path="debug.png")
+
+# Client: 下载截图到客户端本地
+client.download_screenshot(path="local_debug.png")
 ```
 
 ```bash
-curl -X POST http://localhost:30002/screenshot \
+# REST API: 在服务器端保存
+curl -X POST http://localhost:30002/store_screenshot \
   -H "Content-Type: application/json" \
   -d '{"path": "debug.png"}'
+
+# REST API: 下载 PNG 数据
+curl -X POST http://localhost:30002/download_screenshot \
+  -H "Content-Type: application/json" \
+  -d '{"path": "debug.png"}' --output debug.png
 ```
 
 ### JavaScript 执行（调试用）
@@ -526,10 +530,145 @@ curl -X POST http://localhost:30002/restart
 | `/detach` | POST | — | 移除附件 |
 | `/get_attachments` | GET | — | 获取附件列表 |
 | `/get_messages` | GET | — | 获取消息列表 |
-| `/download_images` | POST | `{output_dir?, prefix?}` | 下载图片 |
-| `/screenshot` | POST | `{path?}` | 截图 |
+| `/store_images` | POST | `{output_dir?, prefix?}` | 服务器端保存图片 |
+| `/download_images` | POST | `{prefix?}` | 下载图片 base64 数据 |
+| `/store_screenshot` | POST | `{path?}` | 服务器端保存截图 |
+| `/download_screenshot` | POST | `{path?}` | 下载截图 PNG 数据 |
+| `/chatdb/create` | POST | `{title?, chat_id?}` | 创建聊天记录 |
+| `/chatdb/list` | GET | — | 列出所有聊天记录 |
+| `/chatdb/stats` | GET | — | 数据库统计信息 |
+| `/chatdb/{chat_id}` | GET | — | 获取聊天详情 |
+| `/chatdb/{chat_id}` | DELETE | — | 删除聊天 |
+| `/chatdb/{chat_id}/title` | PUT | `{title}` | 更新聊天标题 |
+| `/chatdb/{chat_id}/messages` | GET | — | 获取聊天消息 |
+| `/chatdb/{chat_id}/messages` | POST | `{role, content, files?}` | 添加消息 |
+| `/chatdb/{chat_id}/messages/{index}` | GET | — | 获取指定消息 |
+| `/chatdb/{chat_id}/messages/{index}` | PUT | `{content?, role?}` | 更新消息 |
+| `/chatdb/{chat_id}/messages/{index}` | DELETE | — | 删除消息 |
+| `/chatdb/search` | POST | `{query, max_results?}` | 搜索聊天内容 |
 | `/restart` | POST | — | 重启 Agency |
 | `/evaluate` | POST | `{js}` | 执行 JS（调试） |
+
+## 聊天数据库（ChatDB）
+
+本地 JSON 文件存储的聊天记录管理系统，用于持久化保存聊天历史。
+
+### 数据存储
+
+聊天数据保存在 `data/gemini/chats/` 目录：
+```
+data/gemini/chats/
+├── index.json           # 聊天索引（chat_id → 元数据）
+├── {chat_id_1}.json     # 聊天 1 的完整数据
+├── {chat_id_2}.json     # 聊天 2 的完整数据
+└── ...
+```
+
+### 使用 Client
+
+```python
+from webu.gemini import GeminiClient, GeminiClientConfig
+
+client = GeminiClient(GeminiClientConfig())
+
+# 创建聊天记录
+result = client.chatdb_create(title="Python 学习笔记")
+chat_id = result["chat_id"]
+
+# 添加消息
+client.chatdb_add_message(chat_id, role="user", content="什么是装饰器？")
+client.chatdb_add_message(chat_id, role="model", content="装饰器是一种设计模式...")
+
+# 查看消息列表
+messages = client.chatdb_get_messages(chat_id)
+
+# 获取单条消息
+msg = client.chatdb_get_message(chat_id, message_index=0)
+
+# 更新消息
+client.chatdb_update_message(chat_id, message_index=1, content="更新后的内容")
+
+# 更新标题
+client.chatdb_update_title(chat_id, title="Python 进阶笔记")
+
+# 列出所有聊天
+chats = client.chatdb_list()
+
+# 搜索聊天内容
+results = client.chatdb_search(query="装饰器", max_results=10)
+
+# 获取统计信息
+stats = client.chatdb_stats()
+
+# 删除消息
+client.chatdb_delete_message(chat_id, message_index=0)
+
+# 删除聊天
+client.chatdb_delete(chat_id)
+```
+
+### 使用 REST API
+
+```bash
+# 创建聊天
+curl -X POST http://localhost:30002/chatdb/create \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Python 学习笔记"}'
+
+# 添加消息
+curl -X POST http://localhost:30002/chatdb/{chat_id}/messages \
+  -H "Content-Type: application/json" \
+  -d '{"role": "user", "content": "什么是装饰器？"}'
+
+# 获取聊天详情
+curl http://localhost:30002/chatdb/{chat_id}
+
+# 列出所有聊天
+curl http://localhost:30002/chatdb/list
+
+# 搜索
+curl -X POST http://localhost:30002/chatdb/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "装饰器"}'
+
+# 获取统计
+curl http://localhost:30002/chatdb/stats
+
+# 更新标题
+curl -X PUT http://localhost:30002/chatdb/{chat_id}/title \
+  -H "Content-Type: application/json" \
+  -d '{"title": "新标题"}'
+
+# 删除聊天
+curl -X DELETE http://localhost:30002/chatdb/{chat_id}
+```
+
+### 直接使用 ChatDatabase
+
+```python
+from webu.gemini import ChatDatabase
+
+db = ChatDatabase(data_dir="data/gemini/chats")
+
+# 创建聊天
+session = db.create_chat(title="测试聊天")
+
+# 添加消息
+db.add_message(session.chat_id, role="user", content="你好")
+db.add_message(session.chat_id, role="model", content="你好！有什么可以帮您的？")
+
+# 获取聊天
+session = db.get_chat(session.chat_id)
+for msg in session.messages:
+    print(f"[{msg.role}] {msg.content}")
+
+# 搜索
+results = db.search_chats("你好")
+
+# 统计
+stats = db.get_stats()
+print(f"共 {stats['total_chats']} 个聊天，{stats['total_messages']} 条消息")
+```
 
 ## 配置参考
 

@@ -1,7 +1,7 @@
 """Gemini FastAPI 服务器。
 
 提供 REST API 接口，封装 GeminiAgency 的浏览器交互功能。
-增强版：支持 /set_presets, /new_chat 带 tool/mode 参数, 预设验证, 图片下载。
+支持：预设管理、图片存储/下载、截图存储/下载、聊天历史数据库。
 """
 
 import asyncio
@@ -11,11 +11,13 @@ import uvicorn
 from contextlib import asynccontextmanager
 from enum import Enum
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from tclogger import logger, logstr
 from typing import Optional, Literal
 
 from .agency import GeminiAgency
+from .chatdb import ChatDatabase
 from .config import GeminiConfig, GeminiConfigType
 from .errors import (
     GeminiError,
@@ -230,17 +232,25 @@ class AttachRequest(BaseModel):
     file_path: str = Field(..., description="要上传的文件路径", min_length=1)
 
 
-class ScreenshotRequest(BaseModel):
-    """截图请求。"""
+class StoreScreenshotRequest(BaseModel):
+    """保存截图到服务器请求。"""
 
-    path: Optional[str] = Field(None, description="截图保存路径")
+    path: str = Field(
+        "data/gemini_screenshot.png", description="截图保存路径（服务器端）"
+    )
+
+
+class StoreImagesRequest(BaseModel):
+    """保存图片到服务器请求。"""
+
+    output_dir: str = Field("data/images", description="图片保存目录（服务器端）")
+    prefix: str = Field("", description="文件名前缀")
 
 
 class DownloadImagesRequest(BaseModel):
-    """下载生成图片请求。"""
+    """下载图片数据请求（返回 base64 数据供客户端保存）。"""
 
-    output_dir: str = Field("data/images", description="图片保存目录")
-    prefix: str = Field("", description="文件名前缀")
+    prefix: str = Field("", description="建议的文件名前缀")
 
 
 class ImageData(BaseModel):
@@ -283,7 +293,7 @@ class HealthResponse(BaseModel):
     """健康检查响应。"""
 
     status: str = "ok"
-    version: str = "3.0.0"
+    version: str = "4.0.0"
 
 
 class PresetsResponse(BaseModel):
@@ -418,9 +428,10 @@ def create_gemini_server(
         description=(
             "通过浏览器自动化 Google Gemini 交互的 API。\n\n"
             "支持：浏览器状态、聊天管理、模式/工具选择、预设配置、"
-            "输入操作、消息发送、文件上传、消息获取、图片下载。"
+            "输入操作、消息发送、文件上传、消息获取、\n"
+            "图片存储/下载、截图存储/下载、聊天历史数据库。"
         ),
-        version="3.0.0",
+        version="4.0.0",
         lifespan=lifespan,
     )
     setup_swagger_ui(app)
@@ -437,7 +448,7 @@ def create_gemini_server(
     @app.get("/health", response_model=HealthResponse, tags=["系统"])
     async def health_check():
         """健康检查接口。"""
-        return HealthResponse(status="ok", version="3.0.0")
+        return HealthResponse(status="ok", version="4.0.0")
 
     @app.get("/browser_status", tags=["状态"])
     async def browser_status():
@@ -598,11 +609,15 @@ def create_gemini_server(
         """设置聊天窗口的工具（如 'Deep Research', '生成图片', '创作音乐'）。
 
         支持别名：image→生成图片, music→创作音乐 等。
+        传入 'none' 或 '无' 可取消当前工具。
         """
         _ensure_ready()
         try:
             result = await agency.set_tool(req.tool)
-            presets["tool"] = req.tool
+            if req.tool.lower() in ("none", "无"):
+                presets["tool"] = None
+            else:
+                presets["tool"] = req.tool
             return result
         except Exception as e:
             _handle_gemini_error(e)
@@ -729,32 +744,37 @@ def create_gemini_server(
 
     # ── 图片管理 ─────────────────────────────────────────────
 
-    @app.post("/download_images", tags=["图片"])
-    async def download_images(req: DownloadImagesRequest = None):
-        """下载最新响应中的所有图片并保存到本地。
+    async def _get_parsed_images():
+        """提取并解析最新响应中的图片（内部共享逻辑）。"""
+        from .parser import GeminiResponseParser
 
-        从最新模型响应中提取图片数据，下载并保存到指定目录。
-        支持小图和原图（如果可用）。
+        images_data = await agency._extract_images(download_base64=True)
+        if not images_data:
+            return []
+        parser = GeminiResponseParser()
+        return parser.parse_images_from_elements(images_data)
+
+    @app.post("/store_images", tags=["图片"])
+    async def store_images(req: StoreImagesRequest = None):
+        """将最新响应中的图片保存到服务器指定目录。
+
+        从最新模型响应中提取图片数据，保存到服务器端指定目录。
+        返回保存的文件路径列表。
         """
         _ensure_ready()
         try:
             output_dir = (req and req.output_dir) or "data/images"
             prefix = (req and req.prefix) or ""
 
-            # 提取最新响应的图片
-            images_data = await agency._extract_images(download_base64=True)
-            if not images_data:
+            images = await _get_parsed_images()
+            if not images:
                 return {
                     "status": "ok",
                     "message": "没有找到图片",
+                    "image_count": 0,
+                    "saved_count": 0,
                     "saved_paths": [],
                 }
-
-            # 解析并保存图片
-            from .parser import GeminiResponseParser
-
-            parser = GeminiResponseParser()
-            images = parser.parse_images_from_elements(images_data)
 
             from .parser import GeminiResponse
 
@@ -772,11 +792,60 @@ def create_gemini_server(
         except Exception as e:
             _handle_gemini_error(e)
 
-    # ── 调试工具 ─────────────────────────────────────────────
+    @app.post("/download_images", tags=["图片"])
+    async def download_images(req: DownloadImagesRequest = None):
+        """获取最新响应中的图片数据（base64），供客户端下载保存。
 
-    @app.post("/screenshot", tags=["调试"])
-    async def take_screenshot(req: ScreenshotRequest = None):
-        """对当前浏览器状态截图。"""
+        返回 JSON 包含所有图片的 base64 编码数据、MIME 类型和建议文件名，
+        客户端接收后可自行解码保存到本地。
+        """
+        _ensure_ready()
+        try:
+            prefix = (req and req.prefix) or ""
+            images = await _get_parsed_images()
+            if not images:
+                return {
+                    "status": "ok",
+                    "message": "没有找到图片",
+                    "image_count": 0,
+                    "images": [],
+                }
+
+            import time as _time
+
+            timestamp = int(_time.time())
+            image_list = []
+            for i, img in enumerate(images):
+                if not img.base64_data:
+                    continue
+                prefix_part = f"{prefix}_" if prefix else ""
+                ext = img.get_extension()
+                filename = f"{prefix_part}{timestamp}_{i + 1}.{ext}"
+                image_list.append(
+                    {
+                        "filename": filename,
+                        "base64_data": img.base64_data,
+                        "mime_type": img.mime_type,
+                        "width": img.width,
+                        "height": img.height,
+                        "alt": img.alt,
+                    }
+                )
+
+            return {
+                "status": "ok",
+                "image_count": len(images),
+                "download_count": len(image_list),
+                "images": image_list,
+            }
+        except Exception as e:
+            _handle_gemini_error(e)
+
+    # ── 截图管理 ─────────────────────────────────────────────
+
+    @app.post("/store_screenshot", tags=["截图"])
+    async def store_screenshot(req: StoreScreenshotRequest = None):
+        """对当前浏览器状态截图并保存到服务器指定路径。"""
         _ensure_ready()
         try:
             path = (req and req.path) or "data/gemini_screenshot.png"
@@ -784,6 +853,147 @@ def create_gemini_server(
             return {"status": "ok", "path": path}
         except Exception as e:
             _handle_gemini_error(e)
+
+    @app.post("/download_screenshot", tags=["截图"])
+    async def download_screenshot():
+        """对当前浏览器状态截图并返回 PNG 图片数据，供客户端下载保存。"""
+        _ensure_ready()
+        try:
+            png_data = await agency.screenshot()
+            return Response(
+                content=png_data,
+                media_type="image/png",
+                headers={"Content-Disposition": "attachment; filename=screenshot.png"},
+            )
+        except Exception as e:
+            _handle_gemini_error(e)
+
+    # ── 聊天历史数据库 ────────────────────────────────────────
+
+    chatdb = ChatDatabase()
+
+    class CreateChatDBRequest(BaseModel):
+        title: str = Field("", description="聊天标题")
+        chat_id: Optional[str] = Field(None, description="自定义聊天 ID（可选）")
+
+    class AddChatMessageRequest(BaseModel):
+        role: str = Field(..., description="消息角色：user 或 model")
+        content: str = Field("", description="消息内容")
+        files: list[str] = Field(default_factory=list, description="关联文件路径")
+
+    class UpdateChatTitleRequest(BaseModel):
+        title: str = Field(..., description="新标题")
+
+    class UpdateChatMessageRequest(BaseModel):
+        content: Optional[str] = Field(None, description="新内容（null 则不更新）")
+        files: Optional[list[str]] = Field(
+            None, description="新文件列表（null 则不更新）"
+        )
+
+    class SearchChatsRequest(BaseModel):
+        query: str = Field(..., description="搜索关键字")
+
+    @app.post("/chatdb/create", tags=["聊天数据库"])
+    async def chatdb_create(req: CreateChatDBRequest = None):
+        """创建新的聊天记录。"""
+        title = (req and req.title) or ""
+        chat_id_arg = (req and req.chat_id) or None
+        chat_id = chatdb.create_chat(title=title, chat_id=chat_id_arg)
+        return {"status": "ok", "chat_id": chat_id}
+
+    @app.get("/chatdb/list", tags=["聊天数据库"])
+    async def chatdb_list():
+        """列出所有聊天记录的摘要。"""
+        chats = chatdb.list_chats()
+        return {"status": "ok", "chats": chats}
+
+    @app.get("/chatdb/stats", tags=["聊天数据库"])
+    async def chatdb_stats():
+        """获取聊天数据库统计信息。"""
+        stats = chatdb.stats()
+        return {"status": "ok", **stats}
+
+    @app.get("/chatdb/{chat_id}", tags=["聊天数据库"])
+    async def chatdb_get(chat_id: str):
+        """获取指定聊天的完整数据。"""
+        session = chatdb.get_chat(chat_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"聊天 {chat_id} 不存在")
+        return {"status": "ok", "chat": session.to_dict()}
+
+    @app.delete("/chatdb/{chat_id}", tags=["聊天数据库"])
+    async def chatdb_delete(chat_id: str):
+        """删除指定聊天记录。"""
+        ok = chatdb.delete_chat(chat_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"聊天 {chat_id} 不存在")
+        return {"status": "ok", "message": f"聊天 {chat_id} 已删除"}
+
+    @app.put("/chatdb/{chat_id}/title", tags=["聊天数据库"])
+    async def chatdb_update_title(chat_id: str, req: UpdateChatTitleRequest):
+        """更新聊天标题。"""
+        ok = chatdb.update_chat_title(chat_id, req.title)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"聊天 {chat_id} 不存在")
+        return {"status": "ok", "chat_id": chat_id, "title": req.title}
+
+    @app.get("/chatdb/{chat_id}/messages", tags=["聊天数据库"])
+    async def chatdb_get_messages(chat_id: str):
+        """获取指定聊天的所有消息。"""
+        messages = chatdb.get_messages(chat_id)
+        if messages is None:
+            raise HTTPException(status_code=404, detail=f"聊天 {chat_id} 不存在")
+        return {"status": "ok", "messages": messages}
+
+    @app.post("/chatdb/{chat_id}/messages", tags=["聊天数据库"])
+    async def chatdb_add_message(chat_id: str, req: AddChatMessageRequest):
+        """向聊天中添加一条消息。"""
+        index = chatdb.add_message(
+            chat_id, role=req.role, content=req.content, files=req.files
+        )
+        if index is None:
+            raise HTTPException(status_code=404, detail=f"聊天 {chat_id} 不存在")
+        return {"status": "ok", "message_index": index}
+
+    @app.get("/chatdb/{chat_id}/messages/{message_index}", tags=["聊天数据库"])
+    async def chatdb_get_message(chat_id: str, message_index: int):
+        """获取指定索引的消息。"""
+        msg = chatdb.get_message(chat_id, message_index)
+        if msg is None:
+            raise HTTPException(
+                status_code=404, detail=f"消息不存在: {chat_id}[{message_index}]"
+            )
+        return {"status": "ok", "message": msg}
+
+    @app.put("/chatdb/{chat_id}/messages/{message_index}", tags=["聊天数据库"])
+    async def chatdb_update_message(
+        chat_id: str, message_index: int, req: UpdateChatMessageRequest
+    ):
+        """更新指定索引的消息。"""
+        ok = chatdb.update_message(
+            chat_id, message_index, content=req.content, files=req.files
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=404, detail=f"消息不存在: {chat_id}[{message_index}]"
+            )
+        return {"status": "ok", "message": f"消息 {message_index} 已更新"}
+
+    @app.delete("/chatdb/{chat_id}/messages/{message_index}", tags=["聊天数据库"])
+    async def chatdb_delete_message(chat_id: str, message_index: int):
+        """删除指定索引的消息。"""
+        ok = chatdb.delete_message(chat_id, message_index)
+        if not ok:
+            raise HTTPException(
+                status_code=404, detail=f"消息不存在: {chat_id}[{message_index}]"
+            )
+        return {"status": "ok", "message": f"消息 {message_index} 已删除"}
+
+    @app.post("/chatdb/search", tags=["聊天数据库"])
+    async def chatdb_search(req: SearchChatsRequest):
+        """搜索包含指定关键字的聊天。"""
+        results = chatdb.search_chats(req.query)
+        return {"status": "ok", "results": results}
 
     @app.post("/restart", tags=["系统"])
     async def restart():

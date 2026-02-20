@@ -34,7 +34,7 @@ def step_screenshot(client: GeminiClient, label: str) -> str:
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
     path = os.path.join(SCREENSHOT_DIR, f"{_step:02d}_{label}.png")
     try:
-        result = client.screenshot(path)
+        result = client.store_screenshot(path)
         print(f"  📸 截图: {path}")
         return path
     except Exception as e:
@@ -72,7 +72,7 @@ def test_health(client: GeminiClient):
     result = client.health()
     pp(result)
     assert result["status"] == "ok", f"health status not ok: {result}"
-    assert result["version"] == "2.0.0", f"unexpected version: {result}"
+    assert result["version"] == "4.0.0", f"unexpected version: {result}"
     return result
 
 
@@ -87,14 +87,28 @@ def test_browser_status(client: GeminiClient):
     return result
 
 
-def test_screenshot(client: GeminiClient):
-    """测试截图功能。"""
-    result = client.screenshot("data/debug/manual_screenshot.png")
+def test_store_screenshot(client: GeminiClient):
+    """测试服务器端截图保存。"""
+    result = client.store_screenshot("data/debug/manual_screenshot.png")
     pp(result)
-    assert result["status"] == "ok", f"screenshot failed: {result}"
+    assert result["status"] == "ok", f"store_screenshot failed: {result}"
     assert os.path.exists(
         result["path"]
     ), f"screenshot file not found: {result['path']}"
+    return result
+
+
+def test_download_screenshot(client: GeminiClient):
+    """测试下载截图到本地。"""
+    local_path = "data/debug/downloaded_screenshot.png"
+    result = client.download_screenshot(local_path)
+    assert (
+        result == local_path
+    ), f"download_screenshot returned unexpected path: {result}"
+    assert os.path.exists(local_path), f"downloaded screenshot not found: {local_path}"
+    size = os.path.getsize(local_path)
+    assert size > 1000, f"downloaded screenshot too small: {size} bytes"
+    print(f"  截图大小: {size} bytes")
     return result
 
 
@@ -292,7 +306,10 @@ def main():
     # ── 第一组：只读检查 ──────────────────────────────────────
     results["health"] = run_test("健康检查", test_health, client)
     results["browser_status"] = run_test("浏览器状态", test_browser_status, client)
-    results["screenshot"] = run_test("截图", test_screenshot, client)
+    results["store_screenshot"] = run_test("服务器截图", test_store_screenshot, client)
+    results["download_screenshot"] = run_test(
+        "下载截图", test_download_screenshot, client
+    )
     results["get_mode"] = run_test("获取模式", test_get_mode, client)
     results["get_tool"] = run_test("获取工具", test_get_tool, client)
     results["get_input"] = run_test("获取输入框", test_get_input, client)

@@ -113,7 +113,7 @@ for i in range(60):
         break
 
 # 截图
-client.screenshot("data/debug/scenarios/diag3_think_response.png")
+client.store_screenshot("data/debug/scenarios/diag3_think_response.png")
 
 
 print("\n\n" + "=" * 60)

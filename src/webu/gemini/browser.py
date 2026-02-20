@@ -6,6 +6,7 @@ import signal
 import socket
 import subprocess
 import threading
+import time
 
 from pathlib import Path
 from playwright.async_api import (
@@ -385,6 +386,76 @@ class GeminiBrowser:
         if cleared:
             logger.mesg(f"  已清理浏览器缓存: {', '.join(cleared)}")
 
+    def _kill_stale_processes(self):
+        """杀死遗留的 Chrome、Xvnc 和 websockify 孤儿进程。
+
+        当 Runner 被意外终止（如 SIGKILL）时，子进程会变成孤儿（PPID=1）。
+        新启动时必须先清理这些进程，否则：
+        - Chrome 使用同一 user-data-dir 会复用旧实例（在旧窗口中打开新标签）
+        - Xvnc 端口被占用导致启动失败
+        - websockify 端口被占用导致启动失败
+        """
+        import psutil
+
+        vnc_port = self.config.vnc_port
+        novnc_port = self.config.novnc_port
+        user_data_dir = str(norm_path(self.config.user_data_dir))
+        killed = []
+
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                cmdline = proc.info["cmdline"] or []
+                cmd_str = " ".join(cmdline)
+                name = proc.info["name"] or ""
+                pid = proc.info["pid"]
+
+                # 跳过自身
+                if pid == os.getpid():
+                    continue
+
+                should_kill = False
+
+                # 匹配使用同一 user-data-dir 的 Chrome 进程
+                if "chrome" in name.lower() and user_data_dir in cmd_str:
+                    should_kill = True
+
+                # 匹配使用同一 VNC 端口的 Xvnc 进程
+                if name == "Xvnc" and f"-rfbport {vnc_port}" in cmd_str:
+                    should_kill = True
+
+                # 匹配使用同一 noVNC 端口的 websockify 进程
+                if "websockify" in name and str(novnc_port) in cmd_str:
+                    should_kill = True
+
+                if should_kill:
+                    proc.terminate()
+                    killed.append(f"{name}({pid})")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        # 等待进程终止
+        if killed:
+            time.sleep(2)
+            # 强制杀死仍然存活的进程
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    cmdline = proc.info["cmdline"] or []
+                    cmd_str = " ".join(cmdline)
+                    name = proc.info["name"] or ""
+                    pid = proc.info["pid"]
+                    if pid == os.getpid():
+                        continue
+                    is_stale = (
+                        ("chrome" in name.lower() and user_data_dir in cmd_str)
+                        or (name == "Xvnc" and f"-rfbport {vnc_port}" in cmd_str)
+                        or ("websockify" in name and str(novnc_port) in cmd_str)
+                    )
+                    if is_stale:
+                        proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            logger.mesg(f"  已清理遗留进程: {', '.join(killed)}")
+
     def _launch_chrome_process(self) -> int:
         """启动 Chrome 进程并配置远程调试端口。
 
@@ -418,6 +489,7 @@ class GeminiBrowser:
             "--disable-extensions",
             "--start-maximized",
             "--window-size=1920,1080",
+            "--window-position=0,0",
             "--disable-background-networking",
             "--disable-default-apps",
             "--disable-component-update",
@@ -476,6 +548,9 @@ class GeminiBrowser:
 
         logger.note("> 启动 Gemini 浏览器 ...")
         self.config.log_config()
+
+        # 清理遗留的孤儿进程（上次异常退出时可能残留）
+        self._kill_stale_processes()
 
         # 确保显示器可用（必要时启动 Xvfb）
         self._ensure_display()

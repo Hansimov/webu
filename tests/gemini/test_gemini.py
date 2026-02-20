@@ -1408,9 +1408,9 @@ class TestAPIIntegration:
 
     @pytest.fixture
     def app(self):
-        from webu.gemini.api import create_gemini_app
+        from webu.gemini.server import create_gemini_server
 
-        return create_gemini_app(config={"headless": False})
+        return create_gemini_server(config={"headless": False})
 
     @pytest.mark.asyncio
     async def test_app_creation(self, app):

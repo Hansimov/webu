@@ -3,7 +3,7 @@
 封装对 Gemini FastAPI 服务器的 HTTP 调用，提供与服务器接口一一对应的方法，
 使用户可以通过 Python API 操作 Gemini 聊天窗口，无需关心底层 HTTP 请求细节。
 
-增强版：支持 set_presets, new_chat 带 tool/mode 参数, download_images 等新接口。
+支持：预设管理、聊天管理、图片存储/下载、截图存储/下载、聊天历史数据库。
 """
 
 import json
@@ -92,6 +92,10 @@ class GeminiClient:
                 resp = self._session.get(url, timeout=timeout)
             elif method.upper() == "POST":
                 resp = self._session.post(url, json=json_data, timeout=timeout)
+            elif method.upper() == "PUT":
+                resp = self._session.put(url, json=json_data, timeout=timeout)
+            elif method.upper() == "DELETE":
+                resp = self._session.delete(url, timeout=timeout)
             else:
                 raise ValueError(f"不支持的 HTTP 方法: {method}")
 
@@ -362,27 +366,78 @@ class GeminiClient:
 
     # ── 图片管理 ─────────────────────────────────────────────
 
-    def download_images(
-        self, output_dir: str = "data/images", prefix: str = ""
-    ) -> dict:
-        """下载最新响应中的图片并保存到本地。
+    def store_images(self, output_dir: str = "data/images", prefix: str = "") -> dict:
+        """将最新响应中的图片保存到服务器端指定目录。
 
         Args:
-            output_dir: 图片保存目录
+            output_dir: 图片保存目录（服务器端路径）
             prefix: 文件名前缀
 
         Returns:
             dict: {"status": "ok", "image_count": ..., "saved_count": ..., "saved_paths": [...]}
         """
         return self._post(
-            "/download_images",
+            "/store_images",
             {"output_dir": output_dir, "prefix": prefix},
         )
 
-    # ── 调试 ─────────────────────────────────────────────────
+    def download_images(
+        self, output_dir: str = "data/images", prefix: str = ""
+    ) -> dict:
+        """获取最新响应中的图片数据并保存到本地。
 
-    def screenshot(self, path: str = None) -> dict:
-        """对当前浏览器状态截图。
+        从服务器获取 base64 编码的图片数据，解码后保存到本地目录。
+
+        Args:
+            output_dir: 本地保存目录
+            prefix: 文件名前缀
+
+        Returns:
+            dict: {"status": "ok", "image_count": ..., "saved_count": ..., "saved_paths": [...]}
+        """
+        import base64
+        from pathlib import Path as _Path
+
+        result = self._post("/download_images", {"prefix": prefix})
+        images = result.get("images", [])
+        if not images:
+            return {
+                "status": "ok",
+                "image_count": 0,
+                "saved_count": 0,
+                "saved_paths": [],
+            }
+
+        # 在本地保存图片
+        out_path = _Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        saved_paths = []
+        for img_data in images:
+            b64 = img_data.get("base64_data", "")
+            filename = img_data.get("filename", "image.png")
+            if not b64:
+                continue
+            filepath = out_path / filename
+            try:
+                raw = base64.b64decode(b64)
+                with open(filepath, "wb") as f:
+                    f.write(raw)
+                saved_paths.append(str(filepath))
+            except Exception as e:
+                logger.warn(f"  × 保存图片 {filename} 失败: {e}")
+
+        return {
+            "status": "ok",
+            "image_count": result.get("image_count", 0),
+            "saved_count": len(saved_paths),
+            "saved_paths": saved_paths,
+        }
+
+    # ── 截图管理 ─────────────────────────────────────────────
+
+    def store_screenshot(self, path: str = "data/gemini_screenshot.png") -> dict:
+        """对当前浏览器状态截图并保存到服务器端指定路径。
 
         Args:
             path: 截图保存路径（服务器端路径）
@@ -390,7 +445,195 @@ class GeminiClient:
         Returns:
             dict: {"status": "ok", "path": "..."}
         """
-        return self._post("/screenshot", {"path": path} if path else None)
+        return self._post("/store_screenshot", {"path": path})
+
+    def download_screenshot(self, path: str = "screenshot.png") -> str:
+        """对当前浏览器状态截图并下载保存到本地。
+
+        从服务器获取 PNG 截图数据，保存到本地指定路径。
+
+        Args:
+            path: 本地保存路径
+
+        Returns:
+            str: 本地保存路径
+        """
+        from pathlib import Path as _Path
+
+        url = f"{self.base_url}/download_screenshot"
+        timeout = self.config.timeout
+
+        try:
+            resp = self._session.post(url, timeout=timeout)
+            resp.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f"下载截图失败: {e}") from e
+
+        _Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(resp.content)
+        return path
+
+    # ── 聊天历史数据库 ───────────────────────────────────────
+
+    def chatdb_create(self, title: str = "", chat_id: str = None) -> dict:
+        """在聊天数据库中创建新的聊天记录。
+
+        Args:
+            title: 聊天标题
+            chat_id: 自定义聊天 ID（可选）
+
+        Returns:
+            dict: {"status": "ok", "chat_id": "..."}
+        """
+        data = {"title": title}
+        if chat_id:
+            data["chat_id"] = chat_id
+        return self._post("/chatdb/create", data)
+
+    def chatdb_list(self) -> dict:
+        """列出所有聊天记录的摘要。
+
+        Returns:
+            dict: {"status": "ok", "chats": [...]}
+        """
+        return self._get("/chatdb/list")
+
+    def chatdb_stats(self) -> dict:
+        """获取聊天数据库统计信息。
+
+        Returns:
+            dict: {"status": "ok", "chat_count": ..., "total_messages": ...}
+        """
+        return self._get("/chatdb/stats")
+
+    def chatdb_get(self, chat_id: str) -> dict:
+        """获取指定聊天的完整数据。
+
+        Args:
+            chat_id: 聊天 ID
+
+        Returns:
+            dict: {"status": "ok", "chat": {...}}
+        """
+        return self._get(f"/chatdb/{chat_id}")
+
+    def chatdb_delete(self, chat_id: str) -> dict:
+        """删除指定聊天记录。
+
+        Args:
+            chat_id: 聊天 ID
+
+        Returns:
+            dict: {"status": "ok", "message": "..."}
+        """
+        return self._request("DELETE", f"/chatdb/{chat_id}")
+
+    def chatdb_update_title(self, chat_id: str, title: str) -> dict:
+        """更新聊天标题。
+
+        Args:
+            chat_id: 聊天 ID
+            title: 新标题
+
+        Returns:
+            dict: {"status": "ok", "chat_id": "...", "title": "..."}
+        """
+        return self._request("PUT", f"/chatdb/{chat_id}/title", {"title": title})
+
+    def chatdb_get_messages(self, chat_id: str) -> dict:
+        """获取指定聊天的所有消息。
+
+        Args:
+            chat_id: 聊天 ID
+
+        Returns:
+            dict: {"status": "ok", "messages": [...]}
+        """
+        return self._get(f"/chatdb/{chat_id}/messages")
+
+    def chatdb_add_message(
+        self,
+        chat_id: str,
+        role: str,
+        content: str = "",
+        files: list[str] = None,
+    ) -> dict:
+        """向聊天中添加一条消息。
+
+        Args:
+            chat_id: 聊天 ID
+            role: 消息角色（"user" 或 "model"）
+            content: 消息内容
+            files: 关联文件路径列表
+
+        Returns:
+            dict: {"status": "ok", "message_index": ...}
+        """
+        data = {"role": role, "content": content, "files": files or []}
+        return self._post(f"/chatdb/{chat_id}/messages", data)
+
+    def chatdb_get_message(self, chat_id: str, message_index: int) -> dict:
+        """获取指定索引的消息。
+
+        Args:
+            chat_id: 聊天 ID
+            message_index: 消息索引
+
+        Returns:
+            dict: {"status": "ok", "message": {...}}
+        """
+        return self._get(f"/chatdb/{chat_id}/messages/{message_index}")
+
+    def chatdb_update_message(
+        self,
+        chat_id: str,
+        message_index: int,
+        content: str = None,
+        files: list[str] = None,
+    ) -> dict:
+        """更新指定索引的消息。
+
+        Args:
+            chat_id: 聊天 ID
+            message_index: 消息索引
+            content: 新内容（None 则不更新）
+            files: 新文件列表（None 则不更新）
+
+        Returns:
+            dict: {"status": "ok", "message": "..."}
+        """
+        data = {}
+        if content is not None:
+            data["content"] = content
+        if files is not None:
+            data["files"] = files
+        return self._request("PUT", f"/chatdb/{chat_id}/messages/{message_index}", data)
+
+    def chatdb_delete_message(self, chat_id: str, message_index: int) -> dict:
+        """删除指定索引的消息。
+
+        Args:
+            chat_id: 聊天 ID
+            message_index: 消息索引
+
+        Returns:
+            dict: {"status": "ok", "message": "..."}
+        """
+        return self._request("DELETE", f"/chatdb/{chat_id}/messages/{message_index}")
+
+    def chatdb_search(self, query: str) -> dict:
+        """搜索包含指定关键字的聊天。
+
+        Args:
+            query: 搜索关键字
+
+        Returns:
+            dict: {"status": "ok", "results": [...]}
+        """
+        return self._post("/chatdb/search", {"query": query})
+
+    # ── 调试 ─────────────────────────────────────────────────
 
     def restart(self) -> dict:
         """重启 GeminiAgency。

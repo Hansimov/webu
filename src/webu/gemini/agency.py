@@ -545,11 +545,16 @@ class GeminiAgency:
         """设置聊天窗口的工具。
 
         Args:
-            tool: 工具名称，如 "Deep Research", "生成图片", "创作音乐", "Canvas"
+            tool: 工具名称，如 "Deep Research", "生成图片", "创作音乐", "Canvas",
+                  或 "none" / "无" 来取消当前工具。
         """
         logger.note(f"> 设置工具: {tool}")
         if not self.is_ready:
             raise GeminiPageError("Agency 未启动。")
+
+        # 取消当前工具
+        if tool.lower() in ("none", "无"):
+            return await self._deselect_tool()
 
         try:
             # 点击 toolbox-drawer 按钮打开工具菜单
@@ -595,6 +600,90 @@ class GeminiAgency:
             raise
         except Exception as e:
             raise GeminiPageError(f"设置工具失败: {e}")
+
+    async def _deselect_tool(self) -> dict:
+        """取消当前选中的工具（点击工具旁的 × 按钮）。"""
+        try:
+            # 检查是否有选中的工具
+            current = await self.get_tool()
+            if current.get("tool") == "none":
+                logger.okay("  ✓ 当前没有选中工具，无需取消")
+                return {"status": "ok", "tool": "none"}
+
+            # 点击 deselect 按钮（工具名旁边的 ×）
+            deselected = await self.page.evaluate(
+                """() => {
+                    // 方式1: 直接找 deselect 按钮
+                    const deselectBtns = document.querySelectorAll(
+                        'button.toolbox-drawer-item-deselect-button'
+                    );
+                    for (const btn of deselectBtns) {
+                        if (btn.offsetParent !== null || btn.offsetWidth > 0) {
+                            btn.click();
+                            return { deselected: true, method: 'deselect-button' };
+                        }
+                    }
+
+                    // 方式2: 找带 × 的按钮（aria-label 包含取消/关闭/remove/close）
+                    const closeBtns = document.querySelectorAll(
+                        'button[aria-label*="取消"], button[aria-label*="关闭"], ' +
+                        'button[aria-label*="remove" i], button[aria-label*="close" i], ' +
+                        'button[aria-label*="deselect" i]'
+                    );
+                    for (const btn of closeBtns) {
+                        if (btn.offsetParent !== null || btn.offsetWidth > 0) {
+                            btn.click();
+                            return { deselected: true, method: 'aria-label' };
+                        }
+                    }
+
+                    return { deselected: false };
+                }"""
+            )
+
+            if deselected and deselected.get("deselected"):
+                await asyncio.sleep(0.5)
+                self._image_mode = False
+                logger.okay(f"  ✓ 工具已取消 (via {deselected.get('method')})")
+                return {"status": "ok", "tool": "none"}
+
+            # 方式3: 打开工具菜单，反选当前选中的工具
+            tools_btn = await self._find_element_with_fallback(
+                css_selector=SEL_TOOLS_BUTTON,
+                text_patterns=None,
+                description="工具按钮",
+            )
+            await tools_btn.click()
+            await asyncio.sleep(1)
+
+            unchecked = await self.page.evaluate(
+                """() => {
+                    const checked = document.querySelectorAll(
+                        'button[role="menuitemcheckbox"][aria-checked="true"]'
+                    );
+                    for (const btn of checked) {
+                        btn.click();
+                        return { unchecked: true, text: btn.textContent.trim() };
+                    }
+                    return { unchecked: false };
+                }"""
+            )
+
+            if unchecked and unchecked.get("unchecked"):
+                await asyncio.sleep(0.5)
+                self._image_mode = False
+                logger.okay(f"  ✓ 工具已取消 (反选 {unchecked.get('text')})")
+                return {"status": "ok", "tool": "none"}
+
+            # 关闭菜单
+            await self.page.keyboard.press("Escape")
+            await asyncio.sleep(0.3)
+            raise GeminiPageError("无法取消当前工具")
+
+        except GeminiPageError:
+            raise
+        except Exception as e:
+            raise GeminiPageError(f"取消工具失败: {e}")
 
     # ══════════════════════════════════════════════════════════
     # 输入框操作

@@ -33,7 +33,9 @@ def pp(data):
 
 def screenshot(label: str):
     requests.post(
-        f"{BASE}/screenshot", json={"path": f"data/debug/diag_{label}.png"}, timeout=10
+        f"{BASE}/store_screenshot",
+        json={"path": f"data/debug/diag_{label}.png"},
+        timeout=10,
     )
     print(f"📸 data/debug/diag_{label}.png")
 

@@ -1,5 +1,6 @@
 from .agency import GeminiAgency
 from .browser import GeminiBrowser
+from .chatdb import ChatDatabase, ChatSession, ChatMessage
 from .client import GeminiClient, GeminiClientConfig
 from .config import GeminiConfig
 from .errors import (

@@ -31,7 +31,7 @@ def ss(client, label):
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
     path = os.path.join(SCREENSHOT_DIR, f"{_step:02d}_{label}.png")
     try:
-        client.screenshot(path)
+        client.store_screenshot(path)
     except Exception:
         pass
     return path
@@ -114,6 +114,24 @@ def scenario_tool_rotation(client):
             results.append(False)
             ss(client, f"tool_{tool}_fail")
 
+    # 重置工具为 none，避免影响后续场景（Deep Research 会彻底改变 UI）
+    try:
+        client.set_tool("none")
+        time.sleep(0.5)
+        client.new_chat()
+        time.sleep(1)
+        # 验证工具已被重置
+        current_tool = client.get_tool().get("tool", "")
+        check(current_tool == "none", f"工具已重置为 none (当前: {current_tool})")
+    except Exception as e:
+        print(f"  ⚠ 重置工具失败: {e}")
+        # 强制 new_chat 兜底
+        try:
+            client.new_chat()
+            time.sleep(1)
+        except Exception:
+            pass
+
     return all(results)
 
 
@@ -122,11 +140,11 @@ def scenario_multi_turn(client):
     section("场景3: 多轮对话")
     results = []
 
-    # 新建聊天
+    # 新建聊天，确保干净状态
     client.new_chat()
     time.sleep(1)
 
-    # 确保处于快速模式（减少等待时间）
+    # 确保处于快速模式、无工具（减少等待时间，避免 Deep Research 等特殊 UI）
     client.set_mode("快速")
     time.sleep(0.5)
 
@@ -295,6 +313,241 @@ def scenario_mode_and_send(client):
     return all(results)
 
 
+def scenario_screenshot_store_download(client):
+    """场景7: 截图存储与下载"""
+    section("场景7: 截图存储/下载")
+    results = []
+    import tempfile
+
+    # 7a. 服务器端存储截图
+    print("\n  → 7a. store_screenshot")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "store_test.png")
+        r = client.store_screenshot(path)
+        ok = r.get("status") == "ok"
+        exists = os.path.exists(r.get("path", ""))
+        results.append(ok and exists)
+        check(ok and exists, f"store_screenshot → {r.get('path', 'N/A')}")
+
+    # 7b. 下载截图到本地
+    print("\n  → 7b. download_screenshot")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_path = os.path.join(tmpdir, "download_test.png")
+        result_path = client.download_screenshot(local_path)
+        exists = os.path.exists(local_path)
+        size = os.path.getsize(local_path) if exists else 0
+        ok = exists and size > 1000
+        results.append(ok)
+        check(ok, f"download_screenshot → {local_path} ({size} bytes)")
+
+    return all(results)
+
+
+def scenario_store_download_images(client):
+    """场景8: 图片存储与下载（无图片场景）"""
+    section("场景8: 图片存储/下载")
+    results = []
+    import tempfile
+
+    # 先新建聊天（快速模式、无工具），发送文本消息确保无图片
+    client.new_chat()
+    time.sleep(1)
+    client.set_mode("快速")
+    time.sleep(0.5)
+    client.send_message("Say 'hello'", wait_response=True)
+    time.sleep(0.5)
+
+    # 8a. store_images — 无图片时返回空
+    print("\n  → 8a. store_images（无图片）")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        r = client.store_images(output_dir=tmpdir, prefix="test")
+        ok = r.get("status") == "ok"
+        empty = r.get("image_count", -1) == 0
+        results.append(ok and empty)
+        check(ok and empty, f"store_images 无图片: count={r.get('image_count')}")
+
+    # 8b. download_images — 无图片时返回空
+    print("\n  → 8b. download_images（无图片）")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        r = client.download_images(output_dir=tmpdir, prefix="test")
+        ok = r.get("status") == "ok"
+        empty = r.get("image_count", -1) == 0
+        saved_empty = r.get("saved_count", -1) == 0
+        results.append(ok and empty and saved_empty)
+        check(
+            ok and empty and saved_empty,
+            f"download_images 无图片: count={r.get('image_count')}, saved={r.get('saved_count')}",
+        )
+
+    return all(results)
+
+
+def scenario_chatdb_lifecycle(client):
+    """场景9: 聊天数据库完整生命周期"""
+    section("场景9: 聊天数据库")
+    results = []
+
+    # 9a. 创建聊天
+    print("\n  → 9a. 创建聊天")
+    r = client.chatdb_create(title="场景测试聊天")
+    ok = r.get("status") == "ok"
+    chat_id = r.get("chat_id", "")
+    results.append(ok and len(chat_id) > 0)
+    check(ok, f"chatdb_create → {chat_id}")
+
+    if not chat_id:
+        print("  ❌ 无法继续：创建聊天失败")
+        return False
+
+    try:
+        # 9b. 添加消息
+        print("\n  → 9b. 添加消息")
+        m1 = client.chatdb_add_message(chat_id, role="user", content="Python 是什么？")
+        ok1 = m1.get("status") == "ok" and m1.get("message_index") == 0
+        results.append(ok1)
+        check(ok1, f"添加用户消息 → index={m1.get('message_index')}")
+
+        m2 = client.chatdb_add_message(
+            chat_id, role="model", content="Python 是一种高级编程语言..."
+        )
+        ok2 = m2.get("status") == "ok" and m2.get("message_index") == 1
+        results.append(ok2)
+        check(ok2, f"添加模型消息 → index={m2.get('message_index')}")
+
+        # 9c. 获取聊天
+        print("\n  → 9c. 获取聊天详情")
+        chat = client.chatdb_get(chat_id)
+        has_msgs = len(chat.get("chat", {}).get("messages", [])) == 2
+        results.append(has_msgs)
+        check(
+            has_msgs, f"聊天有 {len(chat.get('chat', {}).get('messages', []))} 条消息"
+        )
+
+        # 9d. 获取单条消息
+        print("\n  → 9d. 获取单条消息")
+        msg = client.chatdb_get_message(chat_id, 0)
+        correct = msg.get("message", {}).get("content") == "Python 是什么？"
+        results.append(correct)
+        check(correct, f"消息内容: {msg.get('message', {}).get('content', '')[:30]}")
+
+        # 9e. 更新消息
+        print("\n  → 9e. 更新消息")
+        client.chatdb_update_message(chat_id, 0, content="什么是 Python？")
+        updated = client.chatdb_get_message(chat_id, 0)
+        correct = updated.get("message", {}).get("content") == "什么是 Python？"
+        results.append(correct)
+        check(correct, f"更新后: {updated.get('message', {}).get('content', '')[:30]}")
+
+        # 9f. 更新标题
+        print("\n  → 9f. 更新标题")
+        client.chatdb_update_title(chat_id, title="重命名后的聊天")
+        chat2 = client.chatdb_get(chat_id)
+        correct = chat2.get("chat", {}).get("title") == "重命名后的聊天"
+        results.append(correct)
+        check(correct, f"标题: {chat2.get('chat', {}).get('title')}")
+
+        # 9g. 列出聊天
+        print("\n  → 9g. 列出聊天")
+        chats = client.chatdb_list()
+        found = any(c.get("chat_id") == chat_id for c in chats.get("chats", []))
+        results.append(found)
+        check(found, f"列表中找到 {chat_id}")
+
+        # 9h. 搜索
+        print("\n  → 9h. 搜索聊天")
+        search = client.chatdb_search(query="Python")
+        has_results = len(search.get("results", [])) > 0
+        results.append(has_results)
+        check(has_results, f"搜索 'Python' 返回 {len(search.get('results', []))} 条")
+
+        # 9i. 统计
+        print("\n  → 9i. 数据库统计")
+        stats = client.chatdb_stats()
+        ok_stats = (
+            stats.get("chat_count", 0) >= 1 and stats.get("total_messages", 0) >= 2
+        )
+        results.append(ok_stats)
+        check(
+            ok_stats,
+            f"stats: {stats.get('chat_count')} 聊天, {stats.get('total_messages')} 消息",
+        )
+
+        # 9j. 删除消息
+        print("\n  → 9j. 删除消息")
+        client.chatdb_delete_message(chat_id, 1)
+        msgs_after = client.chatdb_get_messages(chat_id)
+        correct = len(msgs_after.get("messages", [])) == 1
+        results.append(correct)
+        check(correct, f"删除后剩余 {len(msgs_after.get('messages', []))} 条消息")
+
+    finally:
+        # 9k. 删除聊天
+        print("\n  → 9k. 删除聊天")
+        client.chatdb_delete(chat_id)
+        chats_after = client.chatdb_list()
+        not_found = all(
+            c.get("chat_id") != chat_id for c in chats_after.get("chats", [])
+        )
+        results.append(not_found)
+        check(not_found, "聊天已从列表中删除")
+
+    return all(results)
+
+
+def scenario_send_and_record(client):
+    """场景10: 发送消息并记录到 ChatDB"""
+    section("场景10: 发送并记录到 ChatDB")
+    results = []
+
+    # 新建聊天（快速模式、无工具）并发送
+    client.new_chat()
+    time.sleep(1)
+    client.set_mode("快速")
+    time.sleep(0.5)
+
+    prompt = "Say exactly 'integration test ok'"
+    print(f"\n  → 发送消息: '{prompt}'")
+    r = client.send_message(prompt, wait_response=True)
+    ok = r.get("status") == "ok"
+    resp_text = r.get("response", {}).get("text", "")
+    results.append(ok and len(resp_text) > 0)
+    check(
+        ok and len(resp_text) > 0, f"响应 ({len(resp_text)} chars): '{resp_text[:60]}'"
+    )
+
+    # 记录到 ChatDB
+    create = client.chatdb_create(title="自动记录测试")
+    chat_id = create.get("chat_id", "")
+    results.append(len(chat_id) > 0)
+
+    if chat_id:
+        try:
+            client.chatdb_add_message(chat_id, role="user", content=prompt)
+            client.chatdb_add_message(chat_id, role="model", content=resp_text)
+
+            # 验证
+            chat = client.chatdb_get(chat_id)
+            msgs = chat.get("chat", {}).get("messages", [])
+            correct = (
+                len(msgs) == 2
+                and msgs[0]["role"] == "user"
+                and msgs[1]["role"] == "model"
+            )
+            results.append(correct)
+            check(correct, f"ChatDB 记录 {len(msgs)} 条消息")
+
+            # 搜索验证
+            search = client.chatdb_search(query="integration test")
+            found = len(search.get("results", [])) > 0
+            results.append(found)
+            check(found, "搜索 'integration test' 能找到记录")
+        finally:
+            client.chatdb_delete(chat_id)
+
+    ss(client, "send_and_record")
+    return all(results)
+
+
 # ══════════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════════
@@ -319,6 +572,10 @@ def main():
         "新建聊天重置": scenario_new_chat_reset,
         "输入框边界": scenario_input_edge_cases,
         "思考模式发送": scenario_mode_and_send,
+        "截图存储/下载": scenario_screenshot_store_download,
+        "图片存储/下载": scenario_store_download_images,
+        "聊天数据库": scenario_chatdb_lifecycle,
+        "发送并记录": scenario_send_and_record,
     }
 
     results = {}

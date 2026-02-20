@@ -13,7 +13,7 @@ def ev(js):
 
 def ss(label):
     requests.post(
-        f"{BASE}/screenshot",
+        f"{BASE}/store_screenshot",
         json={"path": f"data/debug/diag2_{label}.png"},
         timeout=10,
     )
