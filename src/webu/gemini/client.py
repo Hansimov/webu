@@ -2,6 +2,8 @@
 
 封装对 Gemini FastAPI 服务器的 HTTP 调用，提供与服务器接口一一对应的方法，
 使用户可以通过 Python API 操作 Gemini 聊天窗口，无需关心底层 HTTP 请求细节。
+
+增强版：支持 set_presets, new_chat 带 tool/mode 参数, download_images 等新接口。
 """
 
 import json
@@ -44,6 +46,12 @@ class GeminiClient:
         client.set_input("你好，Gemini")
         result = client.send_input(wait_response=True)
         print(result)
+
+        # 使用预设创建新聊天
+        client.new_chat(mode="Pro", tool="生成图片")
+
+        # 同时设置模式和工具
+        client.set_presets(mode="Pro", tool="生成图片")
     """
 
     def __init__(self, config: GeminiClientConfig = None):
@@ -122,19 +130,61 @@ class GeminiClient:
         """获取浏览器实例的全面状态信息。
 
         Returns:
-            dict: 包含 is_ready, login, page, mode, tool 等状态信息
+            dict: 包含 is_ready, login, page, mode, tool, presets 等状态信息
         """
         return self._get("/browser_status")
 
-    # ── 聊天会话管理 ─────────────────────────────────────────
+    # ── 预设配置 ─────────────────────────────────────────────
 
-    def new_chat(self) -> dict:
-        """创建新的聊天窗口。
+    def set_presets(
+        self, mode: Optional[str] = None, tool: Optional[str] = None
+    ) -> dict:
+        """同时设置 tool 和 mode 的预设配置。
+
+        先设置 mode，再设置 tool。预设会在首次发送消息时自动验证。
+
+        Args:
+            mode: 模式名称，如 "快速", "思考", "Pro"
+            tool: 工具名称，如 "Deep Research", "生成图片", "none" (清除工具)
 
         Returns:
-            dict: {"status": "ok", "chat_id": "..."}
+            dict: 包含 mode, tool, mode_changed, tool_changed
         """
-        return self._post("/new_chat")
+        data = {}
+        if mode is not None:
+            data["mode"] = mode
+        if tool is not None:
+            data["tool"] = tool
+        return self._post("/set_presets", data)
+
+    def get_presets(self) -> dict:
+        """获取当前预设配置。
+
+        Returns:
+            dict: {"presets": {"mode": ..., "tool": ..., "verified": ...}}
+        """
+        return self._get("/get_presets")
+
+    # ── 聊天会话管理 ─────────────────────────────────────────
+
+    def new_chat(self, mode: Optional[str] = None, tool: Optional[str] = None) -> dict:
+        """创建新的聊天窗口。
+
+        支持可选参数 mode 和 tool，在创建新聊天后自动设置。
+
+        Args:
+            mode: 可选，创建后设置的模式
+            tool: 可选，创建后设置的工具
+
+        Returns:
+            dict: {"status": "ok", "chat_id": "...", "mode": ..., "tool": ...}
+        """
+        data = {}
+        if mode is not None:
+            data["mode"] = mode
+        if tool is not None:
+            data["tool"] = tool
+        return self._post("/new_chat", data if data else None)
 
     def switch_chat(self, chat_id: str) -> dict:
         """切换到指定 ID 的聊天窗口。
@@ -161,7 +211,8 @@ class GeminiClient:
         """设置聊天窗口的模式。
 
         Args:
-            mode: 模式名称，如 "快速", "思考", "Pro"
+            mode: 模式名称，如 "快速", "思考", "Pro"。支持别名：
+                  fast→快速, think→思考, pro→Pro
 
         Returns:
             dict: {"status": "ok", "mode": "..."}
@@ -182,7 +233,8 @@ class GeminiClient:
         """设置聊天窗口的工具。
 
         Args:
-            tool: 工具名称，如 "Deep Research", "生成图片", "创作音乐"
+            tool: 工具名称，如 "Deep Research", "生成图片", "创作音乐"。
+                  支持别名：image→生成图片, music→创作音乐
 
         Returns:
             dict: {"status": "ok", "tool": "..."}
@@ -233,6 +285,8 @@ class GeminiClient:
 
     def send_input(self, wait_response: bool = True) -> dict:
         """发送输入框中的内容。
+
+        在新聊天首次发送前，服务器会自动验证 tool/mode 预设。
 
         Args:
             wait_response: True=等待 Gemini 响应后返回（同步），
@@ -305,6 +359,25 @@ class GeminiClient:
             dict: {"messages": [{role, content, html, images, code_blocks}, ...]}
         """
         return self._get("/get_messages")
+
+    # ── 图片管理 ─────────────────────────────────────────────
+
+    def download_images(
+        self, output_dir: str = "data/images", prefix: str = ""
+    ) -> dict:
+        """下载最新响应中的图片并保存到本地。
+
+        Args:
+            output_dir: 图片保存目录
+            prefix: 文件名前缀
+
+        Returns:
+            dict: {"status": "ok", "image_count": ..., "saved_count": ..., "saved_paths": [...]}
+        """
+        return self._post(
+            "/download_images",
+            {"output_dir": output_dir, "prefix": prefix},
+        )
 
     # ── 调试 ─────────────────────────────────────────────────
 

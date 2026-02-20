@@ -55,6 +55,7 @@ from .errors import (
     GeminiImageGenerationError,
     GeminiPageError,
     GeminiRateLimitError,
+    GeminiServerRollbackError,
 )
 from .parser import GeminiResponse, GeminiResponseParser
 
@@ -78,8 +79,12 @@ def with_retry(
             for attempt in range(1, max_retries + 1):
                 try:
                     return await func(*args, **kwargs)
-                except (GeminiLoginRequiredError, GeminiRateLimitError):
-                    raise  # 不重试认证和限流错误
+                except (
+                    GeminiLoginRequiredError,
+                    GeminiRateLimitError,
+                    GeminiServerRollbackError,
+                ):
+                    raise  # 不重试认证、限流和回退错误（回退在内部已处理）
                 except (GeminiPageError, PlaywrightTimeoutError) as e:
                     last_error = e
                     if attempt < max_retries:
@@ -671,20 +676,59 @@ class GeminiAgency:
 
         logger.note("> 发送输入 ...")
 
-        # 提交消息
-        await self._submit_message()
+        # ── 支持服务器回退自动重试 ──
+        # Gemini 后端偶尔因网络/服务器原因处理失败，页面会回退到零状态（
+        # 输入框仍有文本，欢迎页面重新显示）。检测到回退后自动重试提交。
+        MAX_ROLLBACK_RETRIES = 3
+        last_rollback_error = None
 
-        if not wait_response:
-            self._message_count += 1
-            return {"status": "ok", "message": "已发送，不等待响应"}
+        for rollback_attempt in range(1, MAX_ROLLBACK_RETRIES + 1):
+            # 快照提交前状态（用于区分新响应和历史消息）
+            pre_mr_count = await self._count_response_containers()
+            pre_uq_count = await self._count_user_queries()
 
-        # 等待响应
-        timeout = (
-            self.config.image_generation_timeout
-            if self._image_mode
-            else self.config.response_timeout
-        )
-        response_html = await self._wait_for_response(timeout=timeout)
+            # 提交消息（失败会抛异常）
+            await self._submit_message()
+
+            if not wait_response:
+                self._message_count += 1
+                return {"status": "ok", "message": "已发送，不等待响应"}
+
+            # 等待响应（可能因服务器回退抛出 GeminiServerRollbackError）
+            timeout = (
+                self.config.image_generation_timeout
+                if self._image_mode
+                else self.config.response_timeout
+            )
+            try:
+                response_html = await self._wait_for_response(
+                    timeout=timeout, pre_mr_count=pre_mr_count
+                )
+                break  # 成功获取响应
+            except GeminiServerRollbackError as e:
+                last_rollback_error = e
+                if rollback_attempt < MAX_ROLLBACK_RETRIES:
+                    logger.warn(
+                        f"  ⚠ 服务器回退，等待后重试 "
+                        f"({rollback_attempt}/{MAX_ROLLBACK_RETRIES})"
+                    )
+                    # 回退后输入框仍有文本，等一会儿再重新提交
+                    await asyncio.sleep(3)
+                    # 截图记录回退状态（调试用）
+                    try:
+                        await self.screenshot(
+                            path=f"data/debug/rollback_{rollback_attempt}.png"
+                        )
+                    except Exception:
+                        pass
+                    continue
+                else:
+                    logger.err(f"  × 服务器连续回退 {MAX_ROLLBACK_RETRIES} 次，放弃")
+                    raise
+        else:
+            # 理论上不会执行到这里（上面 raise 了）
+            raise last_rollback_error or GeminiServerRollbackError()
+
         images_data = await self._extract_images(download_base64=True)
 
         response = self.parser.parse(
@@ -724,15 +768,46 @@ class GeminiAgency:
         if image_mode and not self._image_mode:
             await self.enable_image_generation()
 
-        await self._type_message(text)
-        await self._submit_message()
+        # ── 支持服务器回退自动重试 ──
+        MAX_ROLLBACK_RETRIES = 3
 
-        timeout = (
-            self.config.image_generation_timeout
-            if image_mode or self._image_mode
-            else self.config.response_timeout
-        )
-        response_html = await self._wait_for_response(timeout=timeout)
+        for rollback_attempt in range(1, MAX_ROLLBACK_RETRIES + 1):
+            # 快照提交前状态
+            pre_mr_count = await self._count_response_containers()
+
+            # 回退后无需重新输入，文本仍在输入框中
+            if rollback_attempt == 1:
+                await self._type_message(text)
+
+            await self._submit_message()
+
+            timeout = (
+                self.config.image_generation_timeout
+                if image_mode or self._image_mode
+                else self.config.response_timeout
+            )
+            try:
+                response_html = await self._wait_for_response(
+                    timeout=timeout, pre_mr_count=pre_mr_count
+                )
+                break  # 成功
+            except GeminiServerRollbackError:
+                if rollback_attempt < MAX_ROLLBACK_RETRIES:
+                    logger.warn(
+                        f"  ⚠ 服务器回退，等待后重试 "
+                        f"({rollback_attempt}/{MAX_ROLLBACK_RETRIES})"
+                    )
+                    await asyncio.sleep(3)
+                    try:
+                        await self.screenshot(
+                            path=f"data/debug/rollback_msg_{rollback_attempt}.png"
+                        )
+                    except Exception:
+                        pass
+                    continue
+                else:
+                    raise
+
         images_data = await self._extract_images(download_base64=download_images)
 
         response = self.parser.parse(
@@ -1357,9 +1432,107 @@ class GeminiAgency:
         await self.page.keyboard.type(text, delay=10)
         await asyncio.sleep(0.3)
 
+    async def _count_user_queries(self) -> int:
+        """计算页面上的用户消息数量。"""
+        return await self.page.evaluate(
+            "() => document.querySelectorAll('user-query').length"
+        )
+
+    async def _verify_submit_success(
+        self, pre_submit_content: str, pre_user_query_count: int
+    ) -> bool:
+        """验证消息是否成功提交。
+
+        检查 3 个信号（任一为 True 即成功）：
+        1. 输入框内容已清空
+        2. user-query 元素数量增加
+        3. 出现加载指示器或停止按钮
+        """
+        # 信号 1: 输入框清空
+        try:
+            input_area = await self._find_input_area()
+            post_text = await self.page.evaluate(
+                "(el) => (el.innerText || el.textContent || '').trim()",
+                input_area,
+            )
+            if not post_text or len(post_text) < len(pre_submit_content) * 0.3:
+                return True
+        except Exception:
+            pass
+
+        # 信号 2: user-query 计数增加
+        try:
+            current_uq = await self._count_user_queries()
+            if current_uq > pre_user_query_count:
+                return True
+        except Exception:
+            pass
+
+        # 信号 3: 加载指示器 / 停止按钮可见
+        for selector in [SEL_LOADING_INDICATOR, SEL_STOP_BUTTON]:
+            try:
+                el = await self.page.query_selector(selector)
+                if el and await el.is_visible():
+                    return True
+            except Exception:
+                pass
+
+        return False
+
+    async def _click_send_button(self, send_btn) -> str | None:
+        """尝试多种方式点击发送按钮，返回成功方式的名称或 None。
+
+        Angular Material 按钮需要完整的指针事件序列才能可靠触发。
+        """
+        strategies = [
+            # 策略 1: Playwright 原生 click（模拟真实鼠标事件序列，最可靠）
+            (
+                "playwright_click",
+                lambda btn: btn.click(force=True, timeout=3000),
+            ),
+            # 策略 2: 完整指针事件序列（pointerdown→mousedown→pointerup→mouseup→click）
+            (
+                "pointer_events",
+                lambda btn: self.page.evaluate(
+                    """(el) => {
+                    const rect = el.getBoundingClientRect();
+                    const x = rect.left + rect.width / 2;
+                    const y = rect.top + rect.height / 2;
+                    const opts = {bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0};
+                    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+                    el.dispatchEvent(new MouseEvent('mousedown', opts));
+                    el.dispatchEvent(new PointerEvent('pointerup', opts));
+                    el.dispatchEvent(new MouseEvent('mouseup', opts));
+                    el.dispatchEvent(new MouseEvent('click', opts));
+                }""",
+                    btn,
+                ),
+            ),
+            # 策略 3: 简单 JS click
+            (
+                "js_click",
+                lambda btn: self.page.evaluate("(el) => el.click()", btn),
+            ),
+        ]
+
+        for name, action in strategies:
+            try:
+                await action(send_btn)
+                return name
+            except Exception as e:
+                logger.warn(f"  ⚠ {name} 失败: {e}")
+                continue
+
+        return None
+
     async def _submit_message(self):
-        """提交已输入的消息，带验证。"""
-        # 记录提交前内容
+        """提交已输入的消息，带严格验证。
+
+        如果所有提交策略都失败，会抛出 GeminiPageError 而不是静默继续。
+        """
+        MAX_ATTEMPTS = 3
+
+        # ── 记录提交前状态 ──
         pre_submit_content = ""
         try:
             input_area = await self._find_input_area()
@@ -1373,72 +1546,86 @@ class GeminiAgency:
         if not pre_submit_content:
             logger.warn("  ⚠ 提交前输入框为空")
 
-        # 尝试点击发送按钮
-        sent_via = None
-        try:
-            send_btn = await self._find_send_button()
-            await send_btn.click()
-            sent_via = "button"
-        except GeminiPageError:
-            await self.page.keyboard.press("Enter")
-            sent_via = "enter"
+        pre_uq_count = await self._count_user_queries()
 
-        await asyncio.sleep(1.5)
+        # ── 尝试提交（最多 MAX_ATTEMPTS 轮） ──
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            sent_via = None
 
-        # 验证提交成功
-        submit_ok = False
-        post_content = ""
-
-        try:
-            input_area = await self._find_input_area()
-            post_content = await self.page.evaluate(
-                "(el) => (el.innerText || el.textContent || '').trim()",
-                input_area,
-            )
-            if len(post_content) < len(pre_submit_content) * 0.3:
-                submit_ok = True
-        except Exception:
-            pass
-
-        if not submit_ok:
+            # 第一步：通过 send button 点击
             try:
-                loading = await self.page.query_selector(SEL_LOADING_INDICATOR)
-                if loading and await loading.is_visible():
-                    submit_ok = True
-            except Exception:
-                pass
+                send_btn = await self._find_send_button()
+                sent_via = await self._click_send_button(send_btn)
+            except GeminiPageError:
+                logger.warn("  ⚠ 找不到发送按钮")
+            except Exception as e:
+                logger.warn(f"  ⚠ 发送按钮异常: {e}")
 
-        if not submit_ok:
-            try:
-                stop_btn = await self.page.query_selector(SEL_STOP_BUTTON)
-                if stop_btn and await stop_btn.is_visible():
-                    submit_ok = True
-            except Exception:
-                pass
+            if sent_via:
+                await asyncio.sleep(1.5)
+                if await self._verify_submit_success(pre_submit_content, pre_uq_count):
+                    logger.mesg(f"  提交方式: {sent_via}")
+                    return
+                logger.warn(f"  ⚠ {sent_via} 点击后未确认提交成功 (attempt {attempt})")
 
-        if not submit_ok:
-            await asyncio.sleep(2)
-            activity = await self.page.evaluate(
+            # 第二步：DOM 直接查找 + 完整事件序列
+            dom_clicked = await self.page.evaluate(
                 """() => {
-                    const userMsgs = document.querySelectorAll(
-                        'user-query, .user-query, [class*="user-message"]'
-                    );
-                    const thinking = document.querySelectorAll(
-                        'mat-progress-bar, [class*="loading"], [class*="thinking"], ' +
-                        '[class*="progress"], .response-streaming'
-                    );
-                    return {
-                        user_msgs: userMsgs.length,
-                        thinking: thinking.length,
-                        any_activity: userMsgs.length > 0 || thinking.length > 0,
-                    };
+                    const sels = [
+                        'button.send-button',
+                        'button[aria-label*="发送"]',
+                        'button[aria-label*="Send" i]',
+                        'button[type="submit"]',
+                    ];
+                    for (const sel of sels) {
+                        const btn = document.querySelector(sel);
+                        if (btn && (btn.offsetParent !== null || btn.offsetWidth > 0)) {
+                            const rect = btn.getBoundingClientRect();
+                            const x = rect.left + rect.width / 2;
+                            const y = rect.top + rect.height / 2;
+                            const opts = {bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0};
+                            btn.dispatchEvent(new PointerEvent('pointerdown', opts));
+                            btn.dispatchEvent(new MouseEvent('mousedown', opts));
+                            btn.dispatchEvent(new PointerEvent('pointerup', opts));
+                            btn.dispatchEvent(new MouseEvent('mouseup', opts));
+                            btn.dispatchEvent(new MouseEvent('click', opts));
+                            return sel;
+                        }
+                    }
+                    return null;
                 }"""
             )
-            if activity.get("any_activity"):
-                submit_ok = True
+            if dom_clicked:
+                sent_via = f"dom_events({dom_clicked})"
+                await asyncio.sleep(1.5)
+                if await self._verify_submit_success(pre_submit_content, pre_uq_count):
+                    logger.mesg(f"  提交方式: {sent_via}")
+                    return
+                logger.warn(f"  ⚠ {sent_via} 后未确认提交成功 (attempt {attempt})")
 
-        if not submit_ok:
-            logger.warn(f"  ⚠ 提交验证未通过 (via {sent_via})，但继续等待")
+            # 第三步：Enter 键
+            try:
+                input_area = await self._find_input_area()
+                await input_area.focus()
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
+            await self.page.keyboard.press("Enter")
+            await asyncio.sleep(1.5)
+            if await self._verify_submit_success(pre_submit_content, pre_uq_count):
+                logger.mesg(f"  提交方式: enter (attempt {attempt})")
+                return
+            logger.warn(f"  ⚠ Enter 键后未确认提交成功 (attempt {attempt})")
+
+            # 等待后重试
+            if attempt < MAX_ATTEMPTS:
+                await asyncio.sleep(1)
+
+        # ── 所有策略均失败 ──
+        raise GeminiPageError(
+            "消息提交失败：所有策略均未能触发发送。"
+            "输入框内容未清空，请检查页面状态。"
+        )
 
     async def _count_response_containers(self) -> int:
         """计算页面上的模型响应数量。"""
@@ -1465,6 +1652,88 @@ class GeminiAgency:
         }"""
         )
 
+    async def _detect_server_rollback(self) -> bool:
+        """检测 Gemini 服务器处理失败后的页面回退。
+
+        当消息提交后，Gemini 后端因网络或服务器原因处理失败时，
+        页面会自动回退到发送前的"零状态"：
+        - body 含有 zero-state-theme 类
+        - 欢迎问候区域（greeting-container）可见
+        - 没有 user-query 或 model-response 元素
+        - 输入框仍有文本（未被消费）
+        - 零状态建议卡片（card-zero-state）可见
+
+        Returns:
+            True 表示检测到服务器回退。
+        """
+        try:
+            rollback_info = await self.page.evaluate(
+                """() => {
+                    const body = document.body;
+                    const isZeroState = body?.classList?.contains('zero-state-theme') || false;
+
+                    // 欢迎区域可见
+                    const greeting = document.querySelector('.greeting-container');
+                    const greetingVisible = greeting ? (greeting.offsetWidth > 0 && greeting.offsetHeight > 0) : false;
+
+                    // 零状态建议卡片可见
+                    const zeroCards = document.querySelectorAll('.card-zero-state');
+                    let visibleCards = 0;
+                    zeroCards.forEach(c => { if (c.offsetWidth > 0) visibleCards++; });
+
+                    // 对话元素计数
+                    const userQueries = document.querySelectorAll('user-query').length;
+                    const modelResponses = document.querySelectorAll('model-response').length;
+
+                    // 输入框是否有内容
+                    const editor = document.querySelector('.ql-editor');
+                    const inputText = editor ? (editor.textContent || '').trim() : '';
+
+                    return {
+                        isZeroState,
+                        greetingVisible,
+                        visibleCards,
+                        userQueries,
+                        modelResponses,
+                        hasInputText: inputText.length > 0,
+                        inputTextLen: inputText.length
+                    };
+                }"""
+            )
+
+            if not rollback_info:
+                return False
+
+            is_zero = rollback_info.get("isZeroState", False)
+            greeting_vis = rollback_info.get("greetingVisible", False)
+            zero_cards = rollback_info.get("visibleCards", 0)
+            uq = rollback_info.get("userQueries", -1)
+            mr = rollback_info.get("modelResponses", -1)
+            has_input = rollback_info.get("hasInputText", False)
+
+            # 主判定：零状态 + 欢迎可见 + 无对话元素 = 服务器回退
+            if is_zero and greeting_vis and uq == 0 and mr == 0:
+                logger.warn(
+                    f"  ⚠ 检测到服务器回退: zero-state={is_zero}, "
+                    f"greeting={greeting_vis}, cards={zero_cards}, "
+                    f"uq={uq}, mr={mr}, has_input={has_input}"
+                )
+                return True
+
+            # 次判定：零状态建议卡片可见 + 无对话 + 输入框有文本
+            if zero_cards >= 3 and uq == 0 and mr == 0 and has_input:
+                logger.warn(
+                    f"  ⚠ 检测到服务器回退(卡片): cards={zero_cards}, "
+                    f"uq={uq}, mr={mr}, input_len={rollback_info.get('inputTextLen', 0)}"
+                )
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.warn(f"  ⚠ 回退检测异常: {e}")
+            return False
+
     async def _check_for_errors(self) -> str | None:
         """检查页面上的错误消息或配额警告。"""
         error_el = await self.page.query_selector(SEL_ERROR_MESSAGE)
@@ -1489,17 +1758,40 @@ class GeminiAgency:
 
         return None
 
-    async def _wait_for_response(self, timeout: int = None) -> str:
-        """等待 Gemini 完成响应生成，使用多信号检测。"""
+    async def _wait_for_response(
+        self, timeout: int = None, pre_mr_count: int = None
+    ) -> str:
+        """等待 Gemini 完成响应生成，使用多信号检测。
+
+        仅依赖可靠的结构性信号进行检测，不使用 innerHTML 比较。
+
+        包含卡顿检测：如果响应内容长时间未变化（> stall_timeout），
+        会自动点击停止按钮并返回已收到的内容。
+
+        Args:
+            timeout: 超时时间（毫秒）
+            pre_mr_count: 提交前 model-response 元素数量，用于检测新响应。
+        """
         timeout = timeout or self.config.response_timeout
+        # 卡顿超时：内容停止更新超过此时长则视为卡死（毫秒）
+        stall_timeout_ms = min(timeout * 0.25, 30000)  # 最多 30s
         t_start = time.time()
         elapsed = 0
 
-        initial_count = await self._count_response_containers()
-        logger.note("> 等待响应 ...")
+        initial_count = (
+            pre_mr_count
+            if pre_mr_count is not None
+            else await self._count_response_containers()
+        )
+        logger.note(f"> 等待响应 ... (初始 model-response={initial_count})")
 
-        # 阶段 1：等待响应开始
+        # ── 阶段 1：等待响应开始 ──
+        # 仅使用 3 个可靠信号（不使用 innerHTML 比较）：
+        #   1. model-response 元素数量增加
+        #   2. 加载指示器（mat-progress-bar 等）可见
+        #   3. 停止按钮可见
         response_started = False
+        start_signal = ""
         while elapsed < timeout:
             error_msg = await self._check_for_errors()
             if error_msg:
@@ -1507,24 +1799,40 @@ class GeminiAgency:
                     raise GeminiRateLimitError(error_msg)
                 raise GeminiPageError(f"Gemini 错误: {error_msg}")
 
+            # 信号 1: model-response 数量增加
             current_count = await self._count_response_containers()
             if current_count > initial_count:
                 response_started = True
+                start_signal = f"model-response +{current_count - initial_count}"
                 break
 
-            loading = await self.page.query_selector(SEL_LOADING_INDICATOR)
-            if loading:
-                try:
-                    if await loading.is_visible():
-                        response_started = True
-                        break
-                except Exception:
-                    pass
+            # 信号 2: 加载指示器可见
+            try:
+                loading = await self.page.query_selector(SEL_LOADING_INDICATOR)
+                if loading and await loading.is_visible():
+                    response_started = True
+                    start_signal = "loading_indicator"
+                    break
+            except Exception:
+                pass
 
-            resp = await self._get_latest_response_content()
-            if resp.get("length", 0) > 10:
-                response_started = True
-                break
+            # 信号 3: 停止按钮可见
+            try:
+                stop_btn = await self.page.query_selector(SEL_STOP_BUTTON)
+                if stop_btn and await stop_btn.is_visible():
+                    response_started = True
+                    start_signal = "stop_button"
+                    break
+            except Exception:
+                pass
+
+            # 信号 4（负面）: 服务器回退检测
+            # 等待至少 3 秒后再检测，避免因页面过渡动画误判
+            if elapsed > 3000:
+                if await self._detect_server_rollback():
+                    raise GeminiServerRollbackError(
+                        "Gemini 服务器处理失败，页面已回退到初始状态。"
+                    )
 
             await asyncio.sleep(GEMINI_POLL_INTERVAL / 1000)
             elapsed = (time.time() - t_start) * 1000
@@ -1534,17 +1842,26 @@ class GeminiAgency:
                 "等待响应开始超时，可能输入未成功提交。", timeout_ms=timeout
             )
 
-        # 阶段 2：等待响应完成
-        logger.mesg("  响应已开始，等待完成 ...")
+        # ── 阶段 2：等待响应完成（含卡顿检测） ──
+        logger.mesg(f"  响应已开始 ({start_signal})，等待完成 ...")
         stable_count = 0
         last_content = ""
         last_content_length = 0
+        last_change_time = time.time()  # 上次内容变化时间
+        stalled = False
 
         while elapsed < timeout:
             error_msg = await self._check_for_errors()
             if error_msg:
                 if any(k in error_msg.lower() for k in ["quota", "limit", "配额"]):
                     raise GeminiRateLimitError(error_msg)
+
+            # 服务器回退检测（Phase 2 中也可能发生）
+            # 回退会导致 model-response 消失，页面恢复零状态
+            if await self._detect_server_rollback():
+                raise GeminiServerRollbackError(
+                    "Gemini 服务器在生成响应过程中失败，页面已回退。"
+                )
 
             is_loading = False
             loading = await self.page.query_selector(SEL_LOADING_INDICATOR)
@@ -1564,27 +1881,58 @@ class GeminiAgency:
 
             resp = await self._get_latest_response_content()
             current_content = resp.get("html", "")
+            current_length = len(current_content)
 
-            content_stable = (
-                current_content == last_content and len(current_content) > 0
-            )
+            # 使用长度比较而非精确字符串比较来判定稳定性。
+            # Gemini 的 DOM 可能因动画、时间戳等产生微小变化，
+            # 导致 innerHTML 不完全相同，但长度不变表示内容实质未变。
+            content_stable = current_length == len(last_content) and current_length > 0
 
-            if content_stable and not is_loading and not is_generating:
-                # 理想情况：内容稳定，无加载、无生成
-                stable_count += 1
-                if stable_count >= 3:
-                    break
-            elif content_stable and not is_generating:
-                # 次优情况：内容稳定且停止按钮消失，但 loading 指示器
-                # 仍在（如思考模式的永久 thinking 区域）
-                stable_count += 1
-                if stable_count >= 5:
-                    break
-            else:
+            if not content_stable:
+                # 内容有变化 → 重置卡顿计时
+                last_change_time = time.time()
                 stable_count = 0
                 last_content = current_content
+            else:
+                # 内容未变化 → 检查卡顿
+                stall_ms = (time.time() - last_change_time) * 1000
 
-            current_length = len(current_content)
+                if stall_ms > stall_timeout_ms:
+                    if is_loading or is_generating:
+                        # 内容长时间未变但仍在"生成中" → 卡死了
+                        logger.warn(
+                            f"  ⚠ 响应停滞 {stall_ms / 1000:.0f}s"
+                            f" (loading={is_loading}, generating={is_generating})"
+                        )
+                        # 尝试点击停止按钮
+                        if is_generating and stop_btn:
+                            try:
+                                await self.page.evaluate("(el) => el.click()", stop_btn)
+                                logger.mesg("  已自动点击停止按钮")
+                                await asyncio.sleep(2)
+                            except Exception as click_err:
+                                logger.warn(f"  × 点击停止按钮失败: {click_err}")
+                        stalled = True
+                        break
+                    else:
+                        # 无加载/生成信号且内容稳定 → 正常结束
+                        stable_count += 1
+                        if stable_count >= 3:
+                            break
+
+                elif not is_loading and not is_generating:
+                    # 理想情况：内容稳定，无加载、无生成
+                    stable_count += 1
+                    if stable_count >= 3:
+                        break
+                elif not is_generating:
+                    # 次优情况：内容稳定且停止按钮消失，但 loading 指示器
+                    # 仍在（如思考模式的永久 thinking 区域）
+                    stable_count += 1
+                    if stable_count >= 5:
+                        break
+
+            # 长度变化日志
             if current_length > last_content_length + 100:
                 logger.mesg(f"  接收中... ({current_length} chars)")
                 last_content_length = current_length
@@ -1592,11 +1940,14 @@ class GeminiAgency:
             await asyncio.sleep(GEMINI_POLL_INTERVAL / 1000)
             elapsed = (time.time() - t_start) * 1000
 
-        if elapsed >= timeout:
-            logger.warn("  ⚠ 响应可能不完整（已超时）")
-
         total_s = time.time() - t_start
-        logger.okay(f"  ✓ 响应已收到 ({total_s:.1f}s)")
+        if stalled:
+            logger.warn(f"  ⚠ 响应因停滞被中断 ({total_s:.1f}s)")
+        elif elapsed >= timeout:
+            logger.warn("  ⚠ 响应可能不完整（已超时）")
+        else:
+            logger.okay(f"  ✓ 响应已收到 ({total_s:.1f}s)")
+
         return last_content
 
     async def _extract_images(self, download_base64: bool = True) -> list[dict]:
@@ -1660,15 +2011,23 @@ class GeminiAgency:
                                 entry.base64_data = parts.slice(1).join(',');
                             }
                         }
-                        if (src.startsWith('blob:') && img.complete && img.naturalWidth > 0) {
+                        // 对所有已加载的图片（包括 https/blob）尝试 canvas 提取
+                        // 这样可以避免 CORS/网络问题导致的下载失败
+                        if (!entry.base64_data && img.complete && img.naturalWidth > 0) {
                             try {
                                 const canvas = document.createElement('canvas');
                                 canvas.width = img.naturalWidth;
                                 canvas.height = img.naturalHeight;
                                 canvas.getContext('2d').drawImage(img, 0, 0);
                                 const b64 = canvas.toDataURL('image/png').split(',')[1];
-                                if (b64) { entry.base64_data = b64; entry.mime_type = 'image/png'; }
-                            } catch(e) { entry.needs_download = true; }
+                                if (b64 && b64.length > 100) {
+                                    entry.base64_data = b64;
+                                    entry.mime_type = 'image/png';
+                                }
+                            } catch(e) {
+                                // Canvas tainted (CORS) → 需要单独下载
+                                entry.needs_download = true;
+                            }
                         }
                         results.push(entry);
                     }

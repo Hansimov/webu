@@ -65,7 +65,7 @@ class TestClientMethods:
     def test_health(self, mock_session_cls):
         mock_session = MagicMock()
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {"status": "ok", "version": "2.0.0"}
+        mock_resp.json.return_value = {"status": "ok", "version": "3.0.0"}
         mock_resp.raise_for_status.return_value = None
         mock_session.get.return_value = mock_resp
         mock_session_cls.return_value = mock_session
@@ -424,59 +424,52 @@ class TestClientErrors:
 class TestServerEndpoints:
     """使用 FastAPI TestClient 测试 Server 端点（mock Agency）。
 
-    通过 mock GeminiAgency.start 来避免启动真实浏览器。
+    通过 mock GeminiAgency 来避免创建真实浏览器实例。
+    使用单个 TestClient 避免重复触发 lifespan。
     """
 
     @pytest.fixture
-    def app(self):
+    def client(self):
         from fastapi.testclient import TestClient
         from webu.gemini.server import create_gemini_server
 
-        # mock Agency.start 避免启动真实浏览器
-        with patch.object(GeminiAgency, "start", new_callable=AsyncMock):
-            with patch.object(GeminiAgency, "stop", new_callable=AsyncMock):
-                app = create_gemini_server(config={"headless": True})
-                yield app
+        # 完全替换 GeminiAgency 类，避免创建真实 GeminiBrowser
+        mock_agency = MagicMock()
+        mock_agency.start = AsyncMock()
+        mock_agency.stop = AsyncMock()
+        mock_agency.is_ready = False  # 默认未就绪
+        mock_agency._image_mode = False
+        mock_agency._message_count = 0
 
-    def test_health(self, app):
-        from fastapi.testclient import TestClient
+        with patch("webu.gemini.server.GeminiAgency", return_value=mock_agency):
+            app = create_gemini_server(config={"headless": True})
+            with TestClient(app) as tc:
+                yield tc
 
-        with TestClient(app) as client:
-            resp = client.get("/health")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["status"] == "ok"
-            assert "version" in data
+    def test_health(self, client):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "version" in data
 
-    def test_browser_status_not_ready(self, app):
+    def test_browser_status_not_ready(self, client):
         """Agency 未就绪（start 被 mock，is_ready=False）时应返回 503。"""
-        from fastapi.testclient import TestClient
+        resp = client.get("/browser_status")
+        assert resp.status_code == 503
 
-        with TestClient(app) as client:
-            resp = client.get("/browser_status")
-            assert resp.status_code == 503
-
-    def test_new_chat_not_ready(self, app):
+    def test_new_chat_not_ready(self, client):
         """Agency 未就绪时所有操作端点应返回 503。"""
-        from fastapi.testclient import TestClient
+        resp = client.post("/new_chat")
+        assert resp.status_code == 503
 
-        with TestClient(app) as client:
-            resp = client.post("/new_chat")
-            assert resp.status_code == 503
+    def test_get_mode_not_ready(self, client):
+        resp = client.get("/get_mode")
+        assert resp.status_code == 503
 
-    def test_get_mode_not_ready(self, app):
-        from fastapi.testclient import TestClient
-
-        with TestClient(app) as client:
-            resp = client.get("/get_mode")
-            assert resp.status_code == 503
-
-    def test_send_input_not_ready(self, app):
-        from fastapi.testclient import TestClient
-
-        with TestClient(app) as client:
-            resp = client.post("/send_input", json={"wait_response": True})
-            assert resp.status_code == 503
+    def test_send_input_not_ready(self, client):
+        resp = client.post("/send_input", json={"wait_response": True})
+        assert resp.status_code == 503
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -599,8 +592,12 @@ class TestRunModule:
 
 
 @pytest.fixture(scope="module")
-async def shared_agency():
-    """模块级别共享的 GeminiAgency。"""
+async def shared_agency(request):
+    """模块级别共享的 GeminiAgency（仅在集成测试时创建）。"""
+    # 检查是否有集成测试要运行，避免在 -m "not integration" 时启动浏览器
+    markers = [item.get_closest_marker("integration") for item in request.session.items]
+    if not any(markers):
+        pytest.skip("No integration tests selected")
     agency = GeminiAgency(config={"headless": False})
     await agency.start()
     yield agency

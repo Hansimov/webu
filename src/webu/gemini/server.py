@@ -1,16 +1,19 @@
 """Gemini FastAPI 服务器。
 
 提供 REST API 接口，封装 GeminiAgency 的浏览器交互功能。
+增强版：支持 /set_presets, /new_chat 带 tool/mode 参数, 预设验证, 图片下载。
 """
 
 import asyncio
+import base64
 import uvicorn
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel, Field
+from enum import Enum
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator
 from tclogger import logger, logstr
-from typing import Optional
+from typing import Optional, Literal
 
 from .agency import GeminiAgency
 from .config import GeminiConfig, GeminiConfigType
@@ -21,8 +24,88 @@ from .errors import (
     GeminiImageGenerationError,
     GeminiPageError,
     GeminiRateLimitError,
+    GeminiServerRollbackError,
 )
 from ..fastapis.styles import setup_swagger_ui
+
+
+# ═══════════════════════════════════════════════════════════════
+# 常量 & 枚举
+# ═══════════════════════════════════════════════════════════════
+
+# 有效的模式名称
+VALID_MODES = {"快速", "思考", "Pro", "Flash", "Think", "Deep Think"}
+
+# 有效的工具名称
+VALID_TOOLS = {
+    "none",
+    "Deep Research",
+    "生成图片",
+    "创作音乐",
+    "Canvas",
+    "Google 搜索",
+    "代码执行",
+}
+
+# 工具名称别名映射（兼容不同写法）
+TOOL_ALIASES: dict[str, str] = {
+    "deep_research": "Deep Research",
+    "deep research": "Deep Research",
+    "image": "生成图片",
+    "generate_image": "生成图片",
+    "generate image": "生成图片",
+    "图片": "生成图片",
+    "music": "创作音乐",
+    "音乐": "创作音乐",
+    "canvas": "Canvas",
+    "search": "Google 搜索",
+    "搜索": "Google 搜索",
+    "google搜索": "Google 搜索",
+    "code": "代码执行",
+    "代码": "代码执行",
+}
+
+# 模式名称别名映射
+MODE_ALIASES: dict[str, str] = {
+    "fast": "快速",
+    "quick": "快速",
+    "think": "思考",
+    "thinking": "思考",
+    "pro": "Pro",
+    "deep_think": "Deep Think",
+    "deep think": "Deep Think",
+    "flash": "Flash",
+}
+
+
+def _normalize_mode(mode: str) -> str:
+    """标准化模式名称，支持别名。"""
+    if mode in VALID_MODES:
+        return mode
+    lower = mode.lower().strip()
+    if lower in MODE_ALIASES:
+        return MODE_ALIASES[lower]
+    # 模糊匹配
+    for valid in VALID_MODES:
+        if lower in valid.lower() or valid.lower() in lower:
+            return valid
+    return mode  # 原样返回，由 agency 处理
+
+
+def _normalize_tool(tool: str) -> str:
+    """标准化工具名称，支持别名。"""
+    if tool in VALID_TOOLS:
+        return tool
+    lower = tool.lower().strip()
+    if lower in TOOL_ALIASES:
+        return TOOL_ALIASES[lower]
+    if lower == "none" or lower == "无":
+        return "none"
+    # 模糊匹配
+    for valid in VALID_TOOLS:
+        if lower in valid.lower() or valid.lower() in lower:
+            return valid
+    return tool
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -31,43 +114,138 @@ from ..fastapis.styles import setup_swagger_ui
 
 
 class SwitchChatRequest(BaseModel):
-    chat_id: str = Field(..., description="要切换到的聊天会话 ID")
+    """切换聊天会话请求。"""
 
-
-class SetModeRequest(BaseModel):
-    mode: str = Field(..., description="模式名称，如 '快速', '思考', 'Pro'")
-
-
-class SetToolRequest(BaseModel):
-    tool: str = Field(
-        ..., description="工具名称，如 'Deep Research', '生成图片', '创作音乐'"
+    chat_id: str = Field(
+        ..., description="要切换到的聊天会话 ID", min_length=1, max_length=200
     )
 
 
+class NewChatRequest(BaseModel):
+    """创建新聊天请求（支持可选的 tool 和 mode 参数）。"""
+
+    tool: Optional[str] = Field(
+        None,
+        description="创建新聊天后要设置的工具，如 'Deep Research', '生成图片', '创作音乐'",
+    )
+    mode: Optional[str] = Field(
+        None,
+        description="创建新聊天后要设置的模式，如 '快速', '思考', 'Pro'",
+    )
+
+    @field_validator("tool", mode="before")
+    @classmethod
+    def normalize_tool(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return _normalize_tool(v)
+        return v
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return _normalize_mode(v)
+        return v
+
+
+class SetModeRequest(BaseModel):
+    """设置模式请求。"""
+
+    mode: str = Field(
+        ..., description="模式名称，如 '快速', '思考', 'Pro'", min_length=1
+    )
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, v: str) -> str:
+        return _normalize_mode(v)
+
+
+class SetToolRequest(BaseModel):
+    """设置工具请求。"""
+
+    tool: str = Field(
+        ...,
+        description="工具名称，如 'Deep Research', '生成图片', '创作音乐'",
+        min_length=1,
+    )
+
+    @field_validator("tool", mode="before")
+    @classmethod
+    def normalize_tool(cls, v: str) -> str:
+        return _normalize_tool(v)
+
+
+class SetPresetsRequest(BaseModel):
+    """同时设置 tool 和 mode 的预设请求。"""
+
+    tool: Optional[str] = Field(
+        None,
+        description="工具名称，如 'Deep Research', '生成图片', 'none' (清除工具)",
+    )
+    mode: Optional[str] = Field(
+        None,
+        description="模式名称，如 '快速', '思考', 'Pro'",
+    )
+
+    @field_validator("tool", mode="before")
+    @classmethod
+    def normalize_tool(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return _normalize_tool(v)
+        return v
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return _normalize_mode(v)
+        return v
+
+
 class SetInputRequest(BaseModel):
-    text: str = Field(..., description="要设置的输入内容")
+    """设置输入请求。"""
+
+    text: str = Field(..., description="要设置的输入内容", min_length=1)
 
 
 class AddInputRequest(BaseModel):
-    text: str = Field(..., description="要追加的输入内容")
+    """追加输入请求。"""
+
+    text: str = Field(..., description="要追加的输入内容", min_length=1)
 
 
 class SendInputRequest(BaseModel):
+    """发送输入请求。"""
+
     wait_response: bool = Field(
         True,
-        description="True=等待 Gemini 响应后返回(同步), False=发送后立即返回(异步)",
+        description=("True=等待 Gemini 响应后返回(同步), False=发送后立即返回(异步)"),
     )
 
 
 class AttachRequest(BaseModel):
-    file_path: str = Field(..., description="要上传的文件路径")
+    """文件上传请求。"""
+
+    file_path: str = Field(..., description="要上传的文件路径", min_length=1)
 
 
 class ScreenshotRequest(BaseModel):
-    path: str = Field(None, description="截图保存路径")
+    """截图请求。"""
+
+    path: Optional[str] = Field(None, description="截图保存路径")
+
+
+class DownloadImagesRequest(BaseModel):
+    """下载生成图片请求。"""
+
+    output_dir: str = Field("data/images", description="图片保存目录")
+    prefix: str = Field("", description="文件名前缀")
 
 
 class ImageData(BaseModel):
+    """图片数据。"""
+
     url: str = ""
     alt: str = ""
     base64_data: str = ""
@@ -77,11 +255,15 @@ class ImageData(BaseModel):
 
 
 class CodeBlockData(BaseModel):
+    """代码块数据。"""
+
     language: str = ""
     code: str = ""
 
 
 class ChatResponse(BaseModel):
+    """聊天响应。"""
+
     success: bool = True
     text: str = ""
     markdown: str = ""
@@ -91,13 +273,27 @@ class ChatResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    """状态响应。"""
+
     status: str = "ok"
     data: dict = {}
 
 
 class HealthResponse(BaseModel):
+    """健康检查响应。"""
+
     status: str = "ok"
-    version: str = "2.0.0"
+    version: str = "3.0.0"
+
+
+class PresetsResponse(BaseModel):
+    """预设配置响应。"""
+
+    status: str = "ok"
+    mode: Optional[str] = None
+    tool: Optional[str] = None
+    mode_changed: bool = False
+    tool_changed: bool = False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -111,6 +307,8 @@ def _handle_gemini_error(e: Exception):
         raise HTTPException(status_code=401, detail=str(e))
     if isinstance(e, GeminiRateLimitError):
         raise HTTPException(status_code=429, detail=str(e))
+    if isinstance(e, GeminiServerRollbackError):
+        raise HTTPException(status_code=503, detail=str(e))
     if isinstance(e, GeminiTimeoutError):
         raise HTTPException(status_code=504, detail=str(e))
     if isinstance(e, GeminiPageError):
@@ -119,6 +317,69 @@ def _handle_gemini_error(e: Exception):
         raise HTTPException(status_code=500, detail=str(e))
     logger.err(f"  × 意外错误: {e}")
     raise HTTPException(status_code=500, detail=f"意外错误: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# 预设验证辅助
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _ensure_presets(
+    agency: GeminiAgency,
+    expected_mode: Optional[str] = None,
+    expected_tool: Optional[str] = None,
+) -> dict:
+    """验证并纠正当前 mode 和 tool 是否符合预设。
+
+    在首次发送消息前调用，确保浏览器状态与预设一致。
+
+    Returns:
+        dict 包含调整结果
+    """
+    result = {"mode_adjusted": False, "tool_adjusted": False}
+
+    if expected_mode:
+        try:
+            current_mode = await agency.get_mode()
+            current = current_mode.get("mode", "unknown")
+            normalized_expected = _normalize_mode(expected_mode)
+
+            if current.lower() != normalized_expected.lower():
+                logger.mesg(
+                    f"  模式不匹配: 当前={current}, 预设={normalized_expected},"
+                    f" 自动调整 ..."
+                )
+                await agency.set_mode(normalized_expected)
+                result["mode_adjusted"] = True
+                result["mode"] = normalized_expected
+            else:
+                result["mode"] = current
+        except Exception as e:
+            logger.warn(f"  × 验证/调整模式失败: {e}")
+
+    if expected_tool:
+        try:
+            normalized_expected = _normalize_tool(expected_tool)
+            if normalized_expected != "none":
+                current_tool = await agency.get_tool()
+                current = current_tool.get("tool", "none")
+                # 对当前工具也做标准化（浏览器可能返回缩写，如"图片"而非"生成图片"）
+                current_normalized = _normalize_tool(current)
+
+                if current_normalized.lower() != normalized_expected.lower():
+                    logger.mesg(
+                        f"  工具不匹配: 当前={current}({current_normalized}),"
+                        f" 预设={normalized_expected}, 自动调整 ..."
+                    )
+                    await agency.set_tool(normalized_expected)
+                    result["tool_adjusted"] = True
+                    result["tool"] = normalized_expected
+                else:
+                    result["tool"] = normalized_expected
+        except Exception as e:
+            logger.warn(f"  × 验证/调整工具失败: {e}")
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -133,6 +394,9 @@ def create_gemini_server(
 
     gemini_config = GeminiConfig(config=config, config_path=config_path)
     agency: GeminiAgency = None
+
+    # 存储当前预设（在新聊天时设置，在首次发送消息时验证）
+    presets: dict = {"mode": None, "tool": None, "verified": False}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -153,10 +417,10 @@ def create_gemini_server(
         title="Gemini 自动化 Server",
         description=(
             "通过浏览器自动化 Google Gemini 交互的 API。\n\n"
-            "支持：浏览器状态、聊天管理、模式/工具选择、"
-            "输入操作、消息发送、文件上传、消息获取。"
+            "支持：浏览器状态、聊天管理、模式/工具选择、预设配置、"
+            "输入操作、消息发送、文件上传、消息获取、图片下载。"
         ),
-        version="2.0.0",
+        version="3.0.0",
         lifespan=lifespan,
     )
     setup_swagger_ui(app)
@@ -173,30 +437,110 @@ def create_gemini_server(
     @app.get("/health", response_model=HealthResponse, tags=["系统"])
     async def health_check():
         """健康检查接口。"""
-        return HealthResponse(status="ok", version="2.0.0")
+        return HealthResponse(status="ok", version="3.0.0")
 
     @app.get("/browser_status", tags=["状态"])
     async def browser_status():
         """返回浏览器实例的全面状态信息。
 
-        包括是否已登录、当前页面、模式、工具等。
+        包括是否已登录、当前页面、模式、工具、预设配置等。
         """
         _ensure_ready()
         try:
             status = await agency.browser_status()
+            status["presets"] = {**presets}
             return {"status": "ok", "data": status}
         except Exception as e:
             _handle_gemini_error(e)
 
+    # ── 预设配置 ─────────────────────────────────────────────
+
+    @app.post("/set_presets", response_model=PresetsResponse, tags=["预设"])
+    async def set_presets(req: SetPresetsRequest):
+        """同时设置 tool 和 mode 的预设配置。
+
+        先设置 mode，再设置 tool。返回实际设置结果。
+        预设会被记录，并在新聊天首次发送消息时自动验证。
+        """
+        _ensure_ready()
+        result = PresetsResponse()
+
+        try:
+            # 先设置模式
+            if req.mode:
+                mode_result = await agency.set_mode(req.mode)
+                result.mode = req.mode
+                result.mode_changed = True
+                presets["mode"] = req.mode
+
+            # 再设置工具
+            if req.tool and req.tool != "none":
+                tool_result = await agency.set_tool(req.tool)
+                result.tool = req.tool
+                result.tool_changed = True
+                presets["tool"] = req.tool
+            elif req.tool == "none":
+                presets["tool"] = None
+                result.tool = "none"
+
+            presets["verified"] = False
+            return result
+        except Exception as e:
+            _handle_gemini_error(e)
+
+    @app.get("/get_presets", tags=["预设"])
+    async def get_presets():
+        """获取当前预设配置。"""
+        return {
+            "status": "ok",
+            "presets": {**presets},
+        }
+
     # ── 聊天会话管理 ─────────────────────────────────────────
 
     @app.post("/new_chat", tags=["聊天"])
-    async def new_chat():
-        """创建新的聊天窗口。"""
+    async def new_chat(req: NewChatRequest = None):
+        """创建新的聊天窗口。
+
+        支持可选参数 tool 和 mode，在创建新聊天后自动设置。
+        设置顺序：新建聊天 → 设置 mode → 设置 tool。
+        """
         _ensure_ready()
         try:
-            result = await agency.new_chat()
-            return result
+            # 创建新聊天
+            chat_result = await agency.new_chat()
+
+            # 如果请求体提供了参数，
+            # 使用请求体的参数；否则使用已保存的预设
+            target_mode = None
+            target_tool = None
+
+            if req:
+                target_mode = req.mode
+                target_tool = req.tool
+
+            # 设置模式
+            if target_mode:
+                try:
+                    await agency.set_mode(target_mode)
+                    presets["mode"] = target_mode
+                    chat_result["mode"] = target_mode
+                except Exception as e:
+                    logger.warn(f"  ⚠ 设置模式失败: {e}")
+                    chat_result["mode_error"] = str(e)
+
+            # 设置工具
+            if target_tool and target_tool != "none":
+                try:
+                    await agency.set_tool(target_tool)
+                    presets["tool"] = target_tool
+                    chat_result["tool"] = target_tool
+                except Exception as e:
+                    logger.warn(f"  ⚠ 设置工具失败: {e}")
+                    chat_result["tool_error"] = str(e)
+
+            presets["verified"] = False
+            return chat_result
         except Exception as e:
             _handle_gemini_error(e)
 
@@ -206,6 +550,7 @@ def create_gemini_server(
         _ensure_ready()
         try:
             result = await agency.switch_chat(req.chat_id)
+            presets["verified"] = False
             return result
         except Exception as e:
             _handle_gemini_error(e)
@@ -224,10 +569,14 @@ def create_gemini_server(
 
     @app.post("/set_mode", tags=["模式"])
     async def set_mode(req: SetModeRequest):
-        """设置聊天窗口的模式（如 '快速', '思考', 'Pro'）。"""
+        """设置聊天窗口的模式（如 '快速', '思考', 'Pro'）。
+
+        支持别名：fast→快速, think→思考, pro→Pro 等。
+        """
         _ensure_ready()
         try:
             result = await agency.set_mode(req.mode)
+            presets["mode"] = req.mode
             return result
         except Exception as e:
             _handle_gemini_error(e)
@@ -246,10 +595,14 @@ def create_gemini_server(
 
     @app.post("/set_tool", tags=["工具"])
     async def set_tool(req: SetToolRequest):
-        """设置聊天窗口的工具（如 'Deep Research', '生成图片', '创作音乐'）。"""
+        """设置聊天窗口的工具（如 'Deep Research', '生成图片', '创作音乐'）。
+
+        支持别名：image→生成图片, music→创作音乐 等。
+        """
         _ensure_ready()
         try:
             result = await agency.set_tool(req.tool)
+            presets["tool"] = req.tool
             return result
         except Exception as e:
             _handle_gemini_error(e)
@@ -302,12 +655,26 @@ def create_gemini_server(
     async def send_input(req: SendInputRequest):
         """发送输入框中的内容。
 
+        在新聊天的首次发送前，会自动验证 tool 和 mode 是否符合预设要求。
+        如果不符合，会自动调整到正确的 tool 和 mode。
+
         支持同步和异步两种方式：
         - wait_response=True: 等到 Gemini 返回结果后才返回（同步）
         - wait_response=False: 发送后立即返回（异步）
         """
         _ensure_ready()
         try:
+            # 首次发送前验证预设
+            if not presets["verified"]:
+                adjustment = await _ensure_presets(
+                    agency,
+                    expected_mode=presets.get("mode"),
+                    expected_tool=presets.get("tool"),
+                )
+                presets["verified"] = True
+                if adjustment.get("mode_adjusted") or adjustment.get("tool_adjusted"):
+                    logger.mesg(f"  预设已自动调整: {adjustment}")
+
             result = await agency.send_input(wait_response=req.wait_response)
             return result
         except Exception as e:
@@ -360,6 +727,51 @@ def create_gemini_server(
         except Exception as e:
             _handle_gemini_error(e)
 
+    # ── 图片管理 ─────────────────────────────────────────────
+
+    @app.post("/download_images", tags=["图片"])
+    async def download_images(req: DownloadImagesRequest = None):
+        """下载最新响应中的所有图片并保存到本地。
+
+        从最新模型响应中提取图片数据，下载并保存到指定目录。
+        支持小图和原图（如果可用）。
+        """
+        _ensure_ready()
+        try:
+            output_dir = (req and req.output_dir) or "data/images"
+            prefix = (req and req.prefix) or ""
+
+            # 提取最新响应的图片
+            images_data = await agency._extract_images(download_base64=True)
+            if not images_data:
+                return {
+                    "status": "ok",
+                    "message": "没有找到图片",
+                    "saved_paths": [],
+                }
+
+            # 解析并保存图片
+            from .parser import GeminiResponseParser
+
+            parser = GeminiResponseParser()
+            images = parser.parse_images_from_elements(images_data)
+
+            from .parser import GeminiResponse
+
+            response = GeminiResponse(images=images)
+            saved_paths = agency.save_images(
+                response, output_dir=output_dir, prefix=prefix
+            )
+
+            return {
+                "status": "ok",
+                "image_count": len(images),
+                "saved_count": len(saved_paths),
+                "saved_paths": saved_paths,
+            }
+        except Exception as e:
+            _handle_gemini_error(e)
+
     # ── 调试工具 ─────────────────────────────────────────────
 
     @app.post("/screenshot", tags=["调试"])
@@ -382,6 +794,7 @@ def create_gemini_server(
                 await agency.stop()
             agency = GeminiAgency(config=gemini_config.config)
             await agency.start()
+            presets["verified"] = False
             return {"status": "ok", "message": "Agency 已重启"}
         except Exception as e:
             logger.err(f"  × 重启失败: {e}")

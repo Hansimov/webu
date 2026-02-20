@@ -79,6 +79,22 @@ class GeminiRateLimitError(GeminiError):
         super().__init__(message, details)
 
 
+class GeminiServerRollbackError(GeminiError):
+    """Gemini 服务器处理失败后页面回退到初始状态时抛出。
+
+    这种情况发生在消息成功提交后，Gemini 后端因网络或服务器原因
+    处理失败，页面自动回退到发送前的状态（输入框中仍有文本，
+    欢迎页面重新显示）。可通过重试恢复。
+    """
+
+    def __init__(
+        self,
+        message: str = "Gemini 服务器处理失败，页面已回退。",
+        details: dict = None,
+    ):
+        super().__init__(message, details)
+
+
 class GeminiImageDownloadError(GeminiError):
     """图片下载失败时抛出。"""
 

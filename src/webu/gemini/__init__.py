@@ -12,7 +12,9 @@ from .errors import (
     GeminiBrowserError,
     GeminiPageError,
     GeminiRateLimitError,
+    GeminiServerRollbackError,
     GeminiImageDownloadError,
 )
 from .parser import GeminiResponse, GeminiResponseParser, GeminiImage, GeminiCodeBlock
+from .run import GeminiRunner
 from .server import create_gemini_server, run_gemini_server

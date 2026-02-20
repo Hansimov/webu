@@ -646,13 +646,11 @@ class GeminiBrowser:
     async def download_image_as_base64(self, image_url: str) -> dict:
         """通过浏览器上下文下载图片并转为 base64。
 
-        使用浏览器的 page.evaluate() 在页面上下文中通过 fetch API 下载图片，
-        这样可以自动携带 Cookie 和会话信息。
-
-        支持的 URL 类型：
-        - data: URL（直接提取 base64）
-        - blob: URL（通过 canvas 提取）
-        - http/https URL（通过 fetch 下载）
+        使用多种策略下载图片：
+        - data: URL → 直接提取 base64
+        - blob: URL → 通过 page.evaluate + canvas 提取
+        - http/https URL → 优先使用 Playwright APIRequestContext
+          （自动携带 Cookie，绕过 CORS），失败后回退到 page.evaluate
 
         Returns:
             dict: {"base64_data": str, "mime_type": str}
@@ -671,7 +669,45 @@ class GeminiBrowser:
                     mime_type = mime_match.group(1) if mime_match else "image/png"
                     return {"base64_data": parts[1], "mime_type": mime_type}
 
-            # 使用 page.evaluate 在浏览器中下载
+            # http/https URL - 多策略下载
+            if image_url.startswith("http"):
+                # 策略 1: 在新页面中直接打开图片 URL 并截取内容
+                # 这是最可靠的方式，因为新页面导航会自动携带 Cookie 且无 CORS 限制
+                try:
+                    import base64 as _base64
+
+                    new_page = await self.page.context.new_page()
+                    try:
+                        resp = await new_page.goto(
+                            image_url, wait_until="load", timeout=30000
+                        )
+                        if resp and resp.ok:
+                            body = await resp.body()
+                            if body and len(body) > 100:
+                                b64 = _base64.b64encode(body).decode("ascii")
+                                content_type = resp.headers.get(
+                                    "content-type", "image/png"
+                                )
+                                mime_type = content_type.split(";")[0].strip()
+                                return {"base64_data": b64, "mime_type": mime_type}
+                        logger.warn(
+                            f"  新页面下载图片状态异常: "
+                            f"{resp.status if resp else 'no response'}，"
+                            f"尝试其他策略"
+                        )
+                    finally:
+                        await new_page.close()
+                except Exception as page_err:
+                    logger.warn(f"  新页面下载失败: {page_err}，尝试 page.evaluate")
+                    # 确保关闭可能残留的页面
+                    try:
+                        for p in self.page.context.pages:
+                            if p != self.page:
+                                await p.close()
+                    except Exception:
+                        pass
+
+            # blob: URL 或 http(s) 回退 — 使用 page.evaluate 在浏览器中下载
             result = await self.page.evaluate(
                 """async (url) => {
                     try {
