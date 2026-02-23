@@ -126,12 +126,10 @@ class LLMClient:
         else:
             payload.update(options)
         if enable_thinking is not None:
-            if self.api_format == "doubao":
+            if self.api_format in ("openai", "doubao"):
+                # https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
                 # https://www.volcengine.com/docs/82379/1585128
-                if enable_thinking:
-                    thinking_type = "enabled"
-                else:
-                    thinking_type = "disabled"
+                thinking_type = "enabled" if enable_thinking else "disabled"
                 payload["thinking"] = {"type": thinking_type}
             else:
                 payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
@@ -183,14 +181,19 @@ class LLMClient:
                     role = delta_data["role"]
                 delta_reasoning_content = delta_data.get("reasoning_content", None)
                 if delta_reasoning_content is not None:
+                    if not self.is_thinking:
+                        response_content += "<think>"
                     self.set_think_status()
-                    delta_content = delta_reasoning_content
-                    if delta_content:
-                        response_content += delta_content
-                    logger.mesg(delta_content, end="", verbose=self.verbose_content)
+                    if delta_reasoning_content:
+                        response_content += delta_reasoning_content
+                    logger.mesg(
+                        delta_reasoning_content, end="", verbose=self.verbose_content
+                    )
                 delta_content = delta_data.get("content", None)
                 if delta_content is not None:
                     if delta_content or delta_reasoning_content is None:
+                        if self.is_thinking:
+                            response_content += "</think>"
                         self.reset_think_status()
                     try:
                         if delta_content:
