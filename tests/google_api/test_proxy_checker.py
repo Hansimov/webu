@@ -80,13 +80,13 @@ class TestLevel1Endpoints:
 
     def test_generate_204_endpoint(self):
         ep = LEVEL1_ENDPOINTS[0]
-        assert ep["name"] == "generate_204"
+        assert ep["name"] == "gstatic_204"
         assert ep["expect_status"] == 204
-        assert "google.com" in ep["url"]
+        assert "gstatic" in ep["url"]
 
     def test_robots_txt_endpoint(self):
-        ep = LEVEL1_ENDPOINTS[1]
-        assert ep["name"] == "robots.txt"
+        # robots.txt is now at index 3 after reordering
+        ep = next(e for e in LEVEL1_ENDPOINTS if e["name"] == "robots.txt")
         assert ep["expect_status"] == 200
         assert "robots.txt" in ep["url"]
 

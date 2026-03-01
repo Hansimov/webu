@@ -1,4 +1,4 @@
-# Google Search API — 测试指南
+# ggsc (GooGle-SearCh) — 测试指南
 
 > 测试用例组织、运行方式和测试策略说明。
 
@@ -51,8 +51,15 @@ python -m pytest tests/google_api/test_scraper.py -xvs
 # CLI
 python -m pytest tests/google_api/test_cli.py -xvs
 
+# CLI E2E（含 ggsc entry_point 测试）
+python -m pytest tests/google_api/test_cli_e2e.py -xvs
+python -m pytest tests/google_api/test_cli_e2e.py -xvs -m integration  # 含真实操作
+
 # FastAPI 服务
 python -m pytest tests/google_api/test_server.py -xvs -m integration
+
+# 服务运行时（启动 uvicorn 测试 API）
+python -m pytest tests/google_api/test_live_server.py -xvs -m integration
 
 # 实时环境
 python -m pytest tests/google_api/test_live.py -xvs -m integration
@@ -76,7 +83,7 @@ tests/google_api/
 │   └── 序列化（to_dict）
 │
 ├── test_proxy_collector.py   # 代理采集 — 9 个测试
-│   ├── 行格式解析（ip:port, protocol://ip:port）
+│   ├── 行格式解析（ip:port, protocol://ip:port, ip:port:country）
 │   ├── 空行/无效行处理
 │   ├── HTTP 请求 mock
 │   ├── 代理源配置验证
@@ -85,7 +92,7 @@ tests/google_api/
 ├── test_proxy_checker.py     # 代理检测 — 15 个测试
 │   ├── 代理 URL 构建（http/https/socks5/socks4/unknown）
 │   ├── 随机化辅助函数（UA/viewport/locale）
-│   ├── Level-1 端点配置验证
+│   ├── Level-1 端点配置验证（gstatic_204 优先）
 │   ├── Level-1/Level-2 空列表边界情况
 │   ├── ProxyChecker 初始化 + 批量级别选择
 │   └── [集成] Level-1 真实代理检测
@@ -106,20 +113,36 @@ tests/google_api/
 ├── test_cli.py               # CLI — 14 个测试
 │   ├── PID 文件读写删除
 │   ├── 进程状态检测
-│   ├── 命令行 --help 输出
-│   ├── 子命令帮助
+│   ├── 命令行 --help 输出（ggsc）
+│   ├── 子命令帮助（含 diag）
 │   ├── collect 命令 mock
 │   ├── stats 命令 mock
 │   └── check --level 参数验证
+│
+├── test_cli_e2e.py           # CLI E2E — 13 个测试
+│   ├── ggsc --help 输出验证
+│   ├── 所有 10 个子命令 --help
+│   ├── check --level / --mode 参数
+│   ├── start --port / logs --follow 参数
+│   ├── ggsc entry_point 验证
+│   └── [集成] stats/status/check --level 1 真实操作
 │
 ├── test_server.py            # FastAPI — 5 个测试 [全部集成]
 │   ├── 健康检查
 │   ├── 代理统计/采集
 │   └── 搜索 GET/POST
 │
+├── test_live_server.py       # 服务运行时 — 18 个测试 [全部集成]
+│   ├── CLI 服务管理（status/stop/stats/collect）
+│   ├── HTTP API（health/docs/schema/stats）
+│   ├── API 代理操作（valid/get/collect/check）
+│   ├── API 搜索（GET/POST）
+│   ├── 生产数据库操作（stats/valid/distribution）
+│   └── Level-1 快速检测验证
+│
 ├── test_live.py              # 实时环境 — 19+ 个测试
 │   ├── MongoDB 连接/索引/读写
-│   ├── 代理源可访问性（参数化 6 源）
+│   ├── 代理源可访问性（参数化 19 源）
 │   ├── 全链路采集+存储
 │   ├── 代理池刷新流程
 │   ├── Playwright 浏览器启动
@@ -137,7 +160,9 @@ tests/google_api/
 │   ├── 完整搜索流程
 │   └── 直连搜索
 │
-└── run_check_proxies.py      # 辅助脚本：批量代理检测
+├── run_check_proxies.py      # 辅助脚本：批量代理检测
+├── run_full_diagnosis.py     # 辅助脚本：全面诊断 + 报告
+└── run_diagnose_proxies.py   # 辅助脚本：网络连通性诊断
 ```
 
 ---
@@ -185,10 +210,12 @@ asyncio_mode = auto
 | scraper | 6 | 2 | 8 |
 | mongo | 0 | 7 | 7 |
 | cli | 14 | 0 | 14 |
+| cli_e2e | 10 | 3 | 13 |
 | server | 0 | 5 | 5 |
+| live_server | 0 | 18 | 18 |
 | live | 5 | 14+ | 19+ |
 | search | 0 | 5 | 5 |
-| **合计** | **~51** | **~38** | **~89** |
+| **合计** | **~61** | **~59** | **~120** |
 
 ---
 

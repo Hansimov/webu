@@ -37,6 +37,7 @@ class ProxyCollector:
 
         支持格式：
         - 1.2.3.4:8080
+        - 1.2.3.4:8080:US (带国家码，如 zloi-user)
         - http://1.2.3.4:8080
         - socks5://1.2.3.4:8080
         """
@@ -53,8 +54,8 @@ class ProxyCollector:
                 "port": int(match.group(3)),
             }
 
-        # 无协议前缀：ip:port
-        match = re.match(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)$", line)
+        # 无协议前缀：ip:port 或 ip:port:extra (如 ip:port:country)
+        match = re.match(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)(?::.*)?$", line)
         if match:
             return {
                 "protocol": default_protocol,

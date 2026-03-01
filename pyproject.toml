@@ -19,4 +19,4 @@ Homepage = "https://github.com/Hansimov/webu"
 Issues = "https://github.com/Hansimov/webu/issues"
 
 [project.scripts]
-google-api-cli = "webu.google_api.cli:main"
+ggsc = "webu.google_api.cli:main"

@@ -136,13 +136,13 @@ class TestCLIEntry:
             timeout=10,
         )
         assert result.returncode == 0
-        assert "Google Search API" in result.stdout
+        assert "ggsc" in result.stdout.lower() or "googlesearch" in result.stdout.lower() or "GooGle-SearCh" in result.stdout
         assert "start" in result.stdout
         assert "stop" in result.stdout
 
     def test_subcommand_help(self):
         """测试子命令 --help 输出。"""
-        for cmd in ["start", "stop", "restart", "status", "logs", "collect", "check", "stats", "refresh"]:
+        for cmd in ["start", "stop", "restart", "status", "logs", "collect", "check", "stats", "refresh", "diag"]:
             result = subprocess.run(
                 [sys.executable, "-m", "webu.google_api", cmd, "--help"],
                 capture_output=True,

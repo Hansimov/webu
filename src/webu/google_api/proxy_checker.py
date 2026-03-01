@@ -65,13 +65,25 @@ def _random_locale() -> str:
 # Level-1: 快速 HTTP 检测
 # ═══════════════════════════════════════════════════════════════
 
-# Google 的轻量检测端点
+# Google 的轻量检测端点（按可靠性排序）
 LEVEL1_ENDPOINTS = [
+    {
+        "url": "http://connectivitycheck.gstatic.com/generate_204",
+        "expect_status": 204,
+        "expect_body": None,
+        "name": "gstatic_204",
+    },
     {
         "url": "http://www.google.com/generate_204",
         "expect_status": 204,
         "expect_body": None,
         "name": "generate_204",
+    },
+    {
+        "url": "http://clients3.google.com/generate_204",
+        "expect_status": 204,
+        "expect_body": None,
+        "name": "clients3_204",
     },
     {
         "url": "https://www.google.com/robots.txt",
@@ -137,6 +149,7 @@ async def check_level1_batch(
     timeout_s: int = 10,
     concurrency: int = 50,
     verbose: bool = True,
+    store=None,
 ) -> list[dict]:
     """Level-1 批量快速检测。
 
@@ -147,6 +160,7 @@ async def check_level1_batch(
         ip_list: [{"ip", "port", "protocol", ...}]
         timeout_s: 超时秒数
         concurrency: 并发数
+        store: MongoProxyStore 实例（可选），每批结果实时写入数据库
 
     Returns:
         [{"ip", "port", "protocol", "proxy_url", "is_valid",
@@ -162,7 +176,8 @@ async def check_level1_batch(
             f"(concurrency={concurrency}, timeout={timeout_s}s) ..."
         )
 
-    endpoint = LEVEL1_ENDPOINTS[0]  # generate_204 — 最快
+    # 使用主端点（gstatic_204 最快最可靠）
+    primary_endpoint = LEVEL1_ENDPOINTS[0]  # gstatic_204
     valid_count = 0
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -185,22 +200,20 @@ async def check_level1_batch(
             try:
                 is_socks = item["protocol"] in ("socks4", "socks5")
                 if is_socks:
-                    # SOCKS 代理：使用 ProxyConnector
                     connector = ProxyConnector.from_url(proxy_url)
                     async with aiohttp.ClientSession(
                         connector=connector,
                         headers={"User-Agent": _random_ua()},
                     ) as session:
                         ok, latency, err = await _check_level1_single(
-                            session, None, endpoint, timeout_s
+                            session, None, primary_endpoint, timeout_s
                         )
                 else:
-                    # HTTP 代理：使用 aiohttp 原生 proxy 参数
                     async with aiohttp.ClientSession(
                         headers={"User-Agent": _random_ua()},
                     ) as session:
                         ok, latency, err = await _check_level1_single(
-                            session, proxy_url, endpoint, timeout_s
+                            session, proxy_url, primary_endpoint, timeout_s
                         )
 
                 if ok:
@@ -214,26 +227,45 @@ async def check_level1_batch(
 
         return result
 
-    tasks = [_check_single_proxy(item) for item in ip_list]
-    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # 处理异常
+    # 分批执行 + 进度日志 + 实时写入数据库
+    batch_size = concurrency * 4  # 每批处理的数量
     final_results = []
-    for i, res in enumerate(raw_results):
-        if isinstance(res, Exception):
-            item = ip_list[i]
-            res = {
-                "ip": item["ip"],
-                "port": item["port"],
-                "protocol": item["protocol"],
-                "proxy_url": _build_proxy_url(item["ip"], item["port"], item["protocol"]),
-                "source": item.get("source", ""),
-                "is_valid": False,
-                "latency_ms": 0,
-                "last_error": str(res)[:200],
-                "check_level": 1,
-            }
-        final_results.append(res)
+    checked_count = 0
+
+    for batch_start in range(0, total, batch_size):
+        batch_end = min(batch_start + batch_size, total)
+        batch = ip_list[batch_start:batch_end]
+        tasks = [_check_single_proxy(item) for item in batch]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        batch_results = []
+        for i, res in enumerate(raw_results):
+            if isinstance(res, Exception):
+                item = batch[i]
+                res = {
+                    "ip": item["ip"],
+                    "port": item["port"],
+                    "protocol": item["protocol"],
+                    "proxy_url": _build_proxy_url(item["ip"], item["port"], item["protocol"]),
+                    "source": item.get("source", ""),
+                    "is_valid": False,
+                    "latency_ms": 0,
+                    "last_error": str(res)[:200],
+                    "check_level": 1,
+                }
+            batch_results.append(res)
+            final_results.append(res)
+
+        # 实时写入数据库
+        if store is not None:
+            store.upsert_check_results(batch_results)
+
+        checked_count += len(batch)
+        if verbose:
+            logger.mesg(
+                f"  [Level-1] Progress: {checked_count}/{total} "
+                f"(valid: {valid_count})"
+            )
 
     if verbose:
         logger.okay(
@@ -447,7 +479,7 @@ class ProxyChecker:
         timeout: int = PROXY_CHECK_TIMEOUT,
         concurrency: int = CHECK_CONCURRENCY,
         level1_timeout: int = 10,
-        level1_concurrency: int = 50,
+        level1_concurrency: int = 100,
         verbose: bool = True,
     ):
         self.store = store
@@ -478,14 +510,14 @@ class ProxyChecker:
         logger.note(f"> Starting proxy check: {logstr.mesg(total)} IPs, level={level}")
 
         if level == "1":
-            # 仅 Level-1 检测
+            # 仅 Level-1 检测（实时写入数据库）
             results = await check_level1_batch(
                 ip_list,
                 timeout_s=self.level1_timeout,
                 concurrency=self.level1_concurrency,
                 verbose=self.verbose,
+                store=self.store,
             )
-            self.store.upsert_check_results(results)
             return results
 
         if level == "2":
@@ -500,18 +532,17 @@ class ProxyChecker:
             return results
 
         # level == "all": 先 Level-1 过滤，再对通过的 IP 进行 Level-2 验证
-        # ── Level-1 ──
+        # ── Level-1 ──（实时写入数据库）
         level1_results = await check_level1_batch(
             ip_list,
             timeout_s=self.level1_timeout,
             concurrency=self.level1_concurrency,
             verbose=self.verbose,
+            store=self.store,
         )
 
-        # 存储 Level-1 失败的结果
+        # Level-1 结果已由 check_level1_batch 实时写入数据库
         level1_failed = [r for r in level1_results if not r.get("is_valid")]
-        if level1_failed:
-            self.store.upsert_check_results(level1_failed)
 
         # Level-1 通过的 IP 进入 Level-2
         level1_passed = [r for r in level1_results if r.get("is_valid")]

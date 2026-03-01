@@ -35,6 +35,7 @@ class ProxySourceType(TypedDict):
 
 
 PROXY_SOURCES: list[ProxySourceType] = [
+    # ── Tier 1: 高频更新（分钟级）──────────────────────────
     # proxifly — 每 5 分钟更新
     {
         "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/https/data.txt",
@@ -42,20 +43,14 @@ PROXY_SOURCES: list[ProxySourceType] = [
         "source": "proxifly",
     },
     {
+        "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt",
+        "protocol": "socks4",
+        "source": "proxifly",
+    },
+    {
         "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
         "protocol": "socks5",
         "source": "proxifly",
-    },
-    # TheSpeedX — 每日更新，量大
-    {
-        "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
-        "protocol": "http",
-        "source": "thespeedx",
-    },
-    {
-        "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
-        "protocol": "socks5",
-        "source": "thespeedx",
     },
     # zloi-user — 每 10 分钟更新
     {
@@ -64,9 +59,100 @@ PROXY_SOURCES: list[ProxySourceType] = [
         "source": "zloi-user",
     },
     {
+        "url": "https://github.com/zloi-user/hideip.me/raw/refs/heads/master/socks4.txt",
+        "protocol": "socks4",
+        "source": "zloi-user",
+    },
+    {
         "url": "https://github.com/zloi-user/hideip.me/raw/refs/heads/master/socks5.txt",
         "protocol": "socks5",
         "source": "zloi-user",
+    },
+
+    # ── Tier 2: 每日更新，量大 ──────────────────────────────
+    # TheSpeedX — 每日多次更新，量最大
+    {
+        "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
+        "protocol": "http",
+        "source": "thespeedx",
+    },
+    {
+        "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks4.txt",
+        "protocol": "socks4",
+        "source": "thespeedx",
+    },
+    {
+        "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
+        "protocol": "socks5",
+        "source": "thespeedx",
+    },
+    # monosans — 每日更新，高质量
+    {
+        "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+        "protocol": "http",
+        "source": "monosans",
+    },
+    {
+        "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
+        "protocol": "socks4",
+        "source": "monosans",
+    },
+    {
+        "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+        "protocol": "socks5",
+        "source": "monosans",
+    },
+    # hookzof — 每 10 分钟更新
+    {
+        "url": "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+        "protocol": "socks5",
+        "source": "hookzof",
+    },
+    # roosterkid — 每日更新
+    {
+        "url": "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
+        "protocol": "socks5",
+        "source": "roosterkid",
+    },
+    # MuRongPIG — ⚠️ 已废弃：数据量巨大但极度过时，通过率接近 0%，不再使用
+    # {
+    #     "url": "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt",
+    #     "protocol": "socks5",
+    #     "source": "murongpig",
+    # },
+    # {
+    #     "url": "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",
+    #     "protocol": "http",
+    #     "source": "murongpig",
+    # },
+    # sunny9577 — 每日更新
+    {
+        "url": "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/socks5_proxies.txt",
+        "protocol": "socks5",
+        "source": "sunny9577",
+    },
+    {
+        "url": "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+        "protocol": "http",
+        "source": "sunny9577",
+    },
+
+    # ── Tier 3: API 接口源 ──────────────────────────────────
+    # proxyscrape — 实时 API
+    {
+        "url": "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=all",
+        "protocol": "socks5",
+        "source": "proxyscrape",
+    },
+    {
+        "url": "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks4&timeout=10000&country=all",
+        "protocol": "socks4",
+        "source": "proxyscrape",
+    },
+    {
+        "url": "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all",
+        "protocol": "http",
+        "source": "proxyscrape",
     },
 ]
 

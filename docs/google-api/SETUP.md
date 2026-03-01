@@ -1,6 +1,6 @@
-# Google Search API — 环境搭建指南
+# ggsc (GooGle-SearCh) — 环境搭建指南
 
-> 从零开始搭建 Google Search API 服务所需的全部依赖和环境配置。
+> 从零开始搭建 ggsc Google 搜索服务所需的全部依赖和环境配置。
 
 ---
 
@@ -138,6 +138,22 @@ python -m pytest tests/google_api/test_mongo.py -xvs -m integration
 python -m pytest tests/google_api/test_live.py -xvs -m integration
 ```
 
+### 3.6 验证 ggsc CLI
+
+```bash
+# 检查 ggsc 命令已注册
+ggsc --help
+
+# 快速采集 + 检测
+ggsc collect
+ggsc check --level 1 --limit 10
+ggsc stats
+
+# 启动服务
+ggsc start
+curl http://localhost:18000/health
+```
+
 ---
 
 ## 4. 目录结构
@@ -157,8 +173,10 @@ src/webu/google_api/
 └── server.py             # FastAPI HTTP 服务
 
 tests/google_api/
-├── test_cli.py           # CLI 测试
+├── test_cli.py           # CLI 单元测试
+├── test_cli_e2e.py       # CLI 端到端测试
 ├── test_live.py          # 实时环境集成测试
+├── test_live_server.py   # 服务运行时集成测试
 ├── test_mongo.py         # MongoDB 测试
 ├── test_parser.py        # HTML 解析器测试
 ├── test_proxy_checker.py # 代理检测器测试
@@ -166,7 +184,9 @@ tests/google_api/
 ├── test_scraper.py       # Scraper 测试
 ├── test_search.py        # 搜索全流程测试
 ├── test_server.py        # FastAPI 服务测试
-└── run_check_proxies.py  # 代理批量检测脚本
+├── run_check_proxies.py  # 代理批量检测脚本
+├── run_full_diagnosis.py # 全面诊断脚本
+└── run_diagnose_proxies.py # 网络连通性诊断
 
 data/google_api/          # 运行时数据（自动创建）
 ├── server.pid            # 服务 PID 文件

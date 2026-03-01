@@ -1,4 +1,4 @@
-# Google Search API — 系统设计文档
+# ggsc (GooGle-SearCh) — 系统设计文档
 
 > 基于 Playwright + MongoDB 的自建 Google 搜索服务，核心设计思路和模块拆解。
 
@@ -33,8 +33,9 @@
 │              └───────────┘    └──────────────┘              │
 │                                                              │
 │  ┌─────────────────────────────────────────┐                │
-│  │  CLI 管理 (cli.py)                        │                │
+│  │  CLI 管理 (cli.py) — ggsc 命令            │                │
 │  │  start / stop / restart / status / logs   │                │
+│  │  collect / check / stats / refresh / diag │                │
 │  └─────────────────────────────────────────┘                │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -83,7 +84,7 @@ proxy_collector.py      proxy_checker.py
 | `scraper.py` | Playwright 驱动的 Google 搜索 | `GoogleScraper` |
 | `parser.py` | Google 搜索结果 HTML 解析 | `GoogleResultParser` |
 | `server.py` | FastAPI HTTP API 服务 | `create_google_search_server()` |
-| `cli.py` | 命令行服务管理工具 | `main()` |
+| `cli.py` | 命令行服务管理工具 (`ggsc`) | `main()` |
 
 ---
 

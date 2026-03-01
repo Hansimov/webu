@@ -1,4 +1,4 @@
-# Google Search API — 自建方案规划
+# ggsc (GooGle-SearCh) — 自建方案规划
 
 > **背景：** 基于 Cloudflare Workers 的 Google 搜索解析方案已被证明不可行（详见 [`docs/google-cf/ISSUES.md`](../google-cf/ISSUES.md)）。
 > 本文档规划自建替代方案，核心需求：**每天数万次 Google 搜索请求，结构化返回搜索结果。**
