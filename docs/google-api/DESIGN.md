@@ -79,7 +79,7 @@ proxy_collector.py      proxy_checker.py
 | `constants.py` | 全局常量和配置 | `MONGO_CONFIGS`, `PROXY_SOURCES`, `USER_AGENTS` |
 | `mongo.py` | MongoDB 数据访问层 | `MongoProxyStore` |
 | `proxy_collector.py` | 从免费代理列表 URL 采集 IP | `ProxyCollector` |
-| `proxy_checker.py` | 两级代理可用性检测 (aiohttp + Playwright) | `ProxyChecker`, `check_level1_batch`, `check_level2_batch` |
+| `proxy_checker.py` | 两级代理可用性检测 (aiohttp) | `ProxyChecker`, `check_level1_batch`, `check_level2_batch` |
 | `proxy_pool.py` | 编排采集/检测/选取流程 | `ProxyPool` |
 | `scraper.py` | Playwright 驱动的 Google 搜索 | `GoogleScraper` |
 | `parser.py` | Google 搜索结果 HTML 解析 | `GoogleResultParser` |
@@ -124,10 +124,10 @@ proxy_collector.py      proxy_checker.py
                        通过 IP      失败 IP  │
                           │         存储结果 │
                           ▼               │
-                    [Level-2: Playwright]  │
-                    Google 搜索页面检测     │
-                    检查结果/CAPTCHA       │
-                    并发 20，超时 15s       │
+                    [Level-2: aiohttp]    │
+                    HTTP 请求 Google 搜索   │
+                    检查响应大小/CAPTCHA    │
+                    并发 30-50，超时 20s    │
                           │               │
                           ▼               │
                     [MongoProxyStore]      │
@@ -145,11 +145,11 @@ proxy_collector.py      proxy_checker.py
 - 可过滤 ~85% 的死亡 IP
 
 **Level-2 (搜索验证)**：
-- 使用 Playwright 浏览器访问 Google 搜索页面
-- 验证搜索结果 DOM（`#search`、`#rso`、`.g`）
-- 检测 CAPTCHA / 封禁
-- 每个代理通过新的 `BrowserContext` 独立检测
-- 记录 `is_valid`、`latency_ms`、`fail_count`、`success_count`、`check_level`
+- 使用 aiohttp 发送 HTTP 请求到 Google 搜索 URL
+- 检查响应大小（正常 ~86KB, CAPTCHA/sorry <10KB）
+- 检测 CAPTCHA / sorry 重定向标记
+- HTTP 请求不触发 Google 的浏览器自动化检测
+- 记录 `is_valid`、`latency_ms`、`last_error`、`check_level`
 
 ### 3.3 搜索执行流程
 

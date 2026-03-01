@@ -5,10 +5,12 @@ Level 1 (快速检测): 使用 aiohttp 直接发送 HTTP 请求到 Google 的轻
   - robots.txt: 文本格式，几百字节
   快速过滤掉绝大多数不可用的 IP。
 
-Level 2 (搜索检测): 使用 Playwright 访问 Google 搜索页面
-  - 验证搜索功能是否完整可用
-  - 检测 CAPTCHA / 封禁
-  从 Level-1 通过的 IP 中进一步筛选出可用于搜索的 IP。
+Level 2 (搜索检测): 使用 aiohttp 发送 HTTP 请求到 Google 搜索页面
+  - 通过 HTTP 请求（非浏览器自动化）访问 Google 搜索 URL
+  - 检查响应状态码、大小、CAPTCHA/sorry 标记
+  - HTTP 请求不会触发 Google 的浏览器自动化检测
+  - 正常响应约 86KB（JS 搜索页面），CAPTCHA/sorry 响应 < 10KB
+  - 验证代理未被 Google 封禁，可用于搜索请求
 """
 
 import asyncio
@@ -17,7 +19,6 @@ import time
 import aiohttp
 from aiohttp_socks import ProxyConnector
 
-from playwright.async_api import async_playwright
 from tclogger import logger, logstr
 
 from .constants import (
@@ -37,8 +38,7 @@ import random
 def _build_proxy_url(ip: str, port: int, protocol: str) -> str:
     """构建代理 URL。
 
-    对于 aiohttp (Level-1): http 代理需要 http:// 前缀，socks5 需要 socks5://
-    对于 Playwright (Level-2): http 代理用 http://, socks5 用 socks5://
+    对于 aiohttp: http 代理需要 http:// 前缀，socks5 需要 socks5://
     """
     if protocol in ("http", "https"):
         return f"http://{ip}:{port}"
@@ -278,18 +278,55 @@ async def check_level1_batch(
 
 
 # ═══════════════════════════════════════════════════════════════
-# Level-2: Playwright 搜索页面检测
+# Level-2: HTTP-based Google 搜索检测
 # ═══════════════════════════════════════════════════════════════
+
+# Google 搜索请求的 HTTP 头部（模拟正常浏览器 HTTP 请求）
+_LEVEL2_HEADERS = {
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "DNT": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+# 正常 Google 搜索响应的最小大小 (bytes)
+# 正常: ~86KB (JS 搜索页面), CAPTCHA/sorry: <10KB
+_MIN_SEARCH_RESPONSE_SIZE = 30000
+
+
+def _has_captcha_markers(body: str, url: str) -> bool:
+    """检查响应是否包含 CAPTCHA / sorry 标记。"""
+    if "/sorry/" in url:
+        return True
+    lower = body.lower()
+    return any(marker in lower for marker in (
+        "captcha", "unusual traffic", "/sorry/", "recaptcha",
+    ))
 
 
 async def check_level2_single(
-    browser,
     ip: str,
     port: int,
     protocol: str,
     timeout_s: int = PROXY_CHECK_TIMEOUT,
 ) -> dict:
-    """Level-2 单个代理检测：使用 Playwright 访问 Google 搜索页面。
+    """Level-2 单个代理检测：使用 aiohttp HTTP 请求 Google 搜索。
+
+    通过 HTTP 请求（非浏览器自动化）检测代理是否可以访问 Google 搜索。
+    HTTP 请求不会触发 Google 的浏览器自动化检测（JavaScript 环境检测）。
+
+    检测标准：
+    - HTTP 200 响应
+    - 响应大小 > 30KB（正常搜索页面约 86KB）
+    - 无 CAPTCHA / sorry 重定向
 
     Returns:
         {"ip", "port", "protocol", "proxy_url", "is_valid",
@@ -307,64 +344,67 @@ async def check_level2_single(
         "check_level": 2,
     }
 
-    context = None
+    timeout = aiohttp.ClientTimeout(total=timeout_s)
+    headers = {**_LEVEL2_HEADERS, "User-Agent": _random_ua()}
+    kwargs: dict = {"ssl": False}
+
     try:
-        ua = _random_ua()
-        viewport = _random_viewport()
-        locale = _random_locale()
-
-        context = await browser.new_context(
-            proxy={"server": proxy_url},
-            user_agent=ua,
-            viewport=viewport,
-            locale=locale,
-            ignore_https_errors=True,
-        )
-
-        page = await context.new_page()
-
-        url = f"{GOOGLE_SEARCH_URL}?q={GOOGLE_CHECK_QUERY}&num=5&hl=en"
-        start_time = time.time()
-
-        await page.goto(url, timeout=timeout_s * 1000, wait_until="domcontentloaded")
-
-        # 等待搜索结果
-        try:
-            await page.wait_for_selector(
-                "#search, #rso, .g", timeout=timeout_s * 1000
+        is_socks = protocol in ("socks4", "socks5")
+        if is_socks:
+            connector = ProxyConnector.from_url(proxy_url)
+            session = aiohttp.ClientSession(
+                connector=connector, headers=headers, timeout=timeout,
             )
-        except Exception:
-            content = await page.content()
-            if "captcha" in content.lower() or "unusual traffic" in content.lower():
-                result["last_error"] = "CAPTCHA detected"
-                return result
-            if len(content) < 1000:
-                result["last_error"] = f"Page too small ({len(content)} bytes)"
-                return result
-
-        elapsed_ms = int((time.time() - start_time) * 1000)
-
-        content = await page.content()
-        has_results = (
-            '<div id="search"' in content
-            or '<div id="rso"' in content
-            or 'class="g"' in content
-        )
-
-        if has_results and len(content) > 5000:
-            result["is_valid"] = True
-            result["latency_ms"] = elapsed_ms
         else:
-            result["last_error"] = f"No search results (content_len={len(content)})"
+            session = aiohttp.ClientSession(
+                headers=headers, timeout=timeout,
+            )
+            kwargs["proxy"] = proxy_url
 
+        async with session:
+            url = (
+                f"{GOOGLE_SEARCH_URL}"
+                f"?q={GOOGLE_CHECK_QUERY.replace(' ', '+')}"
+                f"&num=5&hl=en"
+            )
+            start = time.time()
+            async with session.get(url, **kwargs) as resp:
+                body = await resp.text()
+                elapsed_ms = int((time.time() - start) * 1000)
+
+                final_url = str(resp.url)
+
+                # 检测 CAPTCHA / sorry
+                if _has_captcha_markers(body, final_url):
+                    result["last_error"] = "CAPTCHA/sorry detected"
+                    result["latency_ms"] = elapsed_ms
+                    return result
+
+                # 检查 HTTP 状态码
+                if resp.status != 200:
+                    result["last_error"] = f"HTTP {resp.status}"
+                    result["latency_ms"] = elapsed_ms
+                    return result
+
+                # 检查响应大小
+                if len(body) < _MIN_SEARCH_RESPONSE_SIZE:
+                    result["last_error"] = (
+                        f"Response too small ({len(body)} chars, "
+                        f"min={_MIN_SEARCH_RESPONSE_SIZE})"
+                    )
+                    result["latency_ms"] = elapsed_ms
+                    return result
+
+                # 通过所有检查
+                result["is_valid"] = True
+                result["latency_ms"] = elapsed_ms
+
+    except asyncio.TimeoutError:
+        result["last_error"] = "timeout"
+    except aiohttp.ClientError as e:
+        result["last_error"] = str(e)[:200]
     except Exception as e:
         result["last_error"] = str(e)[:200]
-    finally:
-        if context:
-            try:
-                await context.close()
-            except Exception:
-                pass
 
     return result
 
@@ -375,10 +415,15 @@ async def check_level2_batch(
     concurrency: int = CHECK_CONCURRENCY,
     verbose: bool = True,
 ) -> list[dict]:
-    """Level-2 批量 Playwright 检测。
+    """Level-2 批量 HTTP 搜索检测。
+
+    使用 aiohttp 并发检测多个代理是否可以访问 Google 搜索。
+    比 Playwright 更快、更可靠，且不会触发浏览器自动化检测。
 
     Args:
         ip_list: [{"ip", "port", "protocol", ...}]
+        timeout_s: 单个检测超时秒数
+        concurrency: 并发数
 
     Returns:
         检测结果列表
@@ -395,59 +440,45 @@ async def check_level2_batch(
 
     results = []
     valid_count = 0
+    semaphore = asyncio.Semaphore(concurrency)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-            ],
-        )
+    async def _check_with_semaphore(item):
+        async with semaphore:
+            return await check_level2_single(
+                ip=item["ip"],
+                port=item["port"],
+                protocol=item["protocol"],
+                timeout_s=timeout_s,
+            )
 
-        semaphore = asyncio.Semaphore(concurrency)
+    tasks = [_check_with_semaphore(item) for item in ip_list]
+    batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        async def _check_with_semaphore(item):
-            async with semaphore:
-                return await check_level2_single(
-                    browser=browser,
-                    ip=item["ip"],
-                    port=item["port"],
-                    protocol=item["protocol"],
-                    timeout_s=timeout_s,
-                )
+    for i, res in enumerate(batch_results):
+        if isinstance(res, Exception):
+            item = ip_list[i]
+            res = {
+                "ip": item["ip"],
+                "port": item["port"],
+                "protocol": item["protocol"],
+                "proxy_url": _build_proxy_url(
+                    item["ip"], item["port"], item["protocol"]
+                ),
+                "is_valid": False,
+                "latency_ms": 0,
+                "last_error": str(res)[:200],
+                "check_level": 2,
+            }
+        results.append(res)
+        if res.get("is_valid"):
+            valid_count += 1
 
-        tasks = [_check_with_semaphore(item) for item in ip_list]
-        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for i, res in enumerate(batch_results):
-            if isinstance(res, Exception):
-                item = ip_list[i]
-                res = {
-                    "ip": item["ip"],
-                    "port": item["port"],
-                    "protocol": item["protocol"],
-                    "proxy_url": _build_proxy_url(
-                        item["ip"], item["port"], item["protocol"]
-                    ),
-                    "is_valid": False,
-                    "latency_ms": 0,
-                    "last_error": str(res)[:200],
-                    "check_level": 2,
-                }
-            results.append(res)
-            if res.get("is_valid"):
-                valid_count += 1
-
-            # 进度日志
-            if verbose and (i + 1) % 10 == 0:
-                logger.mesg(
-                    f"  [Level-2] Progress: {i + 1}/{total} "
-                    f"(valid: {valid_count})"
-                )
-
-        await browser.close()
+        # 进度日志
+        if verbose and (i + 1) % 10 == 0:
+            logger.mesg(
+                f"  [Level-2] Progress: {i + 1}/{total} "
+                f"(valid: {valid_count})"
+            )
 
     if verbose:
         logger.okay(
