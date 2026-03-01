@@ -298,7 +298,9 @@ _LEVEL2_HEADERS = {
 }
 
 # 正常 Google 搜索响应的最小大小 (bytes)
-# 正常: ~86KB (JS 搜索页面), CAPTCHA/sorry: <10KB
+# 注意: Google 对 HTTP 请求返回 JS SPA（~86KB），非服务器渲染 HTML。
+# 此处仅验证代理能访问 Google 搜索（连通性检测），不做 HTML 解析。
+# 实际搜索结果解析需使用 Playwright 浏览器渲染（参见 scraper.py）。
 _MIN_SEARCH_RESPONSE_SIZE = 30000
 
 

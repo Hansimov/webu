@@ -58,6 +58,7 @@ class ProxyStatsResponse(BaseModel):
     total_checked: int = 0
     level1_passed: int = 0
     total_valid: int = 0
+    total_abandoned: int = 0
     valid_ratio: str = "N/A"
 
 

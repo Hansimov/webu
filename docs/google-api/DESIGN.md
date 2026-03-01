@@ -32,11 +32,12 @@
 │              │ collector  │    │ checker       │              │
 │              └───────────┘    └──────────────┘              │
 │                                                              │
-│  ┌─────────────────────────────────────────┐                │
-│  │  CLI 管理 (cli.py) — ggsc 命令            │                │
-│  │  start / stop / restart / status / logs   │                │
-│  │  collect / check / stats / refresh / diag │                │
-│  └─────────────────────────────────────────┘                │
+│  ┌─────────────────────────────────────────────────┐        │
+│  │  CLI 管理 (cli.py) — ggsc 命令                    │        │
+│  │  start / stop / restart / status / logs           │        │
+│  │  collect / check / stats / refresh / diag         │        │
+│  │  abandon / parse-test                             │        │
+│  └─────────────────────────────────────────────────┘        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -144,12 +145,14 @@ proxy_collector.py      proxy_checker.py
 - HTTP 代理用 `proxy=` 参数，SOCKS5 用 `ProxyConnector`
 - 可过滤 ~85% 的死亡 IP
 
-**Level-2 (搜索验证)**：
+**Level-2 (搜索连通性验证)**：
 - 使用 aiohttp 发送 HTTP 请求到 Google 搜索 URL
 - 检查响应大小（正常 ~86KB, CAPTCHA/sorry <10KB）
 - 检测 CAPTCHA / sorry 重定向标记
 - HTTP 请求不触发 Google 的浏览器自动化检测
 - 记录 `is_valid`、`latency_ms`、`last_error`、`check_level`
+
+> **注意**：Level-2 仅验证代理能访问 Google 搜索（连通性检测）。Google 对 HTTP 请求返回 JS SPA（~86KB, 98% JavaScript），非服务器渲染 HTML，无法直接用 BeautifulSoup 解析搜索结果。实际搜索结果解析必须使用 Playwright 浏览器渲染（参见 `scraper.py`）。
 
 ### 3.3 搜索执行流程
 
@@ -241,6 +244,10 @@ proxy_collector.py      proxy_checker.py
 | `success_count` | int | 累计成功次数 |
 | `last_error` | string | 最后一次错误信息 |
 | `check_level` | int | 检测级别（1=Level-1, 2=Level-2）|
+| `is_abandoned` | bool | 是否已废弃 |
+| `abandoned_at` | string | 废弃标记时间 |
+| `abandoned_reason` | string | 废弃原因 |
+| `revived_at` | string | 复活时间（废弃代理重新通过检测时设置）|
 
 唯一索引：`(ip, port, protocol)`
 查询索引：`(is_valid, latency_ms)`
@@ -259,6 +266,66 @@ proxy_collector.py      proxy_checker.py
 | POST | `/proxy/refresh` | 一键刷新（采集+检测）|
 | GET | `/proxy/valid` | 获取可用代理列表 |
 | GET | `/proxy/get` | 获取推荐的可用代理 |
+
+---
+
+## 7. 废弃机制 (Abandoned Mechanism)
+
+### 7.1 设计目标
+
+免费代理池中大量代理长期不可用，持续检测浪费资源。废弃机制自动将连续失败的代理标记为 "废弃"（`is_abandoned=True`），使其不参与后续检测和选取，同时保留复活通道。
+
+### 7.2 废弃条件
+
+代理同时满足以下条件时被标记废弃：
+1. `fail_count >= ABANDONED_FAIL_THRESHOLD`（默认 5）
+2. `checked_at` 距今超过 `ABANDONED_STALE_HOURS`（默认 24 小时）
+3. `is_valid = False`
+4. 尚未被标记废弃
+
+### 7.3 关键常量
+
+| 常量 | 默认值 | 说明 |
+|------|--------|------|
+| `ABANDONED_FAIL_THRESHOLD` | 5 | 连续失败 N 次后判定废弃 |
+| `ABANDONED_STALE_HOURS` | 24 | 最后检测距今超过 N 小时 |
+
+### 7.4 核心方法
+
+| 层 | 方法 | 说明 |
+|----|------|------|
+| `MongoProxyStore` | `mark_abandoned(ip, port, protocol, reason)` | 手动标记单个代理废弃 |
+| `MongoProxyStore` | `scan_and_mark_abandoned()` | 批量扫描并标记满足条件的代理 |
+| `MongoProxyStore` | `get_abandoned_count()` | 获取废弃代理数量 |
+| `MongoProxyStore` | `get_abandoned_ips_set()` | 获取废弃 IP 集合（用于快速过滤） |
+| `MongoProxyStore` | `revive_proxy(ip, port, protocol)` | 复活废弃代理（重新检测通过时） |
+| `ProxyPool` | `scan_abandoned()` | 编排层调用 `scan_and_mark_abandoned()` |
+| `ProxyPool` | `get_abandoned_stats()` | 返回废弃代理统计 |
+
+### 7.5 数据流
+
+```
+[google_ips] ──查找 fail_count >= 5 且 stale──→ [scan_and_mark_abandoned]
+                                                       │
+                                                 $set is_abandoned=True
+                                                 $set abandoned_at=now
+                                                       │
+                                                       ▼
+                                               [废弃代理被排除]
+                                                 ├── get_valid_proxies() 排除 is_abandoned
+                                                 ├── check 时跳过废弃代理
+                                                 └── stats 中显示 total_abandoned
+
+[重新检测通过] ──→ [revive_proxy]
+                       │
+                 $set is_abandoned=False
+                 $set revived_at=now
+                 $set fail_count=0
+```
+
+### 7.6 时间戳格式
+
+所有时间戳统一使用 Asia/Shanghai (+8) 时区，格式为 `YYYY-MM-DD HH:MM:SS`（无时区后缀，空格分隔日期和时间）。通过 `_now_shanghai()` 辅助函数生成。
 
 ---
 

@@ -3,16 +3,18 @@
 命令行工具: ggsc
 
 支持的命令：
-  start   — 启动 FastAPI 搜索服务（后台）
-  stop    — 停止服务
-  restart — 重启服务
-  status  — 查看服务状态
-  logs    — 查看服务日志
-  collect — 采集代理 IP
-  check   — 检测代理 IP 可用性
-  stats   — 查看代理池统计
-  refresh — 一键刷新（采集 + 检测）
-  diag    — 全面诊断 + 生成报告
+  start      — 启动 FastAPI 搜索服务（后台）
+  stop       — 停止服务
+  restart    — 重启服务
+  status     — 查看服务状态
+  logs       — 查看服务日志
+  collect    — 采集代理 IP
+  check      — 检测代理 IP 可用性
+  stats      — 查看代理池统计
+  refresh    — 一键刷新（采集 + 检测）
+  abandon    — 扫描并标记废弃代理
+  parse-test — 用有效代理测试 Google 搜索结果解析
+  diag       — 全面诊断 + 生成报告
 """
 
 import argparse
@@ -262,6 +264,47 @@ def cmd_refresh(args):
     logger.okay(f"  ✓ Refresh done: {logstr.mesg(result.get('stats', {}))}")
 
 
+def cmd_abandon(args):
+    """扫描并标记废弃代理。"""
+    from .proxy_pool import ProxyPool
+
+    pool = ProxyPool(verbose=True)
+    count = pool.scan_abandoned()
+    stats = pool.get_abandoned_stats()
+    logger.okay(
+        f"  ✓ Newly abandoned: {logstr.mesg(count)}, "
+        f"total abandoned: {logstr.mesg(stats['total_abandoned'])}"
+    )
+
+
+def cmd_parse_test(args):
+    """用有效代理测试 Google 搜索结果解析。"""
+    from .proxy_pool import ProxyPool
+
+    query = getattr(args, "query", "python programming")
+    limit = getattr(args, "limit", 5)
+    pool = ProxyPool(verbose=True)
+
+    async def _run():
+        return await pool.search_parse_test(query=query, limit=limit)
+
+    results = asyncio.run(_run())
+
+    # 打印详细结果
+    for i, r in enumerate(results):
+        if r["success"]:
+            logger.okay(f"\n  [{i+1}] ✓ {r['proxy_url']} ({r['latency_ms']}ms)")
+            logger.mesg(f"      Results: {r['result_count']}")
+            logger.mesg(f"      Total: {r['total_results_text']}")
+            for res in r["results"][:3]:
+                logger.mesg(f"      - {res['title']}")
+                logger.mesg(f"        {res['url']}")
+                if res.get("snippet"):
+                    logger.mesg(f"        {res['snippet'][:100]}...")
+        else:
+            logger.warn(f"\n  [{i+1}] × {r['proxy_url']}: {r['error']}")
+
+
 def cmd_diag(args):
     """全面诊断：采集 + 全量检测 + 生成报告。"""
     from .proxy_pool import ProxyPool
@@ -271,12 +314,14 @@ def cmd_diag(args):
 
     import time
     from collections import Counter, defaultdict
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
+
+    TZ_SHANGHAI = timezone(timedelta(hours=8))
 
     store = MongoProxyStore(verbose=True)
     collector = ProxyCollector(store=store, verbose=True)
 
-    report = {"timestamp": datetime.now(timezone.utc).isoformat()}
+    report = {"timestamp": datetime.now(TZ_SHANGHAI).strftime("%Y-%m-%d %H:%M:%S")}
 
     # Phase 1: Collect
     logger.note("=" * 60)
@@ -645,6 +690,16 @@ def main():
     sp_refresh = subparsers.add_parser("refresh", help="一键刷新：采集 + 检测")
     sp_refresh.add_argument("--limit", type=int, default=200, help="检测数量上限")
     sp_refresh.set_defaults(func=cmd_refresh)
+
+    # abandon
+    sp_abandon = subparsers.add_parser("abandon", help="扫描并标记废弃代理")
+    sp_abandon.set_defaults(func=cmd_abandon)
+
+    # parse-test
+    sp_parse = subparsers.add_parser("parse-test", help="用有效代理测试搜索结果解析")
+    sp_parse.add_argument("--query", default="python programming", help="搜索查询词")
+    sp_parse.add_argument("--limit", type=int, default=5, help="测试代理数量")
+    sp_parse.set_defaults(func=cmd_parse_test)
 
     # diag
     sp_diag = subparsers.add_parser("diag", help="全面诊断：采集 + 全量检测 + 生成报告")

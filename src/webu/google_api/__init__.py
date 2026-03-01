@@ -1,4 +1,7 @@
-from .constants import MONGO_CONFIGS, PROXY_SOURCES, MongoConfigsType
+from .constants import (
+    MONGO_CONFIGS, PROXY_SOURCES, MongoConfigsType,
+    ABANDONED_FAIL_THRESHOLD, ABANDONED_STALE_HOURS, ABANDONED_COOLDOWN_HOURS,
+)
 from .mongo import MongoProxyStore
 from .proxy_collector import ProxyCollector
 from .proxy_checker import ProxyChecker, check_level1_batch, check_level2_batch

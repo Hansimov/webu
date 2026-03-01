@@ -76,6 +76,13 @@ ggsc stats
 
 # 全面诊断（采集 + 全量检测 + 生成报告）
 ggsc diag
+
+# 扫描并标记废弃代理（连续失败 >= 5 次且距今 > 24h 的无效代理）
+ggsc abandon
+
+# 用有效代理测试 Google 搜索结果解析（Playwright 浏览器渲染）
+ggsc parse-test
+ggsc parse-test --query "python tutorial" --limit 10
 ```
 
 #### 两级检测说明
@@ -83,9 +90,11 @@ ggsc diag
 | 级别 | 方式 | 目的 | 速度 | 流量 |
 |------|------|------|------|------|
 | Level-1 | aiohttp HTTP 请求 | 过滤死亡 IP | 极快（~100 并发） | 极小（204 响应） |
-| Level-2 | Playwright 浏览器 | 验证 Google 搜索 | 较慢（~10 并发） | 较大（渲染搜索页）|
+| Level-2 | aiohttp HTTP 请求 | 验证 Google 搜索连通性 | 较慢（~10 并发） | 中等（~86KB JS SPA）|
 
 典型结果：免费 SOCKS5 代理 Level-1 通过率 ~15-50%，SOCKS4 ~38%，HTTP ~0%。Level-2 通过率较低（Google 反爬）。
+
+> **注意**：Level-2 通过 aiohttp 发送 HTTP 请求验证连通性，不做 HTML 解析。Google 对 HTTP 请求返回 JS SPA（~86KB, 98% JavaScript），无法直接解析搜索结果。实际搜索结果解析需使用 `ggsc parse-test`（Playwright 浏览器渲染）。
 
 ---
 

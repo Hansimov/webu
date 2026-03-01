@@ -100,8 +100,11 @@ class ProxyCollector:
     def collect_all(self) -> dict:
         """从所有配置的代理源采集 IP 并存储到 MongoDB。
 
+        自动过滤掉已废弃的代理，不进行重复写入。
+
         Returns:
-            {"total_fetched": int, "inserted": int, "updated": int, "total": int}
+            {"total_fetched": int, "inserted": int, "updated": int, "total": int,
+             "abandoned_skipped": int}
         """
         logger.note(f"> Collecting proxies from {len(self.sources)} sources ...")
         all_ips = []
@@ -112,12 +115,27 @@ class ProxyCollector:
 
         logger.note(f"> Total fetched: {logstr.mesg(len(all_ips))} proxies")
 
+        # 过滤掉已废弃的代理
+        abandoned_set = self.store.get_abandoned_ips_set()
+        if abandoned_set:
+            before_count = len(all_ips)
+            all_ips = [
+                ip for ip in all_ips
+                if (ip["ip"], ip["port"], ip["protocol"]) not in abandoned_set
+            ]
+            skipped = before_count - len(all_ips)
+            if skipped > 0:
+                logger.mesg(f"  ♻ Skipped {logstr.mesg(skipped)} abandoned proxies")
+        else:
+            skipped = 0
+
         if all_ips:
             result = self.store.upsert_ips(all_ips)
         else:
             result = {"inserted": 0, "updated": 0, "total": 0}
 
-        result["total_fetched"] = len(all_ips)
+        result["total_fetched"] = len(all_ips) + skipped
+        result["abandoned_skipped"] = skipped
         return result
 
     def collect_source(self, source_name: str) -> dict:

@@ -119,6 +119,19 @@ tests/google_api/
 │   ├── stats 命令 mock
 │   └── check --level 参数验证
 │
+├── test_abandoned.py          # 废弃机制 — 23 个测试
+│   ├── TestAbandonedMechanism (12 个)
+│   │   ├── 标记废弃 (mark/scan)
+│   │   ├── 复活代理 (revive)
+│   │   ├── 排除废弃代理（查询过滤）
+│   │   └── 自动复活
+│   ├── TestTimestamp (4 个)
+│   │   ├── 格式验证、时区、无后缀、空格分隔
+│   ├── TestProxyPoolAbandoned (3 个)
+│   │   ├── Pool 层 scan/stats/排除
+│   └── TestAbandonedConstants (4 个)
+│       └── 常量验证
+│
 ├── test_cli_e2e.py           # CLI E2E — 13 个测试
 │   ├── ggsc --help 输出验证
 │   ├── 所有 10 个子命令 --help
@@ -210,12 +223,13 @@ asyncio_mode = auto
 | scraper | 6 | 2 | 8 |
 | mongo | 0 | 7 | 7 |
 | cli | 14 | 0 | 14 |
+| abandoned | 23 | 0 | 23 |
 | cli_e2e | 10 | 3 | 13 |
 | server | 0 | 5 | 5 |
 | live_server | 0 | 18 | 18 |
 | live | 5 | 14+ | 19+ |
 | search | 0 | 5 | 5 |
-| **合计** | **~61** | **~59** | **~120** |
+| **合计** | **~84** | **~59** | **~143** |
 
 ---
 
