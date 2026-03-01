@@ -1,6 +1,6 @@
 [project]
 name = "webu"
-version = "0.7.4"
+version = "0.8.0"
 authors = [
     { name="Hansimov" },
 ]
@@ -12,7 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright", "psutil"]
+dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright", "psutil", "pymongo", "pytest-asyncio"]
 
 [project.urls]
 Homepage = "https://github.com/Hansimov/webu"
