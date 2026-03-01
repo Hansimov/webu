@@ -1,6 +1,6 @@
 """FastAPI 搜索服务测试。
 
-运行: pytest tests/google-api/test_server.py -xvs
+运行: pytest tests/google_api/test_server.py -xvs
 """
 
 import pytest
@@ -16,7 +16,7 @@ class TestGoogleSearchServerIntegration:
 
     需要 MongoDB 在 localhost:27017 运行。
 
-    运行: pytest tests/google-api/test_server.py -xvs -m integration
+    运行: pytest tests/google_api/test_server.py -xvs -m integration
     """
 
     TEST_CONFIGS = {

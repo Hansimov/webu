@@ -115,7 +115,9 @@ class GoogleScraper:
 
         for attempt in range(retry_count + 1):
             # 获取代理
-            if proxy_url:
+            if proxy_url == "direct":
+                current_proxy = None  # 直连模式，不使用代理
+            elif proxy_url:
                 current_proxy = proxy_url
             else:
                 proxy_info = self.proxy_pool.get_proxy()

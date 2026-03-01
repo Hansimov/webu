@@ -17,3 +17,6 @@ dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4
 [project.urls]
 Homepage = "https://github.com/Hansimov/webu"
 Issues = "https://github.com/Hansimov/webu/issues"
+
+[project.scripts]
+google-api-cli = "webu.google_api.cli:main"

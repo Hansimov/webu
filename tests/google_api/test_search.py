@@ -1,6 +1,6 @@
 """Google 搜索全流程集成测试。
 
-运行: pytest tests/google-api/test_search.py -xvs -m integration
+运行: pytest tests/google_api/test_search.py -xvs -m integration
 """
 
 import asyncio

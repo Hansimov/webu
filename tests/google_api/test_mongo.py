@@ -1,6 +1,6 @@
 """MongoDB 代理存储测试。
 
-运行: pytest tests/google-api/test_mongo.py -xvs
+运行: pytest tests/google_api/test_mongo.py -xvs
 """
 
 import pytest
@@ -22,7 +22,7 @@ class TestMongoProxyStoreIntegration:
     需要 MongoDB 在 localhost:27017 运行。
     使用测试数据库 webu_test 避免影响生产数据。
 
-    运行: pytest tests/google-api/test_mongo.py -xvs -m integration
+    运行: pytest tests/google_api/test_mongo.py -xvs -m integration
     """
 
     TEST_CONFIGS = {

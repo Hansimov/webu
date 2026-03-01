@@ -6,7 +6,7 @@ import requests
 from tclogger import logger, logstr
 from typing import Optional
 
-from .constants import PROXY_SOURCES, ProxySourceType
+from .constants import PROXY_SOURCES, ProxySourceType, FETCH_PROXY
 from .mongo import MongoProxyStore
 
 
@@ -23,11 +23,13 @@ class ProxyCollector:
         store: MongoProxyStore,
         sources: list[ProxySourceType] = None,
         timeout: int = 30,
+        fetch_proxy: str = FETCH_PROXY,
         verbose: bool = True,
     ):
         self.store = store
         self.sources = sources or PROXY_SOURCES
         self.timeout = timeout
+        self.fetch_proxy = fetch_proxy
         self.verbose = verbose
 
     def _parse_proxy_line(self, line: str, default_protocol: str) -> Optional[dict]:
@@ -73,7 +75,8 @@ class ProxyCollector:
             logger.mesg(f"  URL: {url}")
 
         try:
-            resp = requests.get(url, timeout=self.timeout)
+            proxies = {"http": self.fetch_proxy, "https": self.fetch_proxy} if self.fetch_proxy else None
+            resp = requests.get(url, timeout=self.timeout, proxies=proxies)
             resp.raise_for_status()
             text = resp.text
         except Exception as e:
@@ -107,6 +110,34 @@ class ProxyCollector:
             all_ips.extend(ips)
 
         logger.note(f"> Total fetched: {logstr.mesg(len(all_ips))} proxies")
+
+        if all_ips:
+            result = self.store.upsert_ips(all_ips)
+        else:
+            result = {"inserted": 0, "updated": 0, "total": 0}
+
+        result["total_fetched"] = len(all_ips)
+        return result
+
+    def collect_source(self, source_name: str) -> dict:
+        """从指定名称的代理源采集 IP 并存储到 MongoDB。
+
+        Args:
+            source_name: 代理源标识名（如 'proxifly', 'thespeedx', 'zloi-user'）
+
+        Returns:
+            {"total_fetched": int, "inserted": int, "updated": int, "total": int}
+        """
+        matched = [s for s in self.sources if s["source"] == source_name]
+        if not matched:
+            logger.warn(f"  × Unknown source: {source_name}")
+            return {"total_fetched": 0, "inserted": 0, "updated": 0, "total": 0}
+
+        logger.note(f"> Collecting from source: {logstr.mesg(source_name)} ...")
+        all_ips = []
+        for source in matched:
+            ips = self.fetch_source(source)
+            all_ips.extend(ips)
 
         if all_ips:
             result = self.store.upsert_ips(all_ips)

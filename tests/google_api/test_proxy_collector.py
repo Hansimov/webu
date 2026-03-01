@@ -1,6 +1,6 @@
 """代理采集 + 存储测试。
 
-运行: pytest tests/google-api/test_proxy_collector.py -xvs
+运行: pytest tests/google_api/test_proxy_collector.py -xvs
 """
 
 import pytest
@@ -111,7 +111,7 @@ class TestProxySources:
 class TestProxyCollectorIntegration:
     """集成测试：实际从 URL 拉取代理列表。
 
-    运行: pytest tests/google-api/test_proxy_collector.py -xvs -m integration
+    运行: pytest tests/google_api/test_proxy_collector.py -xvs -m integration
     """
 
     def test_fetch_single_source(self):

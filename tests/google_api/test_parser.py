@@ -1,6 +1,6 @@
 """HTML 解析器测试。
 
-运行: pytest tests/google-api/test_parser.py -xvs
+运行: pytest tests/google_api/test_parser.py -xvs
 """
 
 import pytest
