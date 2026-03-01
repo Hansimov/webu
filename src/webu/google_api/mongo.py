@@ -218,6 +218,7 @@ class MongoProxyStore:
                     "checked_at": now,
                     "last_error": "",
                     "fail_count": 0,
+                    "check_level": result.get("check_level", 0),
                 },
                 "$inc": {"success_count": 1},
                 "$setOnInsert": {
@@ -234,6 +235,7 @@ class MongoProxyStore:
                     "latency_ms": 0,
                     "checked_at": now,
                     "last_error": result.get("last_error", ""),
+                    "check_level": result.get("check_level", 0),
                 },
                 "$inc": {"fail_count": 1},
                 "$setOnInsert": {
@@ -295,9 +297,17 @@ class MongoProxyStore:
         total_ips = self.get_ips_count()
         total_checked = self.get_google_ips_count()
         total_valid = self.get_valid_count()
+        # Level-1 通过的 IP（check_level >= 1 且 is_valid 或 check_level == 1）
+        level1_passed = self.db[COLLECTION_GOOGLE_IPS].count_documents({
+            "$or": [
+                {"is_valid": True},
+                {"check_level": 1, "is_valid": True},
+            ]
+        })
         return {
             "total_ips": total_ips,
             "total_checked": total_checked,
+            "level1_passed": level1_passed,
             "total_valid": total_valid,
             "valid_ratio": f"{total_valid / total_checked * 100:.1f}%"
             if total_checked > 0

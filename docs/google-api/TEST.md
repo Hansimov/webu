@@ -82,11 +82,14 @@ tests/google_api/
 │   ├── 代理源配置验证
 │   └── [集成] 实际 URL 拉取
 │
-├── test_proxy_checker.py     # 代理检测 — 11 个测试
-│   ├── 代理 URL 构建
-│   ├── 随机化辅助函数
-│   ├── 空列表边界情况
-│   └── [集成] 单个代理检测
+├── test_proxy_checker.py     # 代理检测 — 15 个测试
+│   ├── 代理 URL 构建（http/https/socks5/socks4/unknown）
+│   ├── 随机化辅助函数（UA/viewport/locale）
+│   ├── Level-1 端点配置验证
+│   ├── Level-1/Level-2 空列表边界情况
+│   ├── ProxyChecker 初始化 + 批量级别选择
+│   └── [集成] Level-1 真实代理检测
+│                              两级流水线检测
 │
 ├── test_scraper.py           # Scraper — 8 个测试
 │   ├── 初始化参数
@@ -100,25 +103,32 @@ tests/google_api/
 │   ├── 排序/过滤查询
 │   └── 统计信息
 │
-├── test_cli.py               # CLI — 9 个测试
+├── test_cli.py               # CLI — 14 个测试
 │   ├── PID 文件读写删除
 │   ├── 进程状态检测
 │   ├── 命令行 --help 输出
-│   └── 子命令帮助
+│   ├── 子命令帮助
+│   ├── collect 命令 mock
+│   ├── stats 命令 mock
+│   └── check --level 参数验证
 │
 ├── test_server.py            # FastAPI — 5 个测试 [全部集成]
 │   ├── 健康检查
 │   ├── 代理统计/采集
 │   └── 搜索 GET/POST
 │
-├── test_live.py              # 实时环境 — 14 个测试
+├── test_live.py              # 实时环境 — 19+ 个测试
 │   ├── MongoDB 连接/索引/读写
 │   ├── 代理源可访问性（参数化 6 源）
 │   ├── 全链路采集+存储
 │   ├── 代理池刷新流程
 │   ├── Playwright 浏览器启动
 │   ├── Google 可达性
-│   └── Parser 健壮性（各种边界 HTML）
+│   ├── Parser 健壮性（各种边界 HTML）
+│   ├── 两级检测：Level-1 过滤死亡 IP
+│   ├── 两级检测：HTTP 代理低通过率验证
+│   ├── 两级检测：完整流水线
+│   └── Playwright 代理集成验证（IP 路由）
 │
 ├── test_search.py            # 全流程搜索 — 5 个测试 [全部集成]
 │   ├── 采集代理
@@ -171,14 +181,14 @@ asyncio_mode = auto
 |------|---------|---------|------|
 | parser | 9 | 0 | 9 |
 | proxy_collector | 7 | 2 | 9 |
-| proxy_checker | 6 | 1 | 7 |
+| proxy_checker | 10 | 3 | 13 |
 | scraper | 6 | 2 | 8 |
 | mongo | 0 | 7 | 7 |
-| cli | 9 | 0 | 9 |
+| cli | 14 | 0 | 14 |
 | server | 0 | 5 | 5 |
-| live | 5 | 9+ | 14+ |
+| live | 5 | 14+ | 19+ |
 | search | 0 | 5 | 5 |
-| **合计** | **~42** | **~31** | **~73** |
+| **合计** | **~51** | **~38** | **~89** |
 
 ---
 

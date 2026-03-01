@@ -4,14 +4,12 @@
 """
 
 import os
-import signal
 import subprocess
 import sys
-import time
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 
 from webu.google_api.cli import (
     _read_pid,
@@ -35,16 +33,13 @@ from webu.google_api.cli import (
 class TestPIDManagement:
     """PID 文件读写测试。"""
 
-    def setup_method(self):
-        """确保测试前清理状态。"""
-        self._test_pid_file = DATA_DIR / "test_server.pid"
-
     def test_write_and_read_pid(self, tmp_path):
         """测试 PID 文件写入和读取。"""
         pid_file = tmp_path / "test.pid"
         with patch("webu.google_api.cli.PID_FILE", pid_file):
-            _write_pid(12345)
-            assert pid_file.read_text().strip() == "12345"
+            with patch("webu.google_api.cli.DATA_DIR", tmp_path):
+                _write_pid(12345)
+                assert pid_file.read_text().strip() == "12345"
 
         with patch("webu.google_api.cli.PID_FILE", pid_file):
             pid = _read_pid()
@@ -76,7 +71,6 @@ class TestPIDManagement:
 
     def test_is_process_running_nonexistent(self):
         """测试不存在的 PID。"""
-        # 使用一个极大的 PID 号，几乎不可能存在
         assert _is_process_running(99999999) is False
 
 
@@ -105,20 +99,24 @@ class TestCLICommands:
             # PID 文件应被清理
             assert not pid_file.exists()
 
-    def test_stats_command(self):
-        """测试 stats 命令 — mock ProxyPool。"""
-        mock_pool = MagicMock()
-        mock_pool.stats.return_value = {
-            "total_ips": 1000,
-            "total_checked": 500,
-            "total_valid": 50,
-            "valid_ratio": "10.0%",
+    def test_collect_command(self):
+        """测试 collect 命令调用 — mock DB 依赖。"""
+        args = MagicMock()
+        args.source = None
+        # cmd_collect 内部做 from .proxy_pool import ProxyPool 的本地导入
+        # 我们 patch proxy_pool 模块中的 ProxyPool 类
+        mock_pool_instance = MagicMock()
+        mock_pool_instance.collect.return_value = {
+            "total_fetched": 100, "inserted": 50, "updated": 50, "total": 100
         }
+        with patch("webu.google_api.proxy_pool.ProxyPool", return_value=mock_pool_instance):
+            cmd_collect(args)
 
-        with patch("webu.google_api.proxy_pool.ProxyPool", return_value=mock_pool):
-            args = MagicMock()
-            # 不做实际调用，因为 cmd_stats 内部导入模块
-            # 只确保不崩溃即可
+    def test_stats_command(self):
+        """测试 stats 命令。"""
+        args = MagicMock()
+        # Verify it doesn't crash structurally
+        # (actual MongoDB connection is needed for full test)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -144,14 +142,14 @@ class TestCLIEntry:
 
     def test_subcommand_help(self):
         """测试子命令 --help 输出。"""
-        for cmd in ["start", "stop", "status", "logs", "collect", "check", "stats"]:
+        for cmd in ["start", "stop", "restart", "status", "logs", "collect", "check", "stats", "refresh"]:
             result = subprocess.run(
                 [sys.executable, "-m", "webu.google_api", cmd, "--help"],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-            assert result.returncode == 0, f"{cmd} --help failed"
+            assert result.returncode == 0, f"{cmd} --help failed: {result.stderr}"
 
     def test_no_args_shows_help(self):
         """测试无参数时显示帮助。"""
@@ -161,5 +159,15 @@ class TestCLIEntry:
             text=True,
             timeout=10,
         )
-        # 无参数时应显示帮助（不应崩溃）
         assert result.returncode == 0
+
+    def test_check_level_arg(self):
+        """测试 check 子命令的 --level 参数。"""
+        result = subprocess.run(
+            [sys.executable, "-m", "webu.google_api", "check", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert "level" in result.stdout.lower()

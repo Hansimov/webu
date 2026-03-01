@@ -147,22 +147,4 @@ class ProxyCollector:
         result["total_fetched"] = len(all_ips)
         return result
 
-    def collect_source(self, source_name: str) -> dict:
-        """从指定的代理源采集。"""
-        matched = [s for s in self.sources if s["source"] == source_name]
-        if not matched:
-            logger.warn(f"  × Unknown source: {source_name}")
-            return {"total_fetched": 0, "inserted": 0, "updated": 0, "total": 0}
 
-        all_ips = []
-        for source in matched:
-            ips = self.fetch_source(source)
-            all_ips.extend(ips)
-
-        if all_ips:
-            result = self.store.upsert_ips(all_ips)
-        else:
-            result = {"inserted": 0, "updated": 0, "total": 0}
-
-        result["total_fetched"] = len(all_ips)
-        return result

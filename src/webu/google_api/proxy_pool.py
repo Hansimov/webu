@@ -45,9 +45,9 @@ class ProxyPool:
 
     # ── 检测 ──────────────────────────────────────────────────
 
-    async def check_unchecked(self, limit: int = 500) -> list[dict]:
+    async def check_unchecked(self, limit: int = 500, level: str = "all") -> list[dict]:
         """检测尚未检测过的 IP。"""
-        return await self.checker.check_unchecked(limit=limit)
+        return await self.checker.check_unchecked(limit=limit, level=level)
 
     async def check_stale(self, limit: int = 200) -> list[dict]:
         """重新检测过期的 IP。"""

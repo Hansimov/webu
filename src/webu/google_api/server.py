@@ -56,6 +56,7 @@ class ProxyStatsResponse(BaseModel):
 
     total_ips: int = 0
     total_checked: int = 0
+    level1_passed: int = 0
     total_valid: int = 0
     valid_ratio: str = "N/A"
 
@@ -204,11 +205,15 @@ def create_google_search_server(
             "unchecked",
             description="检测模式: unchecked=未检测的, stale=过期的, all=全部",
         ),
+        level: str = Query(
+            "all",
+            description="检测级别: 1=快速检测, 2=Google搜索, all=全部",
+        ),
     ):
-        """检测代理 IP 可用性。"""
+        """检测代理 IP 可用性（支持两级检测）。"""
         _ensure_ready()
         if mode == "unchecked":
-            results = await pool.check_unchecked(limit=limit)
+            results = await pool.check_unchecked(limit=limit, level=level)
         elif mode == "stale":
             results = await pool.check_stale(limit=limit)
         elif mode == "all":
@@ -256,6 +261,11 @@ def create_google_search_server(
         return {k: v for k, v in proxy.items() if k != "_id"}
 
     return app
+
+
+def app_instance():
+    """工厂函数 — 供 uvicorn --factory 使用。"""
+    return create_google_search_server()
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -45,8 +45,17 @@ python -m webu.google_api collect
 # 从指定代理源采集
 python -m webu.google_api collect --source proxifly
 
-# 检测代理可用性（默认 50 个）
+# 检测代理可用性 — 两级检测（默认 50 个）
 python -m webu.google_api check
+
+# 仅运行 Level-1 快速检测（aiohttp，过滤死亡 IP）
+python -m webu.google_api check --level 1
+
+# 仅运行 Level-2 搜索检测（Playwright，验证 Google 搜索）
+python -m webu.google_api check --level 2
+
+# 运行完整两级检测（Level-1 过滤 → Level-2 验证）
+python -m webu.google_api check --level all
 
 # 检测更多代理
 python -m webu.google_api check --limit 200
@@ -60,6 +69,15 @@ python -m webu.google_api refresh
 # 查看代理池统计
 python -m webu.google_api stats
 ```
+
+#### 两级检测说明
+
+| 级别 | 方式 | 目的 | 速度 | 流量 |
+|------|------|------|------|------|
+| Level-1 | aiohttp HTTP 请求 | 过滤死亡 IP | 极快（~50 并发） | 极小（204 响应） |
+| Level-2 | Playwright 浏览器 | 验证 Google 搜索 | 较慢（~20 并发） | 较大（渲染搜索页）|
+
+典型结果：免费 SOCKS5 代理 Level-1 通过率 ~15-80%，Level-2 通过率较低（Google 反爬）。
 
 ---
 
@@ -253,9 +271,22 @@ python -m webu.google_api logs -n 50
 |------|--------|------|
 | `MONGO_CONFIGS` | `localhost:27017/webu` | MongoDB 连接 |
 | `FETCH_PROXY` | `http://127.0.0.1:11119` | 采集代理列表时使用的 HTTP 代理 |
-| `PROXY_CHECK_TIMEOUT` | 15 秒 | 代理检测超时 |
+| `PROXY_CHECK_TIMEOUT` | 15 秒 | Level-2 代理检测超时 |
 | `SEARCH_TIMEOUT` | 30 秒 | 搜索超时 |
-| `CHECK_CONCURRENCY` | 20 | 并发检测数 |
+| `CHECK_CONCURRENCY` | 20 | Level-2 并发检测数 |
+| Level-1 timeout | 10 秒 | Level-1 快速检测超时 |
+| Level-1 concurrency | 50 | Level-1 并发检测数 |
+
+### 5.1 依赖说明
+
+| 包 | 用途 |
+|----|------|
+| `aiohttp` | Level-1 快速 HTTP 代理检测 |
+| `aiohttp-socks` | Level-1 SOCKS4/5 代理支持 |
+| `playwright` | Level-2 浏览器检测 + Google 搜索 |
+| `pymongo` | MongoDB 数据存储 |
+| `fastapi` + `uvicorn` | HTTP API 服务 |
+| `beautifulsoup4` | HTML 解析 |
 
 ---
 

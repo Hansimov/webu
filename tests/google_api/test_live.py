@@ -14,6 +14,12 @@ import time
 from webu.google_api.constants import PROXY_SOURCES, MONGO_CONFIGS
 from webu.google_api.mongo import MongoProxyStore
 from webu.google_api.proxy_collector import ProxyCollector
+from webu.google_api.proxy_checker import (
+    ProxyChecker,
+    check_level1_batch,
+    check_level2_batch,
+    _build_proxy_url,
+)
 from webu.google_api.proxy_pool import ProxyPool
 from webu.google_api.scraper import GoogleScraper
 from webu.google_api.parser import GoogleResultParser
@@ -272,3 +278,142 @@ class TestParserRobustness:
         assert "<script>" not in clean
         assert "<style>" not in clean
         assert "Title" in clean
+
+
+# ═══════════════════════════════════════════════════════════════
+# 两级代理检测集成测试
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.integration
+class TestTwoLevelCheckLive:
+    """两级代理检测实时测试。"""
+
+    @pytest.mark.asyncio
+    async def test_level1_filters_dead_ips(self):
+        """Level-1 应该能快速过滤掉不可用的 IP。"""
+        store = MongoProxyStore(configs=TEST_CONFIGS, verbose=False)
+        collector = ProxyCollector(store=store, verbose=True)
+        collector.collect_all()
+
+        all_ips = store.get_all_ips(limit=0)
+        socks5 = [ip for ip in all_ips if ip["protocol"] == "socks5"][:30]
+        if len(socks5) < 5:
+            pytest.skip("Not enough SOCKS5 proxies")
+
+        results = await check_level1_batch(socks5, timeout_s=10, concurrency=30, verbose=True)
+
+        assert len(results) == len(socks5)
+        passed = [r for r in results if r["is_valid"]]
+        failed = [r for r in results if not r["is_valid"]]
+
+        print(f"\n  Level-1: {len(passed)} passed, {len(failed)} failed out of {len(socks5)}")
+
+        # 验证结果字段
+        for r in results:
+            assert "ip" in r
+            assert "port" in r
+            assert "protocol" in r
+            assert "proxy_url" in r
+            assert "is_valid" in r
+            assert "check_level" in r
+            assert r["check_level"] == 1
+
+    @pytest.mark.asyncio
+    async def test_level1_http_proxies_low_pass_rate(self):
+        """HTTP 代理应该有很低的通过率（大部分死亡）。"""
+        store = MongoProxyStore(configs=TEST_CONFIGS, verbose=False)
+        all_ips = store.get_all_ips(limit=0)
+        http_ips = [ip for ip in all_ips if ip["protocol"] == "http"][:20]
+        if len(http_ips) < 5:
+            pytest.skip("Not enough HTTP proxies")
+
+        results = await check_level1_batch(http_ips, timeout_s=8, concurrency=20, verbose=True)
+        passed = [r for r in results if r["is_valid"]]
+        print(f"\n  HTTP Level-1: {len(passed)}/{len(http_ips)} passed")
+
+    @pytest.mark.asyncio
+    async def test_full_two_level_pipeline(self):
+        """完整两级检测流水线测试。"""
+        store = MongoProxyStore(configs=TEST_CONFIGS, verbose=True)
+        checker = ProxyChecker(
+            store=store,
+            timeout=20,
+            concurrency=3,
+            level1_timeout=10,
+            level1_concurrency=30,
+            verbose=True,
+        )
+
+        all_ips = store.get_all_ips(limit=0)
+        socks5 = [ip for ip in all_ips if ip["protocol"] == "socks5"][:50]
+        if len(socks5) < 5:
+            pytest.skip("Not enough SOCKS5 proxies")
+
+        results = await checker.check_batch(socks5, level="all")
+        assert len(results) > 0
+
+        stats = store.get_stats()
+        print(f"\n  Stats after two-level check: {stats}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Playwright 代理集成验证
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.integration
+class TestPlaywrightProxyIntegration:
+    """验证 Playwright 代理集成是否正确。"""
+
+    @pytest.mark.asyncio
+    async def test_playwright_socks5_proxy_routes_traffic(self):
+        """验证 SOCKS5 代理通过 Playwright 确实路由了流量。"""
+        from playwright.async_api import async_playwright
+
+        store = MongoProxyStore(configs=TEST_CONFIGS, verbose=False)
+        all_ips = store.get_all_ips(limit=0)
+        socks5 = [ip for ip in all_ips if ip["protocol"] == "socks5"]
+
+        # 先运行 Level-1 找一些活的代理
+        if len(socks5) < 5:
+            pytest.skip("Not enough SOCKS5 proxies")
+
+        results = await check_level1_batch(socks5[:30], timeout_s=10, verbose=False)
+        passed = [r for r in results if r["is_valid"]]
+        if not passed:
+            pytest.skip("No SOCKS5 proxies passed Level-1")
+
+        proxy_url = passed[0]["proxy_url"]
+        print(f"\n  Using proxy: {proxy_url}")
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+
+            # Direct IP
+            ctx_direct = await browser.new_context(ignore_https_errors=True)
+            page_direct = await ctx_direct.new_page()
+            await page_direct.goto("https://httpbin.org/ip", timeout=15000)
+            direct_ip = await page_direct.inner_text("body")
+            await ctx_direct.close()
+
+            # Proxy IP
+            ctx_proxy = await browser.new_context(
+                proxy={"server": proxy_url},
+                ignore_https_errors=True,
+            )
+            page_proxy = await ctx_proxy.new_page()
+            await page_proxy.goto("https://httpbin.org/ip", timeout=15000)
+            proxy_ip = await page_proxy.inner_text("body")
+            await ctx_proxy.close()
+
+            await browser.close()
+
+        print(f"  Direct IP: {direct_ip.strip()}")
+        print(f"  Proxy IP:  {proxy_ip.strip()}")
+
+        # 代理 IP 应该不同于直连 IP
+        assert direct_ip.strip() != proxy_ip.strip(), (
+            "Proxy IP should differ from direct IP — proxy not working!"
+        )
+

@@ -78,7 +78,7 @@ proxy_collector.py      proxy_checker.py
 | `constants.py` | 全局常量和配置 | `MONGO_CONFIGS`, `PROXY_SOURCES`, `USER_AGENTS` |
 | `mongo.py` | MongoDB 数据访问层 | `MongoProxyStore` |
 | `proxy_collector.py` | 从免费代理列表 URL 采集 IP | `ProxyCollector` |
-| `proxy_checker.py` | 通过 Playwright 检测代理可用性 | `ProxyChecker` |
+| `proxy_checker.py` | 两级代理可用性检测 (aiohttp + Playwright) | `ProxyChecker`, `check_level1_batch`, `check_level2_batch` |
 | `proxy_pool.py` | 编排采集/检测/选取流程 | `ProxyPool` |
 | `scraper.py` | Playwright 驱动的 Google 搜索 | `GoogleScraper` |
 | `parser.py` | Google 搜索结果 HTML 解析 | `GoogleResultParser` |
@@ -105,28 +105,50 @@ proxy_collector.py      proxy_checker.py
 - 支持 `ip:port` 和 `protocol://ip:port` 两种格式
 - 通过 `(ip, port, protocol)` 唯一索引实现自动去重
 
-### 3.2 代理检测流程
+### 3.2 代理检测流程（两级系统）
 
 ```
 [MongoDB: ips] ──取未检测的 IP──→ [ProxyChecker]
                                       │
-                                      ▼ (并发)
-                              [Playwright Browser]
-                              创建 Context(proxy=ip)
-                              导航 Google 搜索
-                              检查结果/CAPTCHA
-                                      │
-                                      ▼
-                              [MongoProxyStore]
-                              upsert 到 google_ips
-                                      │
-                                      ▼
-                              [MongoDB: google_ips]
+                                ┌─────┴─────┐
+                                ▼           │
+                          [Level-1: aiohttp]│
+                          HTTP 请求轻量端点   │
+                          generate_204 (204)│
+                          robots.txt (200)  │
+                          并发 50，超时 10s   │
+                                │           │
+                          ┌─────┴─────┐     │
+                          ▼           ▼     │
+                       通过 IP      失败 IP  │
+                          │         存储结果 │
+                          ▼               │
+                    [Level-2: Playwright]  │
+                    Google 搜索页面检测     │
+                    检查结果/CAPTCHA       │
+                    并发 20，超时 15s       │
+                          │               │
+                          ▼               │
+                    [MongoProxyStore]      │
+                    upsert 到 google_ips   │
+                          │               │
+                          ▼               │
+                    [MongoDB: google_ips]──┘
 ```
 
-- 使用 `asyncio.Semaphore` 控制并发度（默认 20）
+**Level-1 (快速过滤)**：
+- 使用 `aiohttp` + `aiohttp-socks` 发送 HTTP 请求
+- 检测 Google 轻量端点（`generate_204`、`robots.txt`）
+- 并发度 50，超时 10s，流量极小
+- HTTP 代理用 `proxy=` 参数，SOCKS5 用 `ProxyConnector`
+- 可过滤 ~85% 的死亡 IP
+
+**Level-2 (搜索验证)**：
+- 使用 Playwright 浏览器访问 Google 搜索页面
+- 验证搜索结果 DOM（`#search`、`#rso`、`.g`）
+- 检测 CAPTCHA / 封禁
 - 每个代理通过新的 `BrowserContext` 独立检测
-- 记录 `is_valid`、`latency_ms`、`fail_count`、`success_count`
+- 记录 `is_valid`、`latency_ms`、`fail_count`、`success_count`、`check_level`
 
 ### 3.3 搜索执行流程
 
@@ -217,6 +239,7 @@ proxy_collector.py      proxy_checker.py
 | `fail_count` | int | 累计失败次数 |
 | `success_count` | int | 累计成功次数 |
 | `last_error` | string | 最后一次错误信息 |
+| `check_level` | int | 检测级别（1=Level-1, 2=Level-2）|
 
 唯一索引：`(ip, port, protocol)`
 查询索引：`(is_valid, latency_ms)`
