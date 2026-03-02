@@ -17,13 +17,15 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from webu.google_api.proxy_checker import (
+from webu.proxy_api.checker import (
     _build_proxy_url,
     _random_ua,
     _random_viewport,
     _random_locale,
     LEVEL1_ENDPOINTS,
     check_level1_batch,
+)
+from webu.google_api.checker import (
     check_level2_batch,
     ProxyChecker,
 )
@@ -179,7 +181,7 @@ class TestLevel1WithRealProxies:
     @pytest.mark.asyncio
     async def test_level1_socks5_sample(self):
         """从 MongoDB 取 SOCKS5 代理样本做 Level-1 测试。"""
-        from webu.google_api.mongo import MongoProxyStore
+        from webu.proxy_api.mongo import MongoProxyStore
         store = MongoProxyStore(verbose=False)
         all_ips = store.get_all_ips(limit=0)
         socks5 = [ip for ip in all_ips if ip["protocol"] == "socks5"]

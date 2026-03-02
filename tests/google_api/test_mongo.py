@@ -6,7 +6,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from webu.google_api.mongo import MongoProxyStore
+from webu.proxy_api.mongo import MongoProxyStore
 from webu.google_api.constants import MONGO_CONFIGS
 
 

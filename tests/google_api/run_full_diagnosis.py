@@ -25,14 +25,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from tclogger import logger, logstr
 
 from webu.google_api.constants import PROXY_SOURCES
-from webu.google_api.mongo import MongoProxyStore
-from webu.google_api.proxy_collector import ProxyCollector
-from webu.google_api.proxy_checker import (
+from webu.proxy_api.mongo import MongoProxyStore
+from webu.proxy_api.collector import ProxyCollector
+from webu.proxy_api.checker import (
     check_level1_batch,
-    check_level2_batch,
     _build_proxy_url,
     LEVEL1_ENDPOINTS,
 )
+from webu.google_api.checker import check_level2_batch
 
 
 REPORT_PATH = Path(__file__).resolve().parents[2] / "docs" / "google-api" / "REPORT.md"

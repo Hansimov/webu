@@ -12,15 +12,14 @@ import requests
 import time
 
 from webu.google_api.constants import PROXY_SOURCES, MONGO_CONFIGS
-from webu.google_api.mongo import MongoProxyStore
-from webu.google_api.proxy_collector import ProxyCollector
-from webu.google_api.proxy_checker import (
+from webu.proxy_api.mongo import MongoProxyStore
+from webu.proxy_api.collector import ProxyCollector
+from webu.proxy_api.checker import check_level1_batch, _build_proxy_url
+from webu.google_api.checker import (
     ProxyChecker,
-    check_level1_batch,
     check_level2_batch,
-    _build_proxy_url,
 )
-from webu.google_api.proxy_pool import ProxyPool
+from webu.google_api.pool import GoogleSearchPool as ProxyPool
 from webu.google_api.scraper import GoogleScraper
 from webu.google_api.parser import GoogleResultParser
 

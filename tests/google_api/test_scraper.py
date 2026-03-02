@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from webu.google_api.scraper import GoogleScraper
-from webu.google_api.proxy_pool import ProxyPool
+from webu.google_api.pool import GoogleSearchPool as ProxyPool
 from webu.google_api.parser import GoogleSearchResponse, GoogleSearchResult
 
 

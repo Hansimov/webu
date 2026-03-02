@@ -20,13 +20,13 @@ import aiohttp
 from aiohttp_socks import ProxyConnector
 from tclogger import logger, logstr
 
-from webu.google_api.proxy_checker import (
+from webu.proxy_api.checker import (
     LEVEL1_ENDPOINTS,
     _build_proxy_url,
     _random_ua,
     check_level1_batch,
 )
-from webu.google_api.mongo import MongoProxyStore
+from webu.proxy_api.mongo import MongoProxyStore
 
 
 async def test_direct_access():

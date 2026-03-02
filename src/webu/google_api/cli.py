@@ -1,4 +1,4 @@
-"""ggsc (GooGle-SearCh) CLI — 服务管理 + 代理池操作。
+"""ggsc (GooGle-SearCh) CLI — 服务管理 + 代理池操作 + Google 搜索。
 
 命令行工具: ggsc
 
@@ -8,8 +8,8 @@
   restart    — 重启服务
   status     — 查看服务状态
   logs       — 查看服务日志
-  collect    — 采集代理 IP
-  check      — 检测代理 IP 可用性
+  collect    — 采集代理 IP（委托给 proxy_api）
+  check      — 检测代理 IP 可用性（两级检测）
   stats      — 查看代理池统计
   refresh    — 一键刷新（采集 + 检测）
   abandon    — 扫描并标记废弃代理
@@ -196,10 +196,10 @@ def cmd_logs(args):
 
 def cmd_collect(args):
     """采集代理 IP。"""
-    from .proxy_pool import ProxyPool
+    from .pool import GoogleSearchPool
 
     source = getattr(args, "source", None)
-    pool = ProxyPool(verbose=True)
+    pool = GoogleSearchPool(verbose=True)
 
     if source:
         logger.note(f"> Collecting from source: {logstr.mesg(source)}")
@@ -211,13 +211,13 @@ def cmd_collect(args):
 
 
 def cmd_check(args):
-    """检测代理 IP 可用性。"""
-    from .proxy_pool import ProxyPool
+    """检测代理 IP 可用性（两级检测）。"""
+    from .pool import GoogleSearchPool
 
     limit = getattr(args, "limit", 200)
     mode = getattr(args, "mode", "unchecked")
     level = getattr(args, "level", "all")
-    pool = ProxyPool(verbose=True)
+    pool = GoogleSearchPool(verbose=True)
 
     async def _run():
         if mode == "unchecked":
@@ -241,9 +241,9 @@ def cmd_check(args):
 
 def cmd_stats(args):
     """查看代理池统计。"""
-    from .proxy_pool import ProxyPool
+    from .pool import GoogleSearchPool
 
-    pool = ProxyPool(verbose=False)
+    pool = GoogleSearchPool(verbose=False)
     stats = pool.stats()
     logger.note("> Proxy Pool Stats:")
     for key, val in stats.items():
@@ -252,10 +252,10 @@ def cmd_stats(args):
 
 def cmd_refresh(args):
     """一键刷新：采集 + 检测。"""
-    from .proxy_pool import ProxyPool
+    from .pool import GoogleSearchPool
 
     limit = getattr(args, "limit", 200)
-    pool = ProxyPool(verbose=True)
+    pool = GoogleSearchPool(verbose=True)
 
     async def _run():
         return await pool.refresh(check_limit=limit)
@@ -266,9 +266,9 @@ def cmd_refresh(args):
 
 def cmd_abandon(args):
     """扫描并标记废弃代理。"""
-    from .proxy_pool import ProxyPool
+    from .pool import GoogleSearchPool
 
-    pool = ProxyPool(verbose=True)
+    pool = GoogleSearchPool(verbose=True)
     count = pool.scan_abandoned()
     stats = pool.get_abandoned_stats()
     logger.okay(
@@ -279,11 +279,11 @@ def cmd_abandon(args):
 
 def cmd_parse_test(args):
     """用有效代理测试 Google 搜索结果解析。"""
-    from .proxy_pool import ProxyPool
+    from .pool import GoogleSearchPool
 
     query = getattr(args, "query", "python programming")
     limit = getattr(args, "limit", 5)
-    pool = ProxyPool(verbose=True)
+    pool = GoogleSearchPool(verbose=True)
 
     async def _run():
         return await pool.search_parse_test(query=query, limit=limit)
@@ -307,10 +307,10 @@ def cmd_parse_test(args):
 
 def cmd_diag(args):
     """全面诊断：采集 + 全量检测 + 生成报告。"""
-    from .proxy_pool import ProxyPool
-    from .mongo import MongoProxyStore
-    from .proxy_collector import ProxyCollector
-    from .proxy_checker import check_level1_batch, check_level2_batch
+    from webu.proxy_api.mongo import MongoProxyStore
+    from webu.proxy_api.collector import ProxyCollector
+    from webu.proxy_api.checker import check_level1_batch
+    from .checker import check_level2_batch
 
     import time
     from collections import Counter, defaultdict

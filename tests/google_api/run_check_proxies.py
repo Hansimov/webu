@@ -5,7 +5,7 @@
 
 import asyncio
 import argparse
-from webu.google_api.proxy_pool import ProxyPool
+from webu.google_api.pool import GoogleSearchPool as ProxyPool
 
 TEST_CONFIGS = {
     "host": "localhost",

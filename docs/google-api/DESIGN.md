@@ -1,6 +1,8 @@
 # ggsc (GooGle-SearCh) — 系统设计文档
 
-> 基于 Playwright + MongoDB 的自建 Google 搜索服务，核心设计思路和模块拆解。
+> 基于 undetected-chromedriver + Playwright CDP + MongoDB 的自建 Google 搜索服务。
+>
+> 代理池基础设施已拆分到 `proxy_api` 模块，详见 [proxy-api/DESIGN.md](../proxy-api/DESIGN.md)。
 
 ---
 
@@ -11,26 +13,28 @@
 │                       VPS 服务器                              │
 │                                                              │
 │  ┌──────────────┐     ┌───────────────────────┐             │
-│  │  FastAPI 服务  │────→│  Playwright 浏览器池     │             │
+│  │  FastAPI 服务  │────→│  UC+CDP 浏览器         │             │
 │  │  (server.py)  │     │  (scraper.py)          │             │
-│  │               │     │  ├── Browser instances  │             │
-│  │  /search      │     │  └── Context per search │             │
+│  │               │     │  ├── undetected Chrome  │             │
+│  │  /search      │     │  └── Playwright CDP API │             │
 │  │  /proxy/*     │     └───────────────────────┘             │
 │  │  /health      │              │                             │
 │  └──────────────┘              │                             │
 │         │                      ▼                             │
 │  ┌──────┴──────┐     ┌───────────────────┐                  │
-│  │  HTML 解析   │     │  代理池 (MongoDB)    │                  │
-│  │ (parser.py)  │     │  (mongo.py)        │                  │
+│  │  HTML 解析   │     │  proxy_api 代理池   │                  │
+│  │ (parser.py)  │     │  (MongoProxyStore)  │                  │
 │  └─────────────┘     │  ├── ips            │                  │
 │                      │  └── google_ips     │                  │
 │                      └───────────────────┘                  │
 │                           ▲       ▲                          │
 │                      ┌────┘       └────┐                     │
-│              ┌───────────┐    ┌──────────────┐              │
-│              │ 采集模块    │    │ 检测模块       │              │
-│              │ collector  │    │ checker       │              │
-│              └───────────┘    └──────────────┘              │
+│           ┌──────────────────┐  ┌──────────────┐            │
+│           │ Google 两级检测    │  │  Google 搜索池 │            │
+│           │ (checker.py)     │  │  (pool.py)    │            │
+│           │ L1(proxy_api)+L2 │  │ GoogleSearch  │            │
+│           └──────────────────┘  │  Pool         │            │
+│                                 └──────────────┘            │
 │                                                              │
 │  ┌─────────────────────────────────────────────────┐        │
 │  │  CLI 管理 (cli.py) — ggsc 命令                    │        │
@@ -48,41 +52,26 @@
 ### 2.1 模块依赖关系
 
 ```
-constants.py ──────────────────────────────────────────┐
-    │                                                    │
-    ▼                                                    ▼
-mongo.py ──────────────────┐                         各模块引用
-    │                        │
-    ▼                        ▼
-proxy_collector.py      proxy_checker.py
-    │                        │
-    └────────┬───────────────┘
-             ▼
-        proxy_pool.py  ←── 编排层
-             │
-             ▼
-        scraper.py  ←── Playwright 浏览器控制
-             │
-             ▼
-        parser.py  ←── HTML 解析
-             │
-             ▼
-        server.py  ←── FastAPI HTTP 接口
-             │
-             ▼
-         cli.py  ←── 命令行服务管理
+proxy_api (基础设施)              google_api (Google 搜索)
+├── constants.py ────────────→ constants.py (重新导出 + Google 常量)
+├── mongo.py ────────────────→ 直接使用 MongoProxyStore
+├── collector.py ────────────→ 直接使用 ProxyCollector
+├── checker.py (L1) ────────→ checker.py (L2 + ProxyChecker)
+├── pool.py (ProxyPool) ────→ pool.py (GoogleSearchPool 继承)
+│                              scraper.py (UC + CDP 搜索)
+│                              parser.py (HTML 解析)
+│                              server.py (FastAPI 搜索服务)
+└──────────────────────────→ cli.py (ggsc 命令行)
 ```
 
 ### 2.2 各模块职责
 
 | 模块 | 职责 | 关键类/函数 |
 |------|------|------------|
-| `constants.py` | 全局常量和配置 | `MONGO_CONFIGS`, `PROXY_SOURCES`, `USER_AGENTS` |
-| `mongo.py` | MongoDB 数据访问层 | `MongoProxyStore` |
-| `proxy_collector.py` | 从免费代理列表 URL 采集 IP | `ProxyCollector` |
-| `proxy_checker.py` | 两级代理可用性检测 (aiohttp) | `ProxyChecker`, `check_level1_batch`, `check_level2_batch` |
-| `proxy_pool.py` | 编排采集/检测/选取流程 | `ProxyPool` |
-| `scraper.py` | Playwright 驱动的 Google 搜索 | `GoogleScraper` |
+| `constants.py` | Google 搜索常量 + 从 proxy_api 重新导出 | `GOOGLE_SEARCH_URL`, `SEARCH_TIMEOUT` |
+| `checker.py` | Level-2 Google 搜索检测 + 两级编排 | `ProxyChecker`, `check_level2_batch` |
+| `pool.py` | Google 搜索代理池（继承 ProxyPool） | `GoogleSearchPool` |
+| `scraper.py` | UC+CDP 驱动的 Google 搜索抓取器 | `GoogleScraper` |
 | `parser.py` | Google 搜索结果 HTML 解析 | `GoogleResultParser` |
 | `server.py` | FastAPI HTTP API 服务 | `create_google_search_server()` |
 | `cli.py` | 命令行服务管理工具 (`ggsc`) | `main()` |

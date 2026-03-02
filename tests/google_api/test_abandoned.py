@@ -15,8 +15,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone, timedelta
 
-from webu.google_api.mongo import MongoProxyStore, _now_shanghai, TZ_SHANGHAI
-from webu.google_api.proxy_pool import ProxyPool
+from webu.proxy_api.mongo import MongoProxyStore, _now_shanghai, TZ_SHANGHAI
+from webu.google_api.pool import GoogleSearchPool as ProxyPool
 from webu.google_api.constants import (
     ABANDONED_FAIL_THRESHOLD,
     ABANDONED_STALE_HOURS,

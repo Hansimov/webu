@@ -10,7 +10,7 @@ from tclogger import logger, logstr
 from typing import Optional
 
 from .constants import MONGO_CONFIGS, MongoConfigsType
-from .proxy_pool import ProxyPool
+from .pool import GoogleSearchPool
 from .scraper import GoogleScraper
 from ..fastapis.styles import setup_swagger_ui
 
@@ -108,14 +108,14 @@ def create_google_search_server(
 ) -> FastAPI:
     """创建 Google 搜索 FastAPI 应用。"""
 
-    pool: ProxyPool = None
+    pool: GoogleSearchPool = None
     scraper: GoogleScraper = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         nonlocal pool, scraper
         logger.note("> Initializing Google Search Server ...")
-        pool = ProxyPool(configs=configs)
+        pool = GoogleSearchPool(configs=configs)
         scraper = GoogleScraper(proxy_pool=pool, headless=headless)
         await scraper.start()
         logger.okay("  ✓ Google Search Server ready")

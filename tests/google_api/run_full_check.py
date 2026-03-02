@@ -10,8 +10,8 @@ import asyncio
 
 from tclogger import logger
 
-from webu.google_api.mongo import MongoProxyStore
-from webu.google_api.proxy_checker import ProxyChecker
+from webu.proxy_api.mongo import MongoProxyStore
+from webu.google_api.checker import ProxyChecker
 
 
 async def main():

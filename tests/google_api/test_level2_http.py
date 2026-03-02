@@ -7,7 +7,7 @@
 
 import asyncio
 
-from webu.google_api.proxy_checker import check_level2_single, check_level2_batch
+from webu.google_api.checker import check_level2_single, check_level2_batch
 
 
 SELF_BUILT_PROXIES = [

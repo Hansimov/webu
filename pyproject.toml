@@ -12,7 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright", "psutil", "pymongo", "pytest-asyncio", "aiohttp", "aiohttp-socks"]
+dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright", "psutil", "pymongo", "pytest-asyncio", "aiohttp", "aiohttp-socks", "undetected-chromedriver", "selenium"]
 
 [project.urls]
 Homepage = "https://github.com/Hansimov/webu"
@@ -20,3 +20,4 @@ Issues = "https://github.com/Hansimov/webu/issues"
 
 [project.scripts]
 ggsc = "webu.google_api.cli:main"
+pxsc = "webu.proxy_api.cli:main"

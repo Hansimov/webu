@@ -243,7 +243,7 @@ class TestProxyPoolOperations:
 
     def test_real_db_stats(self):
         """查看生产数据库统计。"""
-        from webu.google_api.proxy_pool import ProxyPool
+        from webu.google_api.pool import GoogleSearchPool as ProxyPool
 
         pool = ProxyPool(verbose=True)
         stats = pool.stats()
@@ -252,7 +252,7 @@ class TestProxyPoolOperations:
 
     def test_real_db_valid_proxies(self):
         """从生产数据库获取可用代理。"""
-        from webu.google_api.mongo import MongoProxyStore
+        from webu.proxy_api.mongo import MongoProxyStore
 
         store = MongoProxyStore(verbose=False)
         proxies = store.get_valid_proxies(limit=10)
@@ -262,7 +262,7 @@ class TestProxyPoolOperations:
 
     def test_real_db_protocol_distribution(self):
         """检查生产数据库的协议分布。"""
-        from webu.google_api.mongo import MongoProxyStore
+        from webu.proxy_api.mongo import MongoProxyStore
         from collections import Counter
 
         store = MongoProxyStore(verbose=False)
@@ -274,8 +274,8 @@ class TestProxyPoolOperations:
     @pytest.mark.asyncio
     async def test_level1_quick_check(self):
         """快速 Level-1 检测验证系统正常工作。"""
-        from webu.google_api.mongo import MongoProxyStore
-        from webu.google_api.proxy_checker import check_level1_batch
+        from webu.proxy_api.mongo import MongoProxyStore
+        from webu.proxy_api.checker import check_level1_batch
 
         store = MongoProxyStore(verbose=False)
         all_ips = store.get_all_ips(limit=0)

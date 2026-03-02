@@ -103,13 +103,13 @@ class TestCLICommands:
         """测试 collect 命令调用 — mock DB 依赖。"""
         args = MagicMock()
         args.source = None
-        # cmd_collect 内部做 from .proxy_pool import ProxyPool 的本地导入
-        # 我们 patch proxy_pool 模块中的 ProxyPool 类
+        # cmd_collect 内部做 from .pool import GoogleSearchPool 的本地导入
+        # 我们 patch pool 模块中的 GoogleSearchPool 类
         mock_pool_instance = MagicMock()
         mock_pool_instance.collect.return_value = {
             "total_fetched": 100, "inserted": 50, "updated": 50, "total": 100
         }
-        with patch("webu.google_api.proxy_pool.ProxyPool", return_value=mock_pool_instance):
+        with patch("webu.google_api.pool.GoogleSearchPool", return_value=mock_pool_instance):
             cmd_collect(args)
 
     def test_stats_command(self):

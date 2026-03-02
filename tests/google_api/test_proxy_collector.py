@@ -7,8 +7,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from webu.google_api.constants import PROXY_SOURCES
-from webu.google_api.mongo import MongoProxyStore
-from webu.google_api.proxy_collector import ProxyCollector
+from webu.proxy_api.mongo import MongoProxyStore
+from webu.proxy_api.collector import ProxyCollector
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -54,7 +54,7 @@ class TestProxyCollectorParsing:
         mock_response.text = "1.2.3.4:8080\n5.6.7.8:3128\n\n"
         mock_response.raise_for_status = MagicMock()
 
-        with patch("webu.google_api.proxy_collector.requests.get", return_value=mock_response):
+        with patch("webu.proxy_api.collector.requests.get", return_value=mock_response):
             source = {
                 "url": "http://test.example.com/proxies.txt",
                 "protocol": "http",
@@ -80,7 +80,7 @@ class TestProxyCollectorParsing:
             "total": 6,
         }
 
-        with patch("webu.google_api.proxy_collector.requests.get", return_value=mock_response):
+        with patch("webu.proxy_api.collector.requests.get", return_value=mock_response):
             result = self.collector.collect_all()
 
         assert result["total_fetched"] == len(PROXY_SOURCES)  # 每个源 1 个 IP

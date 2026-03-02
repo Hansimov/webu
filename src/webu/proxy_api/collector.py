@@ -11,12 +11,7 @@ from .mongo import MongoProxyStore
 
 
 class ProxyCollector:
-    """从免费代理列表 URL 采集 IP。
-
-    支持的格式：
-    - ip:port（每行一个）
-    - protocol://ip:port（每行一个）
-    """
+    """从免费代理列表 URL 采集 IP。"""
 
     def __init__(
         self,
@@ -33,14 +28,7 @@ class ProxyCollector:
         self.verbose = verbose
 
     def _parse_proxy_line(self, line: str, default_protocol: str) -> Optional[dict]:
-        """解析单行代理数据。
-
-        支持格式：
-        - 1.2.3.4:8080
-        - 1.2.3.4:8080:US (带国家码，如 zloi-user)
-        - http://1.2.3.4:8080
-        - socks5://1.2.3.4:8080
-        """
+        """解析单行代理数据。"""
         line = line.strip()
         if not line:
             return None
@@ -54,7 +42,7 @@ class ProxyCollector:
                 "port": int(match.group(3)),
             }
 
-        # 无协议前缀：ip:port 或 ip:port:extra (如 ip:port:country)
+        # 无协议前缀：ip:port 或 ip:port:extra
         match = re.match(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)(?::.*)?$", line)
         if match:
             return {
@@ -98,14 +86,7 @@ class ProxyCollector:
         return ip_list
 
     def collect_all(self) -> dict:
-        """从所有配置的代理源采集 IP 并存储到 MongoDB。
-
-        自动过滤掉已废弃的代理，不进行重复写入。
-
-        Returns:
-            {"total_fetched": int, "inserted": int, "updated": int, "total": int,
-             "abandoned_skipped": int}
-        """
+        """从所有配置的代理源采集 IP 并存储到 MongoDB。"""
         logger.note(f"> Collecting proxies from {len(self.sources)} sources ...")
         all_ips = []
 
@@ -139,14 +120,7 @@ class ProxyCollector:
         return result
 
     def collect_source(self, source_name: str) -> dict:
-        """从指定名称的代理源采集 IP 并存储到 MongoDB。
-
-        Args:
-            source_name: 代理源标识名（如 'proxifly', 'thespeedx', 'zloi-user'）
-
-        Returns:
-            {"total_fetched": int, "inserted": int, "updated": int, "total": int}
-        """
+        """从指定名称的代理源采集 IP 并存储。"""
         matched = [s for s in self.sources if s["source"] == source_name]
         if not matched:
             logger.warn(f"  × Unknown source: {source_name}")
@@ -165,5 +139,3 @@ class ProxyCollector:
 
         result["total_fetched"] = len(all_ips)
         return result
-
-
