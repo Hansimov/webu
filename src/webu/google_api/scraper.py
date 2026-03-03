@@ -17,6 +17,8 @@ import socket
 import os
 import signal
 
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from playwright.async_api import async_playwright, Browser, Playwright
 from tclogger import logger, logstr
 from typing import Optional
@@ -30,6 +32,35 @@ from .constants import (
     LOCALES,
 )
 from .parser import GoogleResultParser, GoogleSearchResponse
+from webu.captcha import CaptchaBypass
+
+# 截图保存目录
+SCREENSHOT_DIR = Path("data/google_api_screenshots")
+TZ_SHANGHAI = timezone(timedelta(hours=8))
+
+
+def _save_screenshot_and_html(
+    page_content: str,
+    screenshot_bytes: bytes | None,
+    query: str,
+    proxy_url: str,
+    reason: str = "captcha",
+):
+    """保存截图和 HTML 到本地目录，用于调试分析。"""
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
+    safe_query = query[:30].replace(" ", "_").replace("/", "_")
+    safe_proxy = (proxy_url or "direct").replace("://", "_").replace(":", "_").replace("/", "")
+    base_name = f"{ts}_{reason}_{safe_query}_{safe_proxy}"
+
+    if screenshot_bytes:
+        png_path = SCREENSHOT_DIR / f"{base_name}.png"
+        png_path.write_bytes(screenshot_bytes)
+        logger.mesg(f"  📸 Screenshot saved: {png_path}")
+
+    html_path = SCREENSHOT_DIR / f"{base_name}.html"
+    html_path.write_text(page_content, encoding="utf-8")
+    logger.mesg(f"  📄 HTML saved: {html_path}")
 
 
 def _find_free_port() -> int:
@@ -420,6 +451,59 @@ class GoogleScraper:
             # 解析搜索结果
             response = self.parser.parse(html, query=query)
 
+            # 如果检测到 CAPTCHA，先尝试自动绕过
+            if response.has_captcha:
+                # 保存截图用于分析
+                try:
+                    screenshot_bytes = await page.screenshot(full_page=True)
+                except Exception:
+                    screenshot_bytes = None
+                _save_screenshot_and_html(
+                    page_content=html,
+                    screenshot_bytes=screenshot_bytes,
+                    query=query,
+                    proxy_url=proxy_url or "direct",
+                    reason="captcha",
+                )
+
+                # 尝试自动绕过 CAPTCHA
+                bypasser = CaptchaBypass(
+                    max_wait_after_click=15.0,
+                    save_screenshots=True,
+                    verbose=self.verbose,
+                )
+                bypass_ok = await bypasser.attempt_bypass(
+                    page, proxy_url=proxy_url or "direct"
+                )
+
+                if bypass_ok:
+                    # 绕过成功 — 重新获取页面内容并解析
+                    html = await page.content()
+                    response = self.parser.parse(html, query=query)
+                    response.raw_html_length = len(html)
+                    if self.verbose:
+                        if response.results:
+                            logger.okay(
+                                f"  ✓ CAPTCHA bypassed! "
+                                f"Got {len(response.results)} results"
+                            )
+                        else:
+                            logger.warn(
+                                "  ⚠ CAPTCHA bypassed but no results parsed"
+                            )
+                    # 保存绕过后的页面截图
+                    try:
+                        shot = await page.screenshot(full_page=True)
+                        _save_screenshot_and_html(
+                            page_content=html,
+                            screenshot_bytes=shot,
+                            query=query,
+                            proxy_url=proxy_url or "direct",
+                            reason="captcha_bypassed",
+                        )
+                    except Exception:
+                        pass
+
             self._search_count += 1
 
         except Exception as e:
@@ -427,6 +511,22 @@ class GoogleScraper:
             response.error = error_msg
             if self.verbose:
                 logger.warn(f"  × Search error: {error_msg}")
+            # 对错误情况也保存截图
+            if context:
+                try:
+                    pages = context.pages
+                    if pages:
+                        screenshot_bytes = await pages[0].screenshot(full_page=True)
+                        html_content = await pages[0].content()
+                        _save_screenshot_and_html(
+                            page_content=html_content,
+                            screenshot_bytes=screenshot_bytes,
+                            query=query,
+                            proxy_url=proxy_url or "direct",
+                            reason="error",
+                        )
+                except Exception:
+                    pass
         finally:
             if context:
                 try:

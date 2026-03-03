@@ -4,6 +4,9 @@ __pycache__
 .vscode
 *.log
 data/
+debugs/**
+!debugs/**/
+!debugs/**/*.py
 ipv6_mirrors/
 ipv6_global_addrs.json
 .chats

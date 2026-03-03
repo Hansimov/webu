@@ -1,0 +1,9 @@
+# Ignore everything in this directory...
+*
+!.gitignore
+!*.py
+
+# ...except these test sample images used in CAPTCHA solver tests
+!boats.jpg
+!crosswalks.jpeg
+!traffic-lights.jpg

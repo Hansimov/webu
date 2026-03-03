@@ -305,6 +305,128 @@ def cmd_parse_test(args):
             logger.warn(f"\n  [{i+1}] × {r['proxy_url']}: {r['error']}")
 
 
+def cmd_search_test(args):
+    """用指定代理（或本地代理）测试 UC+CDP Google 搜索。"""
+    from .scraper import GoogleScraper
+
+    query = getattr(args, "query", "test")
+    proxies_str = getattr(args, "proxies", None)
+
+    # 默认使用本地代理
+    if proxies_str:
+        proxy_list = [p.strip() for p in proxies_str.split(",") if p.strip()]
+    else:
+        proxy_list = ["http://127.0.0.1:11111", "http://127.0.0.1:11119"]
+
+    logger.note(f"> Search test: query={logstr.mesg(query)}, proxies={len(proxy_list)}")
+
+    async def _run():
+        scraper = GoogleScraper(headless=True, verbose=True)
+        results = []
+        try:
+            await scraper.start()
+            import time as _time
+            import asyncio as _asyncio
+
+            for i, proxy_url in enumerate(proxy_list):
+                logger.note(
+                    f"\n> [{i+1}/{len(proxy_list)}] Testing {logstr.mesg(proxy_url)}"
+                )
+                start = _time.time()
+                result = await scraper.search(
+                    query=query,
+                    num=5,
+                    proxy_url=proxy_url,
+                    retry_count=0,
+                )
+                elapsed_ms = int((_time.time() - start) * 1000)
+
+                r_dict = {
+                    "proxy_url": proxy_url,
+                    "success": bool(result.results and not result.has_captcha),
+                    "result_count": len(result.results),
+                    "has_captcha": result.has_captcha,
+                    "error": result.error,
+                    "latency_ms": elapsed_ms,
+                }
+                results.append(r_dict)
+
+                if r_dict["success"]:
+                    logger.okay(
+                        f"  ✓ {proxy_url}: {r_dict['result_count']} results "
+                        f"({elapsed_ms}ms)"
+                    )
+                    for res in result.results[:3]:
+                        logger.mesg(f"    - {res.title}")
+                        logger.mesg(f"      {res.url}")
+                else:
+                    reason = "CAPTCHA" if r_dict["has_captcha"] else r_dict["error"]
+                    logger.warn(f"  × {proxy_url}: {reason} ({elapsed_ms}ms)")
+
+                if i < len(proxy_list) - 1:
+                    await _asyncio.sleep(2)
+        finally:
+            await scraper.stop()
+
+        # Summary
+        total = len(results)
+        success = sum(1 for r in results if r["success"])
+        captcha = sum(1 for r in results if r["has_captcha"])
+        logger.note(f"\n> Summary:")
+        logger.mesg(f"  Total: {total}, Success: {success}, CAPTCHA: {captcha}")
+        logger.mesg(
+            f"  Success rate: {success}/{total} ({success/max(1,total)*100:.0f}%)"
+        )
+
+    asyncio.run(_run())
+
+
+def cmd_search(args):
+    """执行 Google 搜索并展示结果。"""
+    from .scraper import GoogleScraper
+
+    query = getattr(args, "query", "test")
+    proxy_url = getattr(args, "proxy", "http://127.0.0.1:11111")
+    num = getattr(args, "num", 10)
+
+    logger.note(
+        f"> Searching: {logstr.mesg(query)} via {logstr.file(proxy_url)}"
+    )
+
+    async def _run():
+        scraper = GoogleScraper(headless=True, verbose=True)
+        try:
+            await scraper.start()
+            result = await scraper.search(
+                query=query,
+                num=num,
+                proxy_url=proxy_url,
+                retry_count=2,
+            )
+
+            if result.has_captcha:
+                logger.warn("  × CAPTCHA detected — try a different proxy")
+                return
+
+            if not result.results:
+                logger.warn(f"  × No results — {result.error or 'unknown error'}")
+                return
+
+            logger.okay(
+                f"  ✓ {len(result.results)} results"
+                f" ({result.total_results_text})"
+            )
+            for i, r in enumerate(result.results):
+                logger.mesg(f"\n  [{i+1}] {r.title}")
+                logger.mesg(f"      {r.url}")
+                if r.snippet:
+                    logger.mesg(f"      {r.snippet[:120]}...")
+        finally:
+            await scraper.stop()
+
+    asyncio.run(_run())
+
+
 def cmd_diag(args):
     """全面诊断：采集 + 全量检测 + 生成报告。"""
     from webu.proxy_api.mongo import MongoProxyStore
@@ -700,6 +822,27 @@ def main():
     sp_parse.add_argument("--query", default="python programming", help="搜索查询词")
     sp_parse.add_argument("--limit", type=int, default=5, help="测试代理数量")
     sp_parse.set_defaults(func=cmd_parse_test)
+
+    # search-test
+    sp_stest = subparsers.add_parser(
+        "search-test", help="UC+CDP 搜索测试（默认本地代理）"
+    )
+    sp_stest.add_argument("--query", default="test", help="搜索查询词")
+    sp_stest.add_argument(
+        "--proxies",
+        help="逗号分隔的代理列表（默认: 127.0.0.1:11111,11119）",
+    )
+    sp_stest.set_defaults(func=cmd_search_test)
+
+    # search
+    sp_search = subparsers.add_parser("search", help="执行 Google 搜索")
+    sp_search.add_argument("query", help="搜索关键词")
+    sp_search.add_argument(
+        "--proxy", default="http://127.0.0.1:11111",
+        help="代理 URL（默认: http://127.0.0.1:11111）",
+    )
+    sp_search.add_argument("--num", type=int, default=10, help="结果数量")
+    sp_search.set_defaults(func=cmd_search)
 
     # diag
     sp_diag = subparsers.add_parser("diag", help="全面诊断：采集 + 全量检测 + 生成报告")
