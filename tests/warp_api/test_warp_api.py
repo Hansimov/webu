@@ -160,6 +160,32 @@ class TestWarpIntegration:
             f"Proxy exit IP ({exit_ip}) should differ from direct IP ({direct_ip})"
         )
 
+    def test_proxy_http_forward_ip_check(self):
+        """通过 HTTP Forward Proxy 检测出口 IP (curl --proxy http://...)。"""
+        result = subprocess.run(
+            [
+                "curl", "-s", "--max-time", "15",
+                "--proxy", f"http://{WARP_PROXY_HOST}:{WARP_PROXY_PORT}",
+                "http://ifconfig.me/ip",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            pytest.skip(f"HTTP forward proxy not available: {result.stderr}")
+        exit_ip = result.stdout.strip()
+        assert exit_ip, "Should return an IP address"
+        # 确认不是直连 IP
+        direct = subprocess.run(
+            ["curl", "-4", "-s", "--max-time", "10", "http://ifconfig.me/ip"],
+            capture_output=True, text=True, timeout=15,
+        )
+        direct_ip = direct.stdout.strip()
+        assert exit_ip != direct_ip, (
+            f"HTTP forward proxy exit IP ({exit_ip}) should differ from direct IP ({direct_ip})"
+        )
+
     def test_api_health(self):
         """验证管理 API 健康检查。"""
         result = subprocess.run(

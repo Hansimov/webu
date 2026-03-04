@@ -183,19 +183,22 @@ def cmd_stop(args):
     logger.note(f"> Stopping server (PID: {pid}) ...")
 
     def _kill(pid, sig, group=False):
-        """发送信号给进程或进程组（自动提权）。"""
+        """发送信号给进程或进程组（自动提权，使用 SUDOPASS）。"""
         target = -pid if group else pid
         try:
             os.kill(target, sig)
         except PermissionError:
+            sudopass = os.environ.get("SUDOPASS", "")
+            kill_args = ["sudo"] + (["-S"] if sudopass else [])
             if group:
-                subprocess.run(
-                    ["sudo", "kill", f"-{sig}", "--", f"-{pid}"], check=False
-                )
+                kill_args += ["kill", f"-{sig}", "--", f"-{pid}"]
             else:
-                subprocess.run(
-                    ["sudo", "kill", f"-{sig}", str(pid)], check=False
-                )
+                kill_args += ["kill", f"-{sig}", str(pid)]
+            subprocess.run(
+                kill_args,
+                input=(sudopass + "\n").encode() if sudopass else None,
+                check=False,
+            )
         except ProcessLookupError:
             pass
 

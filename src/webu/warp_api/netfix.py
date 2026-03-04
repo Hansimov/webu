@@ -12,6 +12,7 @@
   2. 添加优先级更高的 ip rule 使 Tailscale 路由表先于 WARP 被查询
 """
 
+import os
 import subprocess
 
 from tclogger import logger, logstr
@@ -27,6 +28,20 @@ TAILSCALE_TABLE = 52
 TAILSCALE_RULE_PRIORITY = 5200
 
 
+def _sudo_run(cmd: list[str], check: bool = False) -> tuple[int, str]:
+    """运行需要 sudo 的命令，自动使用 SUDOPASS 提权。"""
+    sudopass = os.environ.get("SUDOPASS", "")
+    full_cmd = ["sudo"] + (["-S"] if sudopass else []) + cmd
+
+    result = subprocess.run(
+        full_cmd,
+        input=(sudopass + "\n").encode() if sudopass else None,
+        capture_output=True,
+        timeout=15,
+    )
+    return result.returncode, result.stdout.decode(errors="replace").strip()
+
+
 def _run(cmd: str, check: bool = False) -> tuple[int, str]:
     """运行系统命令。"""
     result = subprocess.run(
@@ -38,13 +53,8 @@ def _run(cmd: str, check: bool = False) -> tuple[int, str]:
 
 
 def _nft_run(cmd: str) -> tuple[int, str]:
-    """运行 nft 命令。"""
-    result = subprocess.run(
-        ["sudo", "nft"] + cmd.split(),
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode, result.stdout.strip()
+    """运行 nft 命令（通过 SUDOPASS 提权）。"""
+    return _sudo_run(["nft"] + cmd.split())
 
 
 def _get_nft_handle(chain: str, pattern: str) -> int | None:
@@ -137,8 +147,9 @@ def fix_tailscale_compat() -> dict:
     if _has_ip_rule(TAILSCALE_RULE_PRIORITY, TAILSCALE_TABLE):
         logger.mesg(f"  ip rule: Tailscale priority {TAILSCALE_RULE_PRIORITY} already exists")
     else:
-        rc, _ = _run(
-            f"sudo ip rule add priority {TAILSCALE_RULE_PRIORITY} lookup {TAILSCALE_TABLE}"
+        rc, _ = _sudo_run(
+            ["ip", "rule", "add", "priority", str(TAILSCALE_RULE_PRIORITY),
+             "lookup", str(TAILSCALE_TABLE)]
         )
         if rc == 0:
             result["ip_rule"] = True

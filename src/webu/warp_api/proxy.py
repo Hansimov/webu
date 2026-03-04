@@ -1,9 +1,12 @@
-"""异步 SOCKS5 代理服务器 — 通过 CloudflareWARP 接口转发流量。
+"""异步代理服务器 — 通过 CloudflareWARP 接口转发流量。
 
-支持 SOCKS5 (RFC 1928) 的 CONNECT 命令，将出站连接绑定到
-CloudflareWARP 网络接口，从而让所有代理流量走 Cloudflare WARP 出口。
+支持三种协议，自动检测:
+  1. SOCKS5 (RFC 1928) CONNECT 命令
+  2. HTTP CONNECT 隧道 (用于 HTTPS)
+  3. HTTP Forward Proxy (用于 HTTP，如 GET http://host/path)
 
-同时支持 HTTP CONNECT 代理，自动检测协议类型。
+所有出站连接绑定到 CloudflareWARP 网络接口，
+从而让所有代理流量走 Cloudflare WARP 出口。
 """
 
 import asyncio
@@ -165,6 +168,10 @@ async def _http_connect_handshake(first_line: bytes, reader: asyncio.StreamReade
         port = 443
 
     return host, port
+
+
+# HTTP 方法集合（用于识别 HTTP Forward Proxy 请求）
+_HTTP_METHODS = {b"GET", b"POST", b"PUT", b"DELETE", b"HEAD", b"OPTIONS", b"PATCH"}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -335,50 +342,142 @@ class WarpSocksProxy:
                 await client_writer.drain()
 
             else:
-                # 可能是 HTTP CONNECT — 读取完整首行
+                # HTTP — 读取完整首行
                 rest_of_line = await client_reader.readline()
                 first_line = first_byte + rest_of_line
 
-                if not first_line.upper().startswith(b"CONNECT "):
+                first_line_upper = first_line.upper()
+
+                if first_line_upper.startswith(b"CONNECT "):
+                    # ── HTTP CONNECT 隧道 ──
+                    protocol = "HTTP-CONNECT"
+
+                    # 读取剩余的请求头
+                    while True:
+                        header_line = await client_reader.readline()
+                        if header_line in (b"\r\n", b"\n", b""):
+                            break
+
+                    # 解析 host:port
+                    parts = first_line.decode("ascii", errors="replace").strip().split()
+                    if len(parts) < 2:
+                        return
+
+                    host_port = parts[1]
+                    if ":" in host_port:
+                        host, port_str = host_port.rsplit(":", 1)
+                        target_host = host
+                        target_port = int(port_str)
+                    else:
+                        target_host = host_port
+                        target_port = 443
+
+                    # 建立远程连接
+                    try:
+                        remote_reader, remote_writer = await self._connect_via_warp(
+                            target_host, target_port
+                        )
+                    except Exception as e:
+                        logger.warn(f"  × HTTP CONNECT to {target_host}:{target_port} failed: {e}")
+                        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                        await client_writer.drain()
+                        return
+
+                    # 200 Connection Established
+                    client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    await client_writer.drain()
+
+                elif any(first_line_upper.startswith(m + b" ") for m in _HTTP_METHODS):
+                    # ── HTTP Forward Proxy (GET http://host/path HTTP/1.x) ──
+                    protocol = "HTTP-FORWARD"
+
+                    # 解析请求行: METHOD http://host[:port]/path HTTP/1.x
+                    line_str = first_line.decode("ascii", errors="replace").strip()
+                    parts = line_str.split(None, 2)
+                    if len(parts) < 3:
+                        logger.warn(f"  × Malformed HTTP request from {peer}: {line_str[:80]}")
+                        return
+
+                    method, url, version = parts
+
+                    # 从绝对 URL 解析 host, port, path
+                    if url.lower().startswith("http://"):
+                        url_body = url[7:]  # 去掉 "http://"
+                    else:
+                        # 非绝对 URL（不应出现在 forward proxy 中）
+                        logger.warn(f"  × Non-absolute URL from {peer}: {url[:80]}")
+                        client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+                        await client_writer.drain()
+                        return
+
+                    # 分离 host[:port] 和 /path
+                    slash_pos = url_body.find("/")
+                    if slash_pos == -1:
+                        host_part = url_body
+                        path = "/"
+                    else:
+                        host_part = url_body[:slash_pos]
+                        path = url_body[slash_pos:]
+
+                    if ":" in host_part:
+                        target_host, port_str = host_part.rsplit(":", 1)
+                        target_port = int(port_str)
+                    else:
+                        target_host = host_part
+                        target_port = 80
+
+                    # 读取请求头
+                    headers = []
+                    has_host_header = False
+                    content_length = 0
+                    while True:
+                        header_line = await client_reader.readline()
+                        if header_line in (b"\r\n", b"\n", b""):
+                            break
+                        hdr_lower = header_line.lower()
+                        if hdr_lower.startswith(b"host:"):
+                            has_host_header = True
+                        if hdr_lower.startswith(b"content-length:"):
+                            content_length = int(header_line.split(b":", 1)[1].strip())
+                        # 过滤 proxy 相关头部
+                        if not hdr_lower.startswith(b"proxy-"):
+                            headers.append(header_line)
+
+                    # 如果缺少 Host 头则补充
+                    if not has_host_header:
+                        host_hdr = f"Host: {target_host}"
+                        if target_port != 80:
+                            host_hdr += f":{target_port}"
+                        headers.insert(0, (host_hdr + "\r\n").encode())
+
+                    # 建立远程连接
+                    try:
+                        remote_reader, remote_writer = await self._connect_via_warp(
+                            target_host, target_port
+                        )
+                    except Exception as e:
+                        logger.warn(f"  × HTTP FORWARD to {target_host}:{target_port} failed: {e}")
+                        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                        await client_writer.drain()
+                        return
+
+                    # 重写请求行：绝对 URL → 相对路径
+                    rewritten_line = f"{method} {path} {version}\r\n".encode()
+                    remote_writer.write(rewritten_line)
+                    for hdr in headers:
+                        remote_writer.write(hdr)
+                    remote_writer.write(b"\r\n")
+
+                    # 转发请求体（如果有）
+                    if content_length > 0:
+                        body = await client_reader.readexactly(content_length)
+                        remote_writer.write(body)
+
+                    await remote_writer.drain()
+
+                else:
                     logger.warn(f"  × Unknown protocol from {peer}: {first_line[:50]}")
                     return
-
-                protocol = "HTTP-CONNECT"
-
-                # 读取剩余的请求头
-                while True:
-                    header_line = await client_reader.readline()
-                    if header_line in (b"\r\n", b"\n", b""):
-                        break
-
-                # 解析 host:port
-                parts = first_line.decode("ascii", errors="replace").strip().split()
-                if len(parts) < 2:
-                    return
-
-                host_port = parts[1]
-                if ":" in host_port:
-                    host, port_str = host_port.rsplit(":", 1)
-                    target_host = host
-                    target_port = int(port_str)
-                else:
-                    target_host = host_port
-                    target_port = 443
-
-                # 建立远程连接
-                try:
-                    remote_reader, remote_writer = await self._connect_via_warp(
-                        target_host, target_port
-                    )
-                except Exception as e:
-                    logger.warn(f"  × HTTP CONNECT to {target_host}:{target_port} failed: {e}")
-                    client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-                    await client_writer.drain()
-                    return
-
-                # 200 Connection Established
-                client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                await client_writer.drain()
 
             logger.mesg(
                 f"  [{protocol}] {peer[0]}:{peer[1]} → "
