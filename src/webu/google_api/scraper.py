@@ -45,20 +45,22 @@ def _save_screenshot_and_html(
     query: str,
     proxy_url: str,
     reason: str = "captcha",
+    base_dir: Path | None = None,
 ):
     """保存截图和 HTML 到本地目录，用于调试分析。"""
-    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = base_dir or SCREENSHOT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
     safe_query = query[:30].replace(" ", "_").replace("/", "_")
     safe_proxy = (proxy_url or "direct").replace("://", "_").replace(":", "_").replace("/", "")
     base_name = f"{ts}_{reason}_{safe_query}_{safe_proxy}"
 
     if screenshot_bytes:
-        png_path = SCREENSHOT_DIR / f"{base_name}.png"
+        png_path = out_dir / f"{base_name}.png"
         png_path.write_bytes(screenshot_bytes)
         logger.mesg(f"  📸 Screenshot saved: {png_path}")
 
-    html_path = SCREENSHOT_DIR / f"{base_name}.html"
+    html_path = out_dir / f"{base_name}.html"
     html_path.write_text(page_content, encoding="utf-8")
     logger.mesg(f"  📄 HTML saved: {html_path}")
 
@@ -453,6 +455,11 @@ class GoogleScraper:
 
             # 如果检测到 CAPTCHA，先尝试自动绕过
             if response.has_captcha:
+                # 创建本次运行的截图子目录
+                run_ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
+                run_dir = SCREENSHOT_DIR / run_ts
+                run_dir.mkdir(parents=True, exist_ok=True)
+
                 # 保存截图用于分析
                 try:
                     screenshot_bytes = await page.screenshot(full_page=True)
@@ -464,6 +471,7 @@ class GoogleScraper:
                     query=query,
                     proxy_url=proxy_url or "direct",
                     reason="captcha",
+                    base_dir=run_dir,
                 )
 
                 # 尝试自动绕过 CAPTCHA
@@ -471,6 +479,7 @@ class GoogleScraper:
                     max_wait_after_click=15.0,
                     save_screenshots=True,
                     verbose=self.verbose,
+                    run_dir=run_dir,
                 )
                 bypass_ok = await bypasser.attempt_bypass(
                     page, proxy_url=proxy_url or "direct"
@@ -500,6 +509,7 @@ class GoogleScraper:
                             query=query,
                             proxy_url=proxy_url or "direct",
                             reason="captcha_bypassed",
+                            base_dir=run_dir,
                         )
                     except Exception:
                         pass

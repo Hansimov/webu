@@ -405,6 +405,7 @@ SOLVE_PROMPT_TEMPLATE = """\
 每个格子的右下角有编号标注（1-{total}）。
 
 请仔细观察每个格子的内容，判断哪些格子符合要求，然后输出需要选择的格子编号列表。
+如果没有任何格子符合要求，返回 [-1] 表示跳过。
 
 输出格式（严格遵守）：
 ```json
@@ -414,6 +415,10 @@ SOLVE_PROMPT_TEMPLATE = """\
 例如，如果应该选择第 1、4、7 个格子，输出：
 ```json
 [1, 4, 7]
+```
+如果没有任何格子符合要求，输出：
+```json
+[-1]
 ```
 """
 
@@ -576,21 +581,28 @@ class CaptchaSolver:
           - ```json\n[1, 4, 7]\n```
           - [1, 4, 7]
           - 1, 4, 7
+
+        特殊值：
+          - [-1] → 无匹配格子，应跳过
         """
         # 1) 尝试匹配 ```json [...] ```
         json_block = re.search(r"```json\s*(\[.*?\])\s*```", text, re.DOTALL)
         if json_block:
             try:
                 indices = json.loads(json_block.group(1))
+                if indices == [-1]:
+                    return [-1]
                 return self._validate_indices(indices, max_index)
             except (json.JSONDecodeError, TypeError):
                 pass
 
         # 2) 尝试匹配任意 [...] JSON 数组
-        array_match = re.search(r"\[[\d\s,]+\]", text)
+        array_match = re.search(r"\[-?[\d\s,]+\]", text)
         if array_match:
             try:
                 indices = json.loads(array_match.group(0))
+                if indices == [-1]:
+                    return [-1]
                 return self._validate_indices(indices, max_index)
             except (json.JSONDecodeError, TypeError):
                 pass

@@ -32,9 +32,11 @@ def save_debug_screenshot(
     screenshot_bytes: bytes,
     stage: str,
     proxy_url: str = "",
+    base_dir: Path | None = None,
 ) -> Path:
     """保存调试截图。"""
-    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = base_dir or SCREENSHOT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
     safe_proxy = (
         (proxy_url or "direct")
@@ -43,17 +45,22 @@ def save_debug_screenshot(
         .replace("/", "")
     )
     filename = f"{ts}_bypass_{stage}_{safe_proxy}.png"
-    path = SCREENSHOT_DIR / filename
+    path = out_dir / filename
     path.write_bytes(screenshot_bytes)
     logger.mesg(f"  📸 [{stage}]: {path}")
     return path
 
 
-def save_debug_html(html: str, stage: str) -> Path:
+def save_debug_html(
+    html: str,
+    stage: str,
+    base_dir: Path | None = None,
+) -> Path:
     """保存调试 HTML。"""
-    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = base_dir or SCREENSHOT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
-    path = SCREENSHOT_DIR / f"{ts}_{stage}.html"
+    path = out_dir / f"{ts}_{stage}.html"
     path.write_text(html, encoding="utf-8")
     logger.mesg(f"  📄 [{stage}]: {path}")
     return path
@@ -92,11 +99,33 @@ class CaptchaBypass:
         max_solve_attempts: int = 3,
         save_screenshots: bool = True,
         verbose: bool = True,
+        run_dir: Path | None = None,
     ):
         self.max_wait_after_click = max_wait_after_click
         self.max_solve_attempts = max_solve_attempts
         self.save_screenshots = save_screenshots
         self.verbose = verbose
+
+        # 每次运行使用独立的截图子目录
+        if run_dir:
+            self._run_dir = run_dir
+        else:
+            ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
+            self._run_dir = SCREENSHOT_DIR / ts
+        self._run_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def run_dir(self) -> Path:
+        """本次运行的截图子目录。"""
+        return self._run_dir
+
+    def _screenshot(self, data: bytes, stage: str, proxy_url: str = "") -> Path:
+        """保存截图到本次运行目录。"""
+        return save_debug_screenshot(data, stage, proxy_url, base_dir=self._run_dir)
+
+    def _save_html(self, html: str, stage: str) -> Path:
+        """保存 HTML 到本次运行目录。"""
+        return save_debug_html(html, stage, base_dir=self._run_dir)
 
     # ═══════════════════════════════════════════════════════════
     # 公开接口
@@ -116,11 +145,14 @@ class CaptchaBypass:
         if self.verbose:
             logger.note("> Attempting CAPTCHA bypass ...")
 
+        if self.verbose:
+            logger.mesg(f"  Screenshots dir: {self._run_dir}")
+
         # 保存绕过前截图
         if self.save_screenshots:
             try:
                 shot = await page.screenshot(full_page=True)
-                save_debug_screenshot(shot, "before_click", proxy_url)
+                self._screenshot(shot, "before_click", proxy_url)
             except Exception:
                 pass
 
@@ -130,6 +162,15 @@ class CaptchaBypass:
             if self.verbose:
                 logger.warn("  × Failed to click reCAPTCHA checkbox")
             return False
+
+        # 保存点击后截图
+        if self.save_screenshots:
+            try:
+                await asyncio.sleep(0.5)
+                shot = await page.screenshot(full_page=False)
+                self._screenshot(shot, "after_checkbox", proxy_url)
+            except Exception:
+                pass
 
         # Step 2: 等待 — 可能直接通过，也可能弹出图片验证
         navigated = await self._wait_for_navigation(page, proxy_url)
@@ -176,7 +217,7 @@ class CaptchaBypass:
         if self.save_screenshots:
             try:
                 shot = await page.screenshot(full_page=True)
-                save_debug_screenshot(shot, "failed", proxy_url)
+                self._screenshot(shot, "failed", proxy_url)
             except Exception:
                 pass
         return False
@@ -257,114 +298,192 @@ class CaptchaBypass:
         proxy_url: str,
         attempt: int,
     ) -> bool:
-        """执行一轮图片验证解题。"""
-        try:
-            bframe = page.frame_locator(self.BFRAME_SELECTOR)
+        """执行一轮图片验证解题（含 Next 多步和 Skip 处理）。
 
-            # 1) 截取整个 challenge 区域
-            challenge_shot = await page.screenshot(full_page=False)
-            if self.save_screenshots:
-                save_debug_screenshot(
-                    challenge_shot, f"challenge_round{attempt}", proxy_url
-                )
+        reCAPTCHA 动作按钮有三种状态：
+          - Verify: 提交答案，验证是否正确
+          - Next:   提交答案后进入下一题（多步验证）
+          - Skip:   跳过当前题目，获取新题
 
-            # 2) 截取 bframe 内部的图片区域
-            #    找到 challenge 图片容器
-            challenge_frame = self._find_challenge_frame(page)
-            if not challenge_frame:
-                if self.verbose:
-                    logger.mesg("    Cannot find challenge frame")
-                return False
+        流程：
+          1. 查找 challenge frame → 检测网格 → 获取题目 → 截图
+          2. 调用 VLM solver → 点击格子
+          3. 检测动作按钮类型并点击：
+             - Verify → 等待页面跳转
+             - Next   → 继续下一子轮
+             - Skip   → 跟 Next 处理类似：跳过 → 继续
+        """
+        MAX_SUB_ROUNDS = 5
 
-            # 获取 bframe 的内容截图 (通过 challenge frame 直接截取)
-            challenge_image_bytes = await self._capture_challenge_image(
-                page, challenge_frame
-            )
-            if not challenge_image_bytes:
-                if self.verbose:
-                    logger.mesg("    Failed to capture challenge image")
-                return False
+        for sub in range(MAX_SUB_ROUNDS):
+            rl = f"r{attempt}" if sub == 0 else f"r{attempt}.{sub}"
 
-            if self.save_screenshots:
-                save_debug_screenshot(
-                    challenge_image_bytes,
-                    f"challenge_image_round{attempt}",
-                    proxy_url,
-                )
+            try:
+                # 1) 查找 challenge frame
+                challenge_frame = self._find_challenge_frame(page)
+                if not challenge_frame:
+                    if self.verbose:
+                        logger.mesg("    Cannot find challenge frame")
+                    return False
 
-            # 3) 获取题目文本（从 bframe 内提取）
-            task_text = await self._get_challenge_task_text(challenge_frame)
-            if self.verbose:
-                logger.mesg(f"    Task: {task_text or '(unknown)'}")
+                # 2) 从 DOM 检测网格布局
+                grid_info = await self._detect_grid_layout(challenge_frame)
+                if not grid_info:
+                    if self.verbose:
+                        logger.mesg("    Cannot detect grid layout")
+                    return False
 
-            # 4) 调用 solver 解题
-            cell_indices = await solver.solve(
-                image_bytes=challenge_image_bytes,
-                task_text=task_text,
-            )
-            if not cell_indices:
-                if self.verbose:
-                    logger.mesg("    Solver returned no cells to click")
-                return False
-
-            if self.verbose:
-                logger.mesg(f"    Solver says click: {cell_indices}")
-
-            # 5) 获取网格布局信息并点击对应格子
-            grid_info = await self._detect_grid_layout(challenge_frame)
-            if not grid_info:
-                if self.verbose:
-                    logger.mesg("    Cannot detect grid layout")
-                return False
-
-            rows, cols, grid_rect = grid_info
-            if self.verbose:
-                logger.mesg(
-                    f"    Grid: {rows}×{cols}, "
-                    f"rect=({grid_rect['x']},{grid_rect['y']},"
-                    f"{grid_rect['width']}×{grid_rect['height']})"
-                )
-
-            # 6) 模拟点击每个格子
-            for idx in cell_indices:
-                if idx < 1 or idx > rows * cols:
-                    continue
-                # 格子编号从 1 开始，按行优先排列
-                row = (idx - 1) // cols
-                col = (idx - 1) % cols
-                cell_w = grid_rect["width"] / cols
-                cell_h = grid_rect["height"] / rows
-                # 格子中心坐标（相对于 viewport）
-                cx = grid_rect["x"] + col * cell_w + cell_w / 2
-                cy = grid_rect["y"] + row * cell_h + cell_h / 2
-                # 添加随机偏移
-                cx += random.uniform(-cell_w * 0.15, cell_w * 0.15)
-                cy += random.uniform(-cell_h * 0.15, cell_h * 0.15)
-
-                await self._human_like_click(page, int(cx), int(cy))
+                rows, cols, grid_rect = grid_info
                 if self.verbose:
                     logger.mesg(
-                        f"    ✓ Clicked cell {idx} at ({int(cx)}, {int(cy)})"
+                        f"    Grid: {rows}×{cols}, "
+                        f"rect=({grid_rect['x']:.0f},{grid_rect['y']:.0f},"
+                        f"{grid_rect['width']:.0f}×{grid_rect['height']:.0f})"
                     )
-                await asyncio.sleep(random.uniform(0.3, 0.7))
 
-            # 7) 点击 Verify 按钮
-            await asyncio.sleep(random.uniform(0.5, 1.0))
-            verify_clicked = await self._click_verify(page, challenge_frame)
-            if not verify_clicked:
+                # 3) 提取题目文本
+                task_text = await self._get_challenge_task_text(
+                    challenge_frame
+                )
                 if self.verbose:
-                    logger.mesg("    Cannot find Verify button")
+                    logger.mesg(f"    Task: {task_text or '(unknown)'}")
+
+                # 4) 截取 bframe 截图
+                challenge_image_bytes = await self._capture_challenge_image(
+                    page
+                )
+                if not challenge_image_bytes:
+                    if self.verbose:
+                        logger.mesg("    Failed to capture challenge image")
+                    return False
+
+                if self.save_screenshots:
+                    self._screenshot(
+                        challenge_image_bytes, f"challenge_{rl}", proxy_url
+                    )
+
+                # 5) 调用 VLM solver
+                cell_indices = await solver.solve(
+                    image_bytes=challenge_image_bytes,
+                    task_text=task_text,
+                    grid_size=(rows, cols),
+                )
+
+                # VLM 返回 [-1] 表示无匹配 → 点 Skip
+                if cell_indices == [-1]:
+                    if self.verbose:
+                        logger.mesg(
+                            "    Solver: no matching cells → Skip"
+                        )
+                    action = await self._detect_and_click_action(
+                        page, challenge_frame
+                    )
+                    if action:
+                        if self.verbose:
+                            logger.mesg(
+                                f"    → Clicked {action.capitalize()}"
+                            )
+                        await asyncio.sleep(random.uniform(1.0, 2.0))
+                        continue
+                    return False
+
+                if not cell_indices:
+                    if self.verbose:
+                        logger.mesg("    Solver returned empty response")
+                    return False
+
+                if self.verbose:
+                    logger.mesg(f"    Solver says click: {cell_indices}")
+
+                # 6) 模拟点击每个格子
+                for idx in cell_indices:
+                    if idx < 1 or idx > rows * cols:
+                        continue
+                    row = (idx - 1) // cols
+                    col = (idx - 1) % cols
+                    cell_w = grid_rect["width"] / cols
+                    cell_h = grid_rect["height"] / rows
+                    cx = grid_rect["x"] + col * cell_w + cell_w / 2
+                    cy = grid_rect["y"] + row * cell_h + cell_h / 2
+                    cx += random.uniform(-cell_w * 0.15, cell_w * 0.15)
+                    cy += random.uniform(-cell_h * 0.15, cell_h * 0.15)
+
+                    await self._human_like_click(page, int(cx), int(cy))
+                    if self.verbose:
+                        logger.mesg(
+                            f"    ✓ Clicked cell {idx} "
+                            f"at ({int(cx)}, {int(cy)})"
+                        )
+                    await asyncio.sleep(random.uniform(0.3, 0.7))
+
+                if self.save_screenshots:
+                    try:
+                        shot = await page.screenshot(full_page=False)
+                        self._screenshot(
+                            shot, f"cells_clicked_{rl}", proxy_url
+                        )
+                    except Exception:
+                        pass
+
+                # 7) 检测并点击动作按钮（Verify / Next / Skip）
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+                action = await self._detect_and_click_action(
+                    page, challenge_frame
+                )
+
+                if self.save_screenshots:
+                    try:
+                        await asyncio.sleep(0.5)
+                        shot = await page.screenshot(full_page=False)
+                        self._screenshot(
+                            shot, f"{action or 'btn'}_{rl}", proxy_url
+                        )
+                    except Exception:
+                        pass
+
+                if action == "verify":
+                    await asyncio.sleep(random.uniform(1.5, 2.5))
+                    # 检查验证码是否仍在（格子可能已刷新新图片）
+                    if await self._has_image_challenge(page):
+                        if self.verbose:
+                            logger.mesg(
+                                "    → Challenge still present "
+                                "(new images?), re-solving ..."
+                            )
+                        continue
+                    # 页面已离开 CAPTCHA，等待导航完成
+                    nav = await self._wait_for_navigation(
+                        page, proxy_url, timeout=8.0
+                    )
+                    return nav
+
+                elif action == "next":
+                    if self.verbose:
+                        logger.mesg("    → Next sub-round ...")
+                    await asyncio.sleep(random.uniform(1.5, 3.0))
+                    continue
+
+                elif action == "skip":
+                    if self.verbose:
+                        logger.mesg("    → Skipped, new challenge ...")
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                    continue
+
+                else:
+                    if self.verbose:
+                        logger.mesg("    Cannot find action button")
+                    return False
+
+            except Exception as e:
+                if self.verbose:
+                    logger.mesg(f"    Solve sub-round error: {str(e)[:200]}")
                 return False
 
-            # 8) 等待结果
-            await asyncio.sleep(random.uniform(1.0, 2.0))
-            nav = await self._wait_for_navigation(page, proxy_url, timeout=10.0)
-            return nav
-
-        except Exception as e:
-            if self.verbose:
-                logger.mesg(f"    Solve round error: {str(e)[:200]}")
-            return False
+        if self.verbose:
+            logger.mesg(
+                f"    × Max sub-rounds ({MAX_SUB_ROUNDS}) reached"
+            )
+        return False
 
     def _find_challenge_frame(self, page):
         """查找 challenge bframe 对应的 Frame 对象。"""
@@ -376,93 +495,57 @@ class CaptchaBypass:
                 return frame
         return None
 
-    async def _capture_challenge_image(self, page, challenge_frame) -> Optional[bytes]:
-        """截取 challenge 内图片区域。
+    async def _capture_challenge_image(self, page) -> Optional[bytes]:
+        """截取 reCAPTCHA challenge 区域的截图。
 
-        reCAPTCHA 的图片通常在 .rc-imageselect-challenge 容器中。
+        截取整个 bframe 元素（包含 header 指示文字 + 网格图片 + 按钮行）。
+        GridAnnotator 会自动检测网格边界，忽略非网格区域。
         """
         try:
-            # 尝试获取图片容器的边界
-            rect = await challenge_frame.evaluate("""() => {
-                // 优先找图片表格
-                const table = document.querySelector(
-                    'table.rc-imageselect-table-33, '
-                    + 'table.rc-imageselect-table-44, '
-                    + 'table.rc-imageselect-table'
-                );
-                if (table) {
-                    const r = table.getBoundingClientRect();
-                    return {x: r.x, y: r.y, width: r.width, height: r.height};
-                }
-                // 回退：找 challenge 容器
-                const challenge = document.querySelector(
-                    '.rc-imageselect-challenge'
-                );
-                if (challenge) {
-                    const r = challenge.getBoundingClientRect();
-                    return {x: r.x, y: r.y, width: r.width, height: r.height};
-                }
-                return null;
-            }""")
-
-            if not rect:
-                # 最后回退：整个 bframe 截图
-                bframe_el = page.locator(self.BFRAME_SELECTOR).first
-                if await bframe_el.count() > 0:
-                    return await bframe_el.screenshot()
-                return None
-
-            # 需要把 bframe 内的坐标转换为页面坐标
-            # 先获取 bframe 的位置
-            bframe_rect = await page.evaluate("""(selector) => {
-                const iframe = document.querySelector(selector);
-                if (!iframe) return null;
-                const r = iframe.getBoundingClientRect();
-                return {x: r.x, y: r.y, width: r.width, height: r.height};
-            }""", self.BFRAME_SELECTOR)
-
-            if bframe_rect:
-                clip = {
-                    "x": bframe_rect["x"] + rect["x"],
-                    "y": bframe_rect["y"] + rect["y"],
-                    "width": rect["width"],
-                    "height": rect["height"],
-                }
-                return await page.screenshot(clip=clip)
-
-            # 回退
             bframe_el = page.locator(self.BFRAME_SELECTOR).first
             if await bframe_el.count() > 0:
                 return await bframe_el.screenshot()
-            return None
-
         except Exception as e:
             if self.verbose:
                 logger.mesg(f"    Capture error: {str(e)[:150]}")
-            # 回退到 bframe 截图
-            try:
-                bframe_el = page.locator(self.BFRAME_SELECTOR).first
-                if await bframe_el.count() > 0:
-                    return await bframe_el.screenshot()
-            except Exception:
-                pass
-            return None
+        return None
 
     async def _get_challenge_task_text(self, challenge_frame) -> Optional[str]:
-        """从 challenge frame 提取题目文本。"""
+        """从 challenge frame 提取题目文本（含动态提示如 'Please also check the new images'）。"""
         try:
             text = await challenge_frame.evaluate("""() => {
+                let parts = [];
+
                 // 主要的指示文本
                 const instructions = document.querySelector(
                     '.rc-imageselect-instructions'
                 );
-                if (instructions) return instructions.innerText.trim();
+                if (instructions) parts.push(instructions.innerText.trim());
+
                 // 回退
-                const desc = document.querySelector(
-                    '.rc-imageselect-desc, .rc-imageselect-desc-no-canonical'
+                if (!parts.length) {
+                    const desc = document.querySelector(
+                        '.rc-imageselect-desc, '
+                        + '.rc-imageselect-desc-no-canonical'
+                    );
+                    if (desc) parts.push(desc.innerText.trim());
+                }
+
+                // 动态提示（如 "Please also check the new images"）
+                const dynamic = document.querySelectorAll(
+                    '.rc-imageselect-error-dynamic-more, '
+                    + '.rc-imageselect-error-select-more, '
+                    + '.rc-imageselect-incorrect-response'
                 );
-                if (desc) return desc.innerText.trim();
-                return null;
+                for (const el of dynamic) {
+                    const s = window.getComputedStyle(el);
+                    if (s.display !== 'none' && s.visibility !== 'hidden') {
+                        const t = el.innerText.trim();
+                        if (t) parts.push(t);
+                    }
+                }
+
+                return parts.length ? parts.join(' | ') : null;
             }""")
             return text
         except Exception:
@@ -515,16 +598,7 @@ class CaptchaBypass:
             rows = info["rows"]
             cols = info["cols"]
 
-            # 转换 bframe 内坐标到页面坐标
-            bframe_rect = await challenge_frame.evaluate("""() => {
-                // 获取 frame 在父页面中的位置 — 这里我们在 frame 内部,
-                // 需要通过 window.frameElement 获取
-                // 但跨域 frame 无法直接访问 frameElement
-                // 返回 null 表示需要从外部获取
-                return null;
-            }""")
-
-            # 从 page 获取 bframe 位置
+            # 从主页面获取 bframe iframe 的 viewport 位置偏移
             page = challenge_frame.page
             bframe_pos = await page.evaluate("""(selector) => {
                 const iframe = document.querySelector(selector);
@@ -555,22 +629,40 @@ class CaptchaBypass:
                 logger.mesg(f"    Grid detect error: {str(e)[:120]}")
             return None
 
-    async def _click_verify(self, page, challenge_frame) -> bool:
-        """点击 Verify / 验证 按钮。"""
+    async def _detect_and_click_action(
+        self, page, challenge_frame,
+    ) -> str | None:
+        """检测并点击 reCAPTCHA 动作按钮。
+
+        reCAPTCHA 使用同一个按钮 #recaptcha-verify-button，
+        但其显示文本会在 Verify / Next / Skip 之间切换。
+
+        Returns:
+            "verify" | "next" | "skip" | None
+        """
         try:
-            # 尝试在 challenge frame 中定位按钮
-            btn_rect = await challenge_frame.evaluate("""() => {
+            btn_info = await challenge_frame.evaluate("""() => {
                 const btn = document.querySelector(
                     '#recaptcha-verify-button'
                 );
-                if (btn) {
-                    const r = btn.getBoundingClientRect();
-                    return {x: r.x, y: r.y, width: r.width, height: r.height};
-                }
-                return null;
+                if (!btn) return null;
+                const r = btn.getBoundingClientRect();
+                return {
+                    x: r.x, y: r.y,
+                    width: r.width, height: r.height,
+                    text: btn.innerText.trim().toLowerCase(),
+                };
             }""")
 
-            if btn_rect:
+            if btn_info:
+                text = btn_info.get("text", "")
+                if "skip" in text:
+                    action = "skip"
+                elif "next" in text:
+                    action = "next"
+                else:
+                    action = "verify"
+
                 # 转换到 viewport 坐标
                 bframe_pos = await page.evaluate("""(selector) => {
                     const iframe = document.querySelector(selector);
@@ -582,40 +674,51 @@ class CaptchaBypass:
                 if bframe_pos:
                     cx = (
                         bframe_pos["x"]
-                        + btn_rect["x"]
-                        + btn_rect["width"] / 2
+                        + btn_info["x"]
+                        + btn_info["width"] / 2
                     )
                     cy = (
                         bframe_pos["y"]
-                        + btn_rect["y"]
-                        + btn_rect["height"] / 2
+                        + btn_info["y"]
+                        + btn_info["height"] / 2
                     )
                 else:
-                    cx = btn_rect["x"] + btn_rect["width"] / 2
-                    cy = btn_rect["y"] + btn_rect["height"] / 2
+                    cx = btn_info["x"] + btn_info["width"] / 2
+                    cy = btn_info["y"] + btn_info["height"] / 2
 
                 await self._human_like_click(page, int(cx), int(cy))
                 if self.verbose:
+                    label = action.capitalize()
                     logger.mesg(
-                        f"    ✓ Clicked Verify at ({int(cx)}, {int(cy)})"
+                        f"    ✓ Clicked {label} "
+                        f"at ({int(cx)}, {int(cy)})"
                     )
-                return True
+                return action
 
-            # 回退: 通过 frame_locator 点击
+            # 回退：frame_locator 方式
             bframe = page.frame_locator(self.BFRAME_SELECTOR)
-            verify_btn = bframe.locator("#recaptcha-verify-button")
-            if await verify_btn.count() > 0:
-                await verify_btn.click(delay=random.randint(50, 150))
+            btn = bframe.locator("#recaptcha-verify-button")
+            if await btn.count() > 0:
+                text = (await btn.inner_text()).strip().lower()
+                if "skip" in text:
+                    action = "skip"
+                elif "next" in text:
+                    action = "next"
+                else:
+                    action = "verify"
+                await btn.click(delay=random.randint(50, 150))
                 if self.verbose:
-                    logger.mesg("    ✓ Clicked Verify button (frame_locator)")
-                return True
+                    logger.mesg(
+                        f"    ✓ Clicked {action} (frame_locator)"
+                    )
+                return action
 
-            return False
+            return None
 
         except Exception as e:
             if self.verbose:
-                logger.mesg(f"    Verify click error: {str(e)[:120]}")
-            return False
+                logger.mesg(f"    Action button error: {str(e)[:120]}")
+            return None
 
     # ═══════════════════════════════════════════════════════════
     # 辅助方法
@@ -691,9 +794,9 @@ class CaptchaBypass:
         if self.save_screenshots:
             try:
                 shot = await page.screenshot(full_page=True)
-                save_debug_screenshot(shot, "nav_timeout", proxy_url)
+                self._screenshot(shot, "nav_timeout", proxy_url)
                 html = await page.content()
-                save_debug_html(html, "nav_timeout")
+                self._save_html(html, "nav_timeout")
             except Exception:
                 pass
 
