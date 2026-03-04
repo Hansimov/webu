@@ -21,3 +21,4 @@ Issues = "https://github.com/Hansimov/webu/issues"
 [project.scripts]
 ggsc = "webu.google_api.cli:main"
 pxsc = "webu.proxy_api.cli:main"
+cfwp = "webu.warp_api.cli:main"
