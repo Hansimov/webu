@@ -194,10 +194,10 @@ sudo resolvectl domain enp100s0f1 ~.
 
 ### 从其他机器（Tailscale 节点）使用代理
 
-代理绑定 `0.0.0.0:11000`，直接使用 xeon 的 Tailscale IP 或主机名：
+代理绑定 `0.0.0.0:11000`，直接使用 `<hostname>` 的 Tailscale IP 或主机名：
 ```bash
-curl --proxy http://xeon:11000 https://ifconfig.me/ip
-curl --socks5-hostname xeon:11000 https://ifconfig.me/ip
+curl --proxy http://<hostname>:11000 https://ifconfig.me/ip
+curl --socks5-hostname <hostname>:11000 https://ifconfig.me/ip
 ```
 
 ---

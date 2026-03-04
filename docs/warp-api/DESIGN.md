@@ -148,7 +148,7 @@ curl --proxy http://127.0.0.1:11000 http://example.com
           └────────────────────────────────────────┘
                     │                    │
             Tailscale mesh          Direct Internet
-            (100.x.x.x)            (223.166.172.201)
+            (100.x.x.x)            (xxx.xxx.xxx.xxx)
 ```
 
 ---

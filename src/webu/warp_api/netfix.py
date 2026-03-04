@@ -186,7 +186,7 @@ def _get_ipv6_global_prefix() -> tuple[str, str, int] | None:
     """检测全局 IPv6 前缀（跳过 CloudflareWARP 接口）。
 
     Returns:
-        (prefix, interface, prefix_bits) 如 ("2408:820c:685a:f860", "enp100s0f1", 64)
+        (prefix, interface, prefix_bits) 如 ("240*:****:****:****", "enp******1", 64)
         或 None。
     """
     try:

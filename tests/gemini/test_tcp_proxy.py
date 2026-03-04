@@ -30,21 +30,21 @@ class TestTCPProxyRewrite:
 
     def test_rewrite_host_simple_get(self):
         proxy = self._make_proxy()
-        req = b"GET /json HTTP/1.1\r\nHost: xeon:30001\r\nAccept: */*\r\n\r\n"
+        req = b"GET /json HTTP/1.1\r\nHost: <hostname>:30001\r\nAccept: */*\r\n\r\n"
         result = proxy._rewrite_request(req)
         assert b"Host: 127.0.0.1:30011" in result
-        assert b"Host: xeon:30001" not in result
+        assert b"Host: <hostname>:30001" not in result
 
     def test_rewrite_host_case_insensitive(self):
         proxy = self._make_proxy()
-        req = b"GET /json HTTP/1.1\r\nhost: xeon:30001\r\nAccept: */*\r\n\r\n"
+        req = b"GET /json HTTP/1.1\r\nhost: <hostname>:30001\r\nAccept: */*\r\n\r\n"
         result = proxy._rewrite_request(req)
         assert b"Host: 127.0.0.1:30011" in result
-        assert b"host: xeon:30001" not in result
+        assert b"host: <hostname>:30001" not in result
 
     def test_rewrite_host_with_spaces(self):
         proxy = self._make_proxy()
-        req = b"GET /json HTTP/1.1\r\nHost:   xeon:30001\r\nAccept: */*\r\n\r\n"
+        req = b"GET /json HTTP/1.1\r\nHost:   <hostname>:30001\r\nAccept: */*\r\n\r\n"
         result = proxy._rewrite_request(req)
         assert b"Host: 127.0.0.1:30011" in result
 
@@ -52,7 +52,7 @@ class TestTCPProxyRewrite:
         proxy = self._make_proxy()
         req = (
             b"GET /json HTTP/1.1\r\n"
-            b"Host: xeon:30001\r\n"
+            b"Host: <hostname>:30001\r\n"
             b"Accept: application/json\r\n"
             b"User-Agent: TestBrowser\r\n"
             b"\r\n"
@@ -66,7 +66,7 @@ class TestTCPProxyRewrite:
         proxy = self._make_proxy()
         req = (
             b"GET /devtools/page/ABC123 HTTP/1.1\r\n"
-            b"Host: xeon:30001\r\n"
+            b"Host: <hostname>:30001\r\n"
             b"Upgrade: websocket\r\n"
             b"Connection: Upgrade\r\n"
             b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
@@ -82,18 +82,18 @@ class TestTCPProxyRewrite:
         # Two pipelined requests in one TCP read
         data = (
             b"GET /json/version HTTP/1.1\r\n"
-            b"Host: xeon:30001\r\n"
+            b"Host: <hostname>:30001\r\n"
             b"Connection: keep-alive\r\n"
             b"\r\n"
             b"GET /json HTTP/1.1\r\n"
-            b"Host: xeon:30001\r\n"
+            b"Host: <hostname>:30001\r\n"
             b"Connection: keep-alive\r\n"
             b"\r\n"
         )
         result = proxy._rewrite_request(data)
         # 两个 Host 头都应被重写
         assert result.count(b"Host: 127.0.0.1:30011") == 2
-        assert b"Host: xeon:30001" not in result
+        assert b"Host: <hostname>:30001" not in result
 
     def test_rewrite_no_host_header(self):
         """没有 Host 头的数据应直接通过。"""
@@ -324,7 +324,7 @@ class TestTCPProxyIntegration:
         )
         request = (
             f"GET /json/version HTTP/1.1\r\n"
-            f"Host: xeon:{ctx['internal_port']}\r\n"
+            f"Host: <hostname>:{ctx['internal_port']}\r\n"
             f"\r\n"
         ).encode()
         writer.write(request)

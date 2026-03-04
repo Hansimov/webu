@@ -7,7 +7,7 @@
     python -m tests.gemini.launch_browser
 
 启动后打开 VNC 登录:
-    http://xeon:30004/vnc.html?autoconnect=true&resize=remote
+    http://<hostname>:30004/vnc.html?autoconnect=true&resize=remote
 
 按 Ctrl+C 停止。
 """

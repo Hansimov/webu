@@ -106,12 +106,12 @@ curl -X POST http://127.0.0.1:11001/warp/disconnect
 
 ```bash
 # 在其他机器上（通过 Tailscale 连接）
-curl --proxy http://xeon:11000 https://ifconfig.me/ip
-curl --socks5-hostname xeon:11000 https://ifconfig.me/ip
+curl --proxy http://<hostname>:11000 https://ifconfig.me/ip
+curl --socks5-hostname <hostname>:11000 https://ifconfig.me/ip
 
 # 用于 git / pip 等工具
-export https_proxy=http://xeon:11000
-export http_proxy=http://xeon:11000
+export https_proxy=http://<hostname>:11000
+export http_proxy=http://<hostname>:11000
 ```
 
 ---
