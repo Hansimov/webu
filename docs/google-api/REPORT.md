@@ -50,34 +50,33 @@
 
 > 注: Level-1 通过率较低是正常现象, 免费代理列表中大量 IP 已失效。
 
-## 3. Level-2 搜索检测（aiohttp HTTP 请求）
+## 3. Level-2 搜索检测（aiohttp HTTP 请求）—— 已证实对 SOCKS 代理无效
 
-> **重大变更**: Level-2 已从 Playwright 浏览器自动化改为 aiohttp HTTP 请求。
->
-> **原因**: Google 的 JavaScript 环境检测会识别 Playwright 自动化浏览器, 导致 100% 被 CAPTCHA 拦截。
-> HTTP 请求不执行 JavaScript, 因此不会触发自动化检测。
+> **结论 (2026-03-04)**: Level-2 HTTP 检测对当前免费 SOCKS 代理池 **0% 通过率**，无效。
 
-- 检测总数: **1064**
-- 通过: **59**
-- 失败: **1005**
-- 通过率: **5.5%**
+### 3.1 实测数据（SOCKS 专项批次）
 
-### 3.1 按协议统计
+| 批次 | 代理数 | 协议 | L2 通过 | 通过率 |
+|------|--------|------|---------|--------|
+| 2026-03-04 | 200 | socks4/socks5 | **0** | **0.0%** |
 
-| 协议 | 通过数 |
-|------|--------|
-| http | 36 |
-| socks4 | 17 |
-| socks5 | 6 |
+### 3.2 L2 失败原因分布
 
-### 3.2 Level-2 有效代理示例 (按延迟排序)
+| 原因 | 数量 | 说明 |
+|------|------|------|
+| timeout | 141 | SOCKS 代理慢 + Google 主动切断 |
+| other (连接错误) | 48 | ServerDisconnectedError、连接拒绝 |
+| CAPTCHA | 11 | Google 检测到异常流量（HTTP 层） |
 
-| IP | 端口 | 协议 | 延迟 |
-|----|------|------|------|
-| 117.1.48.242 | 20039 | socks5 | 1266ms |
-| 167.71.226.135 | 1080 | http | 2140ms |
-| 182.47.7.5 | 7891 | socks5 | 2190ms |
-| 121.43.146.222 | 1111 | socks4 | 4102ms |
+### 3.3 根本原因分析
+
+Level-2 使用 `aiohttp` raw HTTP 请求 `https://www.google.com/search?q=test`：
+- **Google 对非浏览器 HTTP 流量做了 IP 层封锁**，SOCKS 代理 IP 直接被识别并断开连接
+- `ServerDisconnectedError` 说明 Google 在 TLS 握手后主动关闭连接
+- 超时比例高（71%）说明即使没有主动拒绝，响应也极慢
+- `_MIN_SEARCH_RESPONSE_SIZE = 30000` 阈值在连接就被断开的情况下根本无法到达
+
+> 历史记录：早期测试（2026-03-01）包含 HTTP 代理时，整体通过率为 5.5%（59/1064），其中 HTTP 协议代理通过数最多（36）。SOCKS 代理在 L2 的实际通过率从未有效。
 | 47.92.82.167 | 3129 | socks4 | 4253ms |
 | 47.121.129.129 | 80 | socks4 | 4269ms |
 | 8.210.17.35 | 3128 | socks4 | 4380ms |
@@ -107,46 +106,77 @@ Level-2 HTTP 检测流程:
    - 无 CAPTCHA / sorry 重定向标记
 4. 正常 Google 搜索页面返回 ~86KB 的 JS 应用, CAPTCHA/sorry 页面 < 10KB
 
-## 4. 对比: 旧 Playwright vs 新 HTTP 方案
+## 4. 浏览器方案（UC + Playwright）对 SOCKS 代理搜索测试
 
-| 指标 | Playwright (旧) | HTTP (新) |
-|------|-----------------|-----------|
-| Level-2 通过数 | 0 | 59 |
-| Level-2 通过率 | 0.0% | 5.5% |
-| 单个检测耗时 | 5-20s | 1-10s |
-| CAPTCHA 率 | ~100% | ~0.5% |
-| 资源消耗 | 高 (浏览器实例) | 低 (HTTP 请求) |
-| 并发能力 | 3-5 | 30-50 |
+由于 L2 HTTP 检测完全失效，改用 UC+Playwright 直接测试 L1 通过的 SOCKS 代理能否执行真实 Google 搜索。
 
-## 5. 诊断结论
+### 4.1 实测结果（2026-03-04, 15 个 SOCKS 代理）
 
-### 5.1 Level-2 修复总结
+| 指标 | 结果 |
+|------|------|
+| 总测试数 | 15 |
+| **成功数** | **0 (0%)** |
+| CAPTCHA（无限循环） | 3 |
+| 超时（30s） | 4 |
+| empty/network error | 5 |
+| proxy_conn_failed | 1 |
+| socks_failed | 2 |
 
-**根本问题**: Google 的 bot detection 系统通过 JavaScript 运行时检测识别 Playwright 自动化浏览器:
-- 检查 `navigator.webdriver` 属性
-- 检查 Chrome DevTools Protocol 连接
-- 检查浏览器指纹一致性
-- 即使使用 playwright-stealth + system Chrome + persistent context, 仍被 100% 检测
+### 4.2 失败模式分析
 
-**解决方案**: 将 Level-2 从 Playwright 改为 aiohttp HTTP 请求:
-- HTTP 请求不执行 JavaScript, 因此不触发 bot detection
-- 通过响应大小和 CAPTCHA 标记判断代理是否被 Google 封禁
-- 大幅提升检测速度和并发能力
+| 模式 | 协议 | 原因 |
+|------|------|------|
+| CAPTCHA 无限循环 | socks5 | Google 对此 IP 永久要求 CAPTCHA，VLM 解对了也继续出新挑战 |
+| ERR_EMPTY_RESPONSE | socks4 | Playwright 与 socks4 兼容性差，全部返回空响应 |
+| 超时 (30s) | socks5 | 代理速度过慢，无法在超时内完成 Google 页面加载 |
+| ERR_NETWORK_CHANGED | socks5 | 代理不稳定，连接中途断开 |
 
-### 5.2 代理可用性分析
+### 4.3 CAPTCHA 绕过情况
 
-- 免费代理整体可用率极低: L1 通过 1.3%, L2 通过 5.5% (of L1 passed)
-- 有效代理主要来自中国阿里云 IP 段
-- SOCKS5 代理在 L1 通过率最高, HTTP 代理在 L2 数量最多
-- 最佳延迟约 1-2s, 平均延迟 5-7s
+VLM 解题器（Qwen3-VL）工作正常，能正确识别：火栓、人行横道、公共汽车等。
+问题在于 **Google 的 IP 信誉系统**，对已知代理 IP 触发永久 CAPTCHA 循环：
+- VLM 答对 → Google 继续出新题（无限循环）
+- 切换代理后重试 → 同样 IP 信誉差
 
-### 5.3 优化建议
+## 5. 诊断结论（2026-03-04 更新）
 
-1. 提高采集频率, 定期刷新代理池
-2. 优先使用 SOCKS5 代理 (L1 通过率更高)
-3. Level-2 检测使用较高并发 (30-50), 快速筛选
-4. 定期重新检测已有代理, 清理过期 IP
+### 5.1 免费 SOCKS 代理对 Google 搜索的可用性
+
+**结论：公开免费 SOCKS 代理池对 Google 搜索的实际可用率为 0%。**
+
+失败原因层层递进：
+
+| 层级 | 检测方式 | 通过率 | 原因 |
+|------|----------|--------|------|
+| L1 | aiohttp → Google generate_204 | ~9% | 大部分 IP 已过期 |
+| L2 (HTTP) | aiohttp → Google Search | 0% (SOCKS) | Google IP 层封锁 |
+| 浏览器测试 | UC+Playwright → Google Search | 0% | IP 信誉 + 无限 CAPTCHA |
+
+### 5.2 根本原因
+
+免费代理和公共 SOCKS 代理的 IP 地址早已被 Google 列入黑名单：
+- **IP 层封锁**：Google 在 TCP/TLS 层断开已知代理 IP 的连接（raw HTTP 0%）
+- **CAPTCHA 永久循环**：浏览器加反检测也无效，Google 对黑名单 IP 持续出新 CAPTCHA 题，无限循环
+- **socks4 协议**：Playwright 对 socks4 支持差，全部返回 ERR_EMPTY_RESPONSE
+
+### 5.3 管道架构调整
+
+`run_proxy_search_test.py` 已更新：
+- **移除** Level-2 HTTP 检测步骤（0% 通过率，无意义）
+- 流程改为：采集 → L1 检测 → **直接** UC+Playwright 浏览器搜索
+- 新增 `--socks5-only` 选项（socks4 对 Playwright 不兼容）
+
+新增独立测试脚本 `run_socks_browser_test.py`：
+- 直接从 DB 取 L1 通过的 SOCKS 代理，用浏览器测试 Google 搜索
+- 包含详细错误分类（captcha/timeout/proxy_conn_failed/socks_failed/network_changed）
+
+### 5.4 对未来代理策略的建议
+
+1. **付费住宅代理**（Residential Proxy）IP 信誉远比数据中心 IP 好，成功率会显著提升
+2. **自建出口节点**而非依赖公开代理列表——自有 VPS 的 IP 更干净
+3. 公开 SOCKS 代理仅适合不被 Google 严格检测的场景（如 L1 连通性测试）
+4. 定期刷新采集频率意义有限——问题在 IP 信誉而非 IP 数量
 
 ---
 
-*报告更新时间: 2026-03-01 (Level-2 HTTP 方案实施后)*
+*报告更新时间: 2026-03-04 (SOCKS 代理 Google 搜索实测分析)*

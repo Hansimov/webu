@@ -89,14 +89,15 @@ tests/google_api/
 │   ├── 代理源配置验证
 │   └── [集成] 实际 URL 拉取
 │
-├── test_proxy_checker.py     # 代理检测 — 15 个测试
+├── test_proxy_checker.py     # 代理检测 — 13 个测试
 │   ├── 代理 URL 构建（http/https/socks5/socks4/unknown）
 │   ├── 随机化辅助函数（UA/viewport/locale）
 │   ├── Level-1 端点配置验证（gstatic_204 优先）
-│   ├── Level-1/Level-2 空列表边界情况
+│   ├── Level-1 空列表边界情况
 │   ├── ProxyChecker 初始化 + 批量级别选择
 │   └── [集成] Level-1 真实代理检测
-│                              两级流水线检测
+│
+│   注: test_level2_http.py 已删除（L2 HTTP 对 SOCKS 代理 0% 通过，无效）
 │
 ├── test_scraper.py           # Scraper — 8 个测试
 │   ├── 初始化参数
@@ -175,7 +176,10 @@ tests/google_api/
 │
 ├── run_check_proxies.py      # 辅助脚本：批量代理检测
 ├── run_full_diagnosis.py     # 辅助脚本：全面诊断 + 报告
-└── run_diagnose_proxies.py   # 辅助脚本：网络连通性诊断
+├── run_diagnose_proxies.py   # 辅助脚本：网络连通性诊断
+├── run_search_test.py        # 辅助脚本：本地代理 + DB 代理搜索测试
+├── run_proxy_search_test.py  # 辅助脚本：采集→L1→浏览器搜索端到端流程
+└── run_socks_browser_test.py # 辅助脚本：SOCKS 代理浏览器搜索测试（直接测试 L1 代理）
 ```
 
 ---
@@ -219,7 +223,7 @@ asyncio_mode = auto
 |------|---------|---------|------|
 | parser | 9 | 0 | 9 |
 | proxy_collector | 7 | 2 | 9 |
-| proxy_checker | 10 | 3 | 13 |
+| proxy_checker | 8 | 3 | 11 |
 | scraper | 6 | 2 | 8 |
 | mongo | 0 | 7 | 7 |
 | cli | 14 | 0 | 14 |
@@ -229,8 +233,8 @@ asyncio_mode = auto
 | live_server | 0 | 18 | 18 |
 | live | 5 | 14+ | 19+ |
 | search | 0 | 5 | 5 |
-| **合计** | **~84** | **~59** | **~143** |
+| **合计** | **~82** | **~59** | **~141** |
 
 ---
 
-*文档更新日期：2026-03-01*
+*文档更新日期：2026-03-04*

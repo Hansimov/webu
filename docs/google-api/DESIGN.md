@@ -69,7 +69,7 @@ proxy_api (基础设施)              google_api (Google 搜索)
 | 模块 | 职责 | 关键类/函数 |
 |------|------|------------|
 | `constants.py` | Google 搜索常量 + 从 proxy_api 重新导出 | `GOOGLE_SEARCH_URL`, `SEARCH_TIMEOUT` |
-| `checker.py` | Level-2 Google 搜索检测 + 两级编排 | `ProxyChecker`, `check_level2_batch` |
+| `checker.py` | Level-2 Google 搜索检测 + 两级编排 | `ProxyChecker`, `check_level2_batch` ⚠️ L2 对 SOCKS 无效 |
 | `pool.py` | Google 搜索代理池（继承 ProxyPool） | `GoogleSearchPool` |
 | `scraper.py` | UC+CDP 驱动的 Google 搜索抓取器 | `GoogleScraper` |
 | `parser.py` | Google 搜索结果 HTML 解析 | `GoogleResultParser` |
@@ -141,7 +141,9 @@ proxy_api (基础设施)              google_api (Google 搜索)
 - HTTP 请求不触发 Google 的浏览器自动化检测
 - 记录 `is_valid`、`latency_ms`、`last_error`、`check_level`
 
-> **注意**：Level-2 仅验证代理能访问 Google 搜索（连通性检测）。Google 对 HTTP 请求返回 JS SPA（~86KB, 98% JavaScript），非服务器渲染 HTML，无法直接用 BeautifulSoup 解析搜索结果。实际搜索结果解析必须使用 Playwright 浏览器渲染（参见 `scraper.py`）。
+> ⚠️ **已知局限（2026-03-04 实测）**：Level-2 对 SOCKS 代理通过率为 **0%**（200/200 失败）。Google 对公开 SOCKS 代理 IP 实施 IP 层封锁，在 TCP/TLS 层直接关闭连接（`ServerDisconnectedError`），导致超时（71%）或连接错误（24%）。L2 HTTP 检测对 **HTTP 协议代理**有一定效果，对 SOCKS 代理无效。
+>
+> 实际 Google 搜索测试应直接使用 `scraper.py`（UC+Playwright）并跳过 L2 预检，参见 `tests/google_api/run_socks_browser_test.py`。
 
 ### 3.3 搜索执行流程
 
