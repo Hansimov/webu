@@ -1,6 +1,4 @@
 import requests
-import requests.packages.urllib3.util.connection as urllib3_cn
-import socket
 
 from tclogger import TCLogger, logstr
 
@@ -34,11 +32,17 @@ class IPv6DBClient:
     def _request(
         self, method: str, endpoint: str, params: dict = None, json: dict = None
     ) -> dict:
-        """request to server (via IPv4)"""
+        """request to server (via IPv4)
+
+        Uses thread-local save/restore to temporarily force IPv4 without
+        interfering with other threads' IPv6 sessions.
+        """
         url = f"{self.server_url}{endpoint}"
+        from .session import IPv6SessionAdapter
+
+        saved = IPv6SessionAdapter.save_family()
+        IPv6SessionAdapter.force_ipv4()
         try:
-            # force IPv4 for client-server communication
-            urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
             response = requests.request(
                 method=method,
                 url=url,
@@ -52,6 +56,8 @@ class IPv6DBClient:
             if self.verbose:
                 logger.warn(f"× Request failed: {e}")
             return None
+        finally:
+            IPv6SessionAdapter.restore_family(saved)
 
     def pick(self) -> str:
         """Pick usable and not-using addr from server for this dbname."""

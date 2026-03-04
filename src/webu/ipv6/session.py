@@ -1,6 +1,7 @@
 import requests
 import requests.packages.urllib3.util.connection as urllib3_cn
 import socket
+import threading
 import time
 
 from requests import Session
@@ -14,6 +15,25 @@ from .server import AddrStatus, AddrReportInfo
 from .client import IPv6DBClient
 
 logger = TCLogger(name="IPv6Session")
+
+# ========== Thread-safe allowed_gai_family ==========
+# urllib3's allowed_gai_family is a module-level global that controls whether
+# getaddrinfo uses AF_INET (IPv4) or AF_INET6 (IPv6). In multi-threaded workers,
+# client._request() sets it to AF_INET for server communication, which races with
+# other threads' IPv6 requests. Fix: use thread-local storage so each thread has
+# its own family setting without interfering with others.
+
+_gai_local = threading.local()
+_original_gai_family = urllib3_cn.allowed_gai_family
+
+
+def _thread_safe_gai_family():
+    """Thread-safe replacement for urllib3's allowed_gai_family."""
+    return getattr(_gai_local, "family", _original_gai_family())
+
+
+# Install once at module load
+urllib3_cn.allowed_gai_family = _thread_safe_gai_family
 
 
 class IPv6Adapter(HTTPAdapter):
@@ -29,12 +49,27 @@ class IPv6Adapter(HTTPAdapter):
 class IPv6SessionAdapter:
     @staticmethod
     def force_ipv4():
-        urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
+        """Force current thread to use IPv4 for DNS resolution."""
+        _gai_local.family = socket.AF_INET
 
     @staticmethod
     def force_ipv6():
+        """Force current thread to use IPv6 for DNS resolution."""
         if urllib3_cn.HAS_IPV6:
-            urllib3_cn.allowed_gai_family = lambda: socket.AF_INET6
+            _gai_local.family = socket.AF_INET6
+
+    @staticmethod
+    def save_family():
+        """Save current thread's family setting for later restoration."""
+        return getattr(_gai_local, "family", None)
+
+    @staticmethod
+    def restore_family(saved):
+        """Restore previously saved family setting."""
+        if saved is None:
+            _gai_local.__dict__.pop("family", None)
+        else:
+            _gai_local.family = saved
 
     @staticmethod
     def adapt(session: requests.Session, ip: str):
