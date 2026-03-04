@@ -128,7 +128,7 @@ class TestWarpIntegration:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
         try:
-            result = sock.connect_ex((WARP_PROXY_HOST, WARP_PROXY_PORT))
+            result = sock.connect_ex(("127.0.0.1", WARP_PROXY_PORT))
             if result != 0:
                 pytest.skip("Proxy not running")
         finally:
@@ -139,7 +139,7 @@ class TestWarpIntegration:
         result = subprocess.run(
             [
                 "curl", "-s", "--max-time", "15",
-                "--socks5-hostname", f"{WARP_PROXY_HOST}:{WARP_PROXY_PORT}",
+                "--socks5-hostname", f"127.0.0.1:{WARP_PROXY_PORT}",
                 "https://api.ipify.org",
             ],
             capture_output=True,
@@ -165,7 +165,7 @@ class TestWarpIntegration:
         result = subprocess.run(
             [
                 "curl", "-s", "--max-time", "15",
-                "--proxy", f"http://{WARP_PROXY_HOST}:{WARP_PROXY_PORT}",
+                "--proxy", f"http://127.0.0.1:{WARP_PROXY_PORT}",
                 "http://ifconfig.me/ip",
             ],
             capture_output=True,

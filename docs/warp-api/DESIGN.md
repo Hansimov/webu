@@ -42,6 +42,8 @@
 │  ┌─────────────────────────────────────────────┐             │
 │  │  网络修复 (netfix.py)                         │             │
 │  │  fix_tailscale_compat — nftables + ip rule   │             │
+│  │  fix_ipv6_routing  — ip -6 rule 保护 ndppd   │             │
+│  │  fix_dns_routing   — 修复 WARP DNS 劫持       │             │
 │  └─────────────────────────────────────────────┘             │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -69,7 +71,7 @@ src/webu/warp_api/
 | `proxy.py` | `WarpSocksProxy` | 异步代理服务器，流量通过 WARP 转发 |
 | `server.py` | `create_warp_server()` | RESTful API，提供状态查询和 WARP 控制 |
 | `cli.py` | `main()`, `cfwp` | CLI 服务管理（启停/状态/日志） |
-| `netfix.py` | `fix_tailscale_compat()` | 修复 WARP 与 Tailscale 的网络冲突 |
+| `netfix.py` | `fix_tailscale_compat()` / `fix_ipv6_routing()` / `fix_dns_routing()` | 修复 WARP 与 Tailscale 网络冲突、IPv6 路由保护、DNS 劫持修复 |
 
 ---
 
@@ -151,5 +153,5 @@ curl --proxy http://127.0.0.1:11000 http://example.com
 
 ---
 
-*文档更新日期：2026-03-05*
+*文档更新日期：2026-03-05*（代理绑定 0.0.0.0，DNS/IPv6 修复）
 *详细内容请见: SETUP.md, USAGE.md, HINTS.md*

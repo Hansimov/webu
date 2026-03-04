@@ -100,12 +100,34 @@ curl -X POST http://127.0.0.1:11001/warp/disconnect
 
 ---
 
-## 4. 典型工作流
+## 4. 从远程 Tailscale 节点使用
+
+代理绑定 `0.0.0.0:11000`，Tailscale 网络内的任何节点均可直接使用：
+
+```bash
+# 在其他机器上（通过 Tailscale 连接）
+curl --proxy http://xeon:11000 https://ifconfig.me/ip
+curl --socks5-hostname xeon:11000 https://ifconfig.me/ip
+
+# 用于 git / pip 等工具
+export https_proxy=http://xeon:11000
+export http_proxy=http://xeon:11000
+```
+
+---
+
+## 5. 典型工作流
 
 ```bash
 # 首次使用
 export SUDOPASS="your_password"   # 添加到 ~/.zshrc
-cfwp start                        # 启动（自动修复 Tailscale 兼容性）
+cfwp start                        # 启动（自动修复 Tailscale、DNS、IPv6 路由）
+
+# cfwp start 自动完成的修复：
+#   1. nftables Tailscale 例外
+#   2. ip rule Tailscale 优先级
+#   3. ip -6 rule ndppd 路由保护
+#   4. resolvectl domain ~. 修复 WARP DNS 劫持
 
 # 日常使用
 cfwp status                       # 查看状态
@@ -125,4 +147,4 @@ cfwp stop
 
 ---
 
-*文档更新日期：2026-03-05*
+*文档更新日期：2026-03-05*（新增远程访问、cfwp start 自动修复说明）

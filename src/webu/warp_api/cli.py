@@ -97,6 +97,24 @@ def cmd_start(args):
     except Exception as e:
         logger.warn(f"  × Tailscale compat fix failed: {e}")
 
+    # 保护 IPv6 ndppd 出口不被 WARP 路由表捕获
+    try:
+        from .netfix import fix_ipv6_routing
+
+        logger.note("> Checking IPv6 routing protection ...")
+        fix_ipv6_routing()
+    except Exception as e:
+        logger.warn(f"  × IPv6 routing fix failed: {e}")
+
+    # 修复 WARP DNS 劫持（Cloudflare DNS 不返回中国 CDN 的 AAAA 记录）
+    try:
+        from .netfix import fix_dns_routing
+
+        logger.note("> Checking DNS routing ...")
+        fix_dns_routing()
+    except Exception as e:
+        logger.warn(f"  × DNS routing fix failed: {e}")
+
     proxy_host = getattr(args, "proxy_host", WARP_PROXY_HOST)
     proxy_port = getattr(args, "proxy_port", WARP_PROXY_PORT)
     api_host = getattr(args, "api_host", WARP_API_HOST)
@@ -164,7 +182,8 @@ def cmd_start(args):
     _write_pid(proc.pid)
     logger.okay(f"  ✓ Server started (PID: {proc.pid})")
     logger.mesg(f"  Log: {LOG_FILE}")
-    logger.mesg(f"  SOCKS5 proxy: socks5://{proxy_host}:{proxy_port}")
+    logger.mesg(f"  Proxy: socks5://{proxy_host}:{proxy_port}")
+    logger.mesg(f"  Proxy: http://{proxy_host}:{proxy_port} (HTTP forward)")
     logger.mesg(f"  API docs: http://{api_host}:{api_port}/docs")
 
 

@@ -59,6 +59,15 @@ cfwp status
 curl --proxy http://127.0.0.1:11000 http://ifconfig.me/ip
 ```
 
+`cfwp start` 启动时自动完成以下网络修复（幂等，可重复执行）：
+
+| 修复项 | 内容 |
+|--------|------|
+| nftables Tailscale 例外 | 防止 Tailscale 流量被 WARP DROP |
+| ip rule 优先级 | Tailscale 路由表在 WARP 之前查找 |
+| ip -6 rule ndppd 保护 | 随机 IPv6 出口流量走 main 表 |
+| resolvectl domain `~.` | **修复 WARP DNS 劫持**，让 ISP DNS 优先返回 AAAA 记录 |
+
 ---
 
 ## 5. 数据目录
@@ -90,4 +99,4 @@ cfwp stop
 
 ---
 
-*文档更新日期：2026-03-05*
+*文档更新日期：2026-03-05*（cfwp start 自动修复列表）
