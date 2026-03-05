@@ -125,11 +125,15 @@ class ProxyState:
   ├─ 创建新 BrowserContext（设置 context-level 代理）
   ├─ 恢复持久化 Cookie（CAPTCHA bypass 状态）
   ├─ 导航到 Google 搜索页面
+  ├─ _dismiss_consent()  ← 检测并关闭 EU Cookie 同意弹窗
   ├─ 检测是否出现 CAPTCHA
   │   ├─ 是 → VLM 识别验证码，自动处理
   │   └─ 否 → 继续
+  ├─ _detect_no_results_early()  ← JS 快速检测「无结果」页（~1.2s vs 9.5s timeout）
+  │   ├─ 是 → 立即返回空结果，跳过重试
+  │   └─ 否 → 等待 #search 选择器（最长 8s）
   ├─ 获取页面 HTML
-  ├─ GoogleResultParser 解析结果
+  ├─ GoogleResultParser 解析结果（含 snippet/title 清洗）
   ├─ 保存 Cookie 到文件
   ├─ report_success() / report_failure()
   ├─ 关闭 Context（释放资源）
@@ -139,10 +143,11 @@ class ProxyState:
 ### 重试与代理切换
 
 搜索失败时的重试策略：
-1. 失败（超时/CAPTCHA/无结果）→ `report_failure(proxy)`
-2. 清除固定代理，从 ProxyManager 获取下一个代理
-3. 创建新 Context（新代理），无需重启浏览器
+1. 失败（超时/CAPTCHA/0 结果）→ `report_failure(proxy)`
+2. 用 `original_proxy` 记录原始代理，只有在存在 `ProxyManager` 时才清除 `requested_proxy`（防止无 ProxyManager 时意外回退到直连）
+3. 从 ProxyManager 获取下一个代理，创建新 Context，无需重启浏览器
 4. 最多重试 2 次（共 3 次尝试）
+5. **智能跳过重试**：若 `response.error` 包含 `"did not match"`（Google「无匹配结果」），直接 break 不再重试，避免对同一查询无效地消耗额外代理
 
 ### CAPTCHA 处理
 
@@ -187,17 +192,60 @@ scraper 内置 VLM (Vision Language Model) CAPTCHA 自动识别：
 
 ---
 
-## 5. 文件结构
+## 5. 特殊情况处理
+
+### 5.1 EU Cookie 同意弹窗（`_dismiss_consent()`）
+
+**现象：** 通过 EU 出口 IP（如代理 11119）访问 Google 时，页面显示 "Before you continue to Google" 同意弹窗，遮盖搜索结果。
+
+**根本原因：** 代理 11119 的出口落在欧盟地区，GDPR 要求 Google 展示 Cookie 同意弹窗。
+
+**解决方案：** `_dismiss_consent()` 在每次搜索导航后、CAPTCHA 检测前运行：
+- 通过 `parser.detect_consent()` 检测 HTML 中 "before you continue" 文本
+- 点击 "Reject all"（支持多语言按钮文本）
+- 等待 `#search` 可见后继续
+- Cookie 持久化到 `google_cookies.json`，后续搜索自动跳过弹窗
+
+### 5.2 「无结果」页面快速检测（`_detect_no_results_early()`）
+
+**现象：** 搜索含 `site:` 限定词等 Google 无法匹配的查询时，页面返回「did not match any documents」，但整个流程耗时 9.5 秒。
+
+**根本原因：** 「无结果」页面中 `#search` 元素存在但为空，`wait_for_selector` 需等满 8s 超时才能继续，加上其他开销共 9.5s。
+
+**解决方案：** 在等待选择器之前，用 `page.evaluate()` 直接查询 DOM 文本：
+
+```python
+no_results = await page.evaluate(
+    "document.body.innerText.includes('did not match any documents')"
+)
+```
+
+**效果：** 无结果页导航时间 9.5s → **1.2s**。
+
+**关键教训：** `page.locator('text=did not match any documents')` 不可靠——Google 的提示文字横跨多个嵌套 DOM 节点，`innerText` 合并后才完整，`locator` 无法精确匹配。
+
+### 5.3 解析器文本清洗
+
+`GoogleResultParser` 新增两个清洗方法，去除原始 HTML 中的噪音文本：
+
+| 方法 | 作用 |
+|------|------|
+| `_clean_snippet(text)` | 去除摘要中的标题前缀、"Translate this page"、URL 片段、日期前缀、引用链接文本 |
+| `_clean_video_title(text)` | 去除「YouTube · 频道 · X time ago」等 metadata 后缀，只保留视频标题 |
+
+---
+
+## 6. 文件结构
 
 ```
 src/webu/google_api/
 ├── __init__.py          # 模块导出
 ├── __main__.py          # python -m webu.google_api 入口
-├── cli.py               # ggsc CLI 工具 (525 行)
+├── cli.py               # ggsc CLI 工具 (~539 行)
 ├── constants.py         # 配置常量 (47 行)
-├── parser.py            # Google 结果解析器 (321 行)
+├── parser.py            # Google 结果解析器 (~661 行)
 ├── proxy_manager.py     # 代理管理器 (415 行)
-├── scraper.py           # 浏览器搜索引擎 (613 行)
+├── scraper.py           # 浏览器搜索引擎 (~793 行)
 └── server.py            # FastAPI 服务 (252 行)
 
 tests/google_api/

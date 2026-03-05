@@ -225,3 +225,40 @@ print(f"Healthy: {stats['healthy_proxies']}/{stats['total_proxies']}")
 | `DEFAULT_PORT` | 7800 | 默认服务端口 |
 | `PID_FILE` | `/tmp/ggsc.pid` | PID 文件路径 |
 | `LOG_FILE` | `/tmp/ggsc.log` | 日志文件路径 |
+
+---
+
+## 5. CLI 日志输出格式
+
+### 5.1 搜索日志
+
+`ggsc search` 执行时的终端输出遵循以下格式：
+
+**首次尝试**（无计数前缀）：
+```
+> Search: "python编程" via proxy-11111
+✓ 10 results (1234ms)
+```
+
+**重试**（带 `[N/M]` 计数前缀）：
+```
+> Search: "python编程" via proxy-11111
+✗ No results / timeout ...
+> [2/3] Search: "python编程" via proxy-11119
+✓ 10 results (987ms)
+```
+
+**无结果页面**（快速返回，约 1.2s）：
+```
+> Search: "uupers site:bilibili.com" via proxy-11111
+⏳ Google returned no results (1170ms)
+```
+
+**设计理由：** 绝大多数搜索一次成功，`[1/3]` 计数对用户是噪音；重试时才显示计数，让异常情况更显眼。
+
+### 5.2 URL 和路径着色
+
+CLI 输出中的 URL 和文件路径统一通过 `logstr.file()` 以专用颜色渲染，在终端中与普通文本区分。例如：
+- 代理 URL：`http://127.0.0.1:11111`（彩色）
+- 结果 URL：`https://example.com`（彩色）
+- 日志文件路径：`/tmp/ggsc.log`（彩色）

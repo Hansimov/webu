@@ -2,6 +2,10 @@
 
 > 测试组织、运行方式和测试覆盖说明。
 
+> **测试计数（截至 2026-03 后）：**
+> - `tests/google_api/`：111 个单元/集成测试，全部通过（`-m "not integration"`）
+> - `tests/captcha/`：3 个 CAPTCHA 相关测试
+
 ---
 
 ## 1. 测试文件
@@ -95,15 +99,25 @@ python -m pytest tests/google_api/test_search.py -xvs -m integration
 - 空 HTML 处理
 - 重定向 URL 解析
 - HTML 清理（去除 script/style）
+- **`detect_consent()`**：EU Cookie 同意弹窗检测（"before you continue" 文本）
+- **`_detect_no_results()`**：无结果页检测（"did not match any documents" / "no results found"）
+- **`_clean_snippet()`**：摘要清洗（标题前缀、Translate this page、日期前缀等）
+- **`_clean_video_title()`**：视频标题清洗（YouTube metadata 后缀）
 
-### 4.3 Server 测试 (`test_server.py`)
+### 4.3 Scraper 测试 (`test_scraper.py`)
+
+- `_dismiss_consent()`：EU Cookie 同意弹窗自动关闭逻辑（mock page）
+- `_detect_no_results_early()`：JS innerText 无结果检测（mock page.evaluate）
+- 重试逻辑：`original_proxy` 保持，有/无 ProxyManager 的代理切换行为
+
+### 4.4 Server 测试 (`test_server.py`)
 
 - `/health` 端点
 - `/proxy/status` 端点
 - `/proxy/current` 端点
 - `/search` 参数验证
 
-### 4.4 CLI 测试 (`test_cli.py`, `test_cli_e2e.py`)
+### 4.5 CLI 测试 (`test_cli.py`, `test_cli_e2e.py`)
 
 - PID 文件管理（写入/读取/删除）
 - 进程状态检查

@@ -121,7 +121,7 @@ class GridAnnotator:
         result = self.annotate(image_input, grid_size)
         Path(output_path).write_bytes(result.annotated_image)
         if self.verbose:
-            logger.mesg(f"  Saved annotated image: {output_path}")
+            logger.mesg(f"  Saved annotated image: {logstr.file(output_path)}")
         return result
 
     def _load_image(self, image_input: str | bytes | np.ndarray) -> np.ndarray:
@@ -400,43 +400,31 @@ def _encode_image_file_to_base64(image_path: str) -> str:
 
 
 SOLVE_PROMPT_TEMPLATE = """\
-This is a reCAPTCHA challenge image with a {grid_desc} grid.
+这是一道 reCAPTCHA 图片验证题，{grid_desc} 网格，每格右下角有编号（1-{total}）。
 {task_desc}
-Each cell has a number label in the bottom-right corner (1-{total}).
 
-IMPORTANT RULES:
-- Select ALL cells that contain ANY part of the target object, even a small portion.
-- Objects often span multiple cells — a bus, car, or crosswalk may occupy 2-4 cells.
-  ALL cells containing even a tiny sliver of the target MUST be selected.
-- Pay close attention to cell edges/boundaries; objects frequently extend across borders.
-- When in doubt, INCLUDE the cell rather than exclude it — missing cells is penalized more heavily than extra cells.
-- For "traffic lights": include the pole and the light housing.
-- For "crosswalks": include cells with ANY white stripe, even partial.
-- For vehicles (bus, car, motorcycle, bicycle): include cells with ANY part of the vehicle body, wheels, or shadow.
+规则：
+- 选出所有包含目标物体（哪怕只有一小部分）的格子
+- 物体常跨越多个格子，边缘/角落的小片也必须选
+- 宁可多选，不要漏选
+- 你需要每个格子都仔细检查，特别注意边缘和角落区域
 {feedback}
-Output format (strict JSON only, no explanation):
+严格按 JSON 数组输出：
 ```json
-[cell_number1, cell_number2, ...]
+[格子编号1, 格子编号2, ...]
 ```
-
-If NO cells match the target at all, output:
+完全没有匹配则输出：
 ```json
 [-1]
 ```
 """
 
 
-RETRY_FEEDBACK_TEMPLATE = """\
-
-CRITICAL FEEDBACK from the previous attempt (your answer was WRONG):
+RETRY_FEEDBACK_TEMPLATE = """
+注意：你上一轮的答案是错误的。
 {error_info}
 {prev_attempt_info}
-Re-examine the image VERY CAREFULLY. Look at EVERY cell again.
-Common mistakes:
-- Missing cells at the edges/boundaries of the target object
-- Overlooking small/partial appearances of the target in corner cells
-- Confusing similar-looking objects
-Adjust your selection accordingly.
+请仔细重新审视图片的每一个格子，特别注意边缘和角落区域。
 """
 
 
@@ -487,7 +475,7 @@ class CaptchaSolver:
             需要点击的格子编号列表（1-based），空列表表示失败
         """
         if not self.endpoint:
-            logger.warn("  × VLM endpoint not configured (configs/captcha.json)")
+            logger.warn(f"  × VLM endpoint not configured ({logstr.file('configs/captcha.json')})")
             return []
 
         # 1) 标注网格
@@ -500,7 +488,7 @@ class CaptchaSolver:
         annotated_path = DEBUG_DIR / "last_annotated.png"
         annotated_path.write_bytes(result.annotated_image)
         if self.verbose:
-            logger.mesg(f"    Annotated: {annotated_path}")
+            logger.mesg(f"    Annotated: {logstr.file(annotated_path)}")
 
         # 2) 构造 prompt
         rows, cols = result.grid_size
@@ -541,7 +529,7 @@ class CaptchaSolver:
         messages = self._build_messages(prompt, image_url)
 
         if self.verbose:
-            logger.mesg(f"    Calling VLM: {self.endpoint} ...")
+            logger.mesg(f"    Calling VLM: {logstr.file(self.endpoint)} ...")
 
         try:
             response_text = await self._call_vlm(messages)

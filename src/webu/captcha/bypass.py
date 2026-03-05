@@ -47,7 +47,7 @@ def save_debug_screenshot(
     filename = f"{ts}_bypass_{stage}_{safe_proxy}.png"
     path = out_dir / filename
     path.write_bytes(screenshot_bytes)
-    logger.mesg(f"  📸 [{stage}]: {path}")
+    logger.mesg(f"  📸 [{stage}]: {logstr.file(path)}")
     return path
 
 
@@ -62,7 +62,7 @@ def save_debug_html(
     ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
     path = out_dir / f"{ts}_{stage}.html"
     path.write_text(html, encoding="utf-8")
-    logger.mesg(f"  📄 [{stage}]: {path}")
+    logger.mesg(f"  📄 [{stage}]: {logstr.file(path)}")
     return path
 
 
@@ -146,7 +146,7 @@ class CaptchaBypass:
             logger.note("> Attempting CAPTCHA bypass ...")
 
         if self.verbose:
-            logger.mesg(f"  Screenshots dir: {self._run_dir}")
+            logger.mesg(f"  Screenshots dir: {logstr.file(self._run_dir)}")
 
         # 保存绕过前截图
         if self.save_screenshots:
@@ -367,9 +367,9 @@ class CaptchaBypass:
                 if error_state:
                     prev_error_feedback = error_state
 
-                # 4) 截取 bframe 截图
+                # 4) 截取网格图片（优先仅 TABLE 区域）
                 challenge_image_bytes = await self._capture_challenge_image(
-                    page
+                    page, challenge_frame=challenge_frame
                 )
                 if not challenge_image_bytes:
                     if self.verbose:
@@ -602,15 +602,41 @@ class CaptchaBypass:
         except Exception:
             return None
 
-    async def _capture_challenge_image(self, page) -> Optional[bytes]:
-        """截取 reCAPTCHA challenge 区域的截图。
+    async def _capture_challenge_image(
+        self, page, challenge_frame=None
+    ) -> Optional[bytes]:
+        """截取 reCAPTCHA challenge 的网格图片区域。
 
-        截取整个 bframe 元素（包含 header 指示文字 + 网格图片 + 按钮行）。
-        GridAnnotator 会自动检测网格边界，忽略非网格区域。
+        优先截取 grid TABLE 元素（仅包含网格图片，无 header/button）：
+        - 标注更精确（图片即网格，无需检测 header 边界）
+        - VLM 看到的图片更清晰
+
+        降级方案：截取整个 bframe 元素（含 header + grid + buttons）。
         """
+        # 优先：截取 grid TABLE 元素（精准的网格区域）
+        if challenge_frame:
+            table_selectors = [
+                "table.rc-imageselect-table-44",
+                "table.rc-imageselect-table-33",
+                "table.rc-imageselect-table",
+            ]
+            for sel in table_selectors:
+                try:
+                    table = challenge_frame.locator(sel).first
+                    if await table.count() > 0:
+                        shot = await table.screenshot(timeout=10000)
+                        if self.verbose:
+                            logger.mesg(f"    ✓ Grid table captured ({sel})")
+                        return shot
+                except Exception:
+                    continue
+
+        # 降级：截取整个 bframe 元素
         try:
             bframe_el = page.locator(self.BFRAME_SELECTOR).first
             if await bframe_el.count() > 0:
+                if self.verbose:
+                    logger.mesg("    ↓ Fallback: full bframe screenshot")
                 return await bframe_el.screenshot()
         except Exception as e:
             if self.verbose:
@@ -879,7 +905,7 @@ class CaptchaBypass:
 
             if not is_sorry and "google.com" in url:
                 if self.verbose:
-                    logger.okay(f"    ✓ Navigated to: {url[:80]}")
+                    logger.okay(f"    ✓ Navigated to: {logstr.file(url[:80])}")
                 try:
                     await page.wait_for_selector(
                         "#search, #rso, div.g", timeout=10000

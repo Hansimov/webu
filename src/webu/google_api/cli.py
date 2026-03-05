@@ -114,7 +114,7 @@ def cmd_start(args):
     )
     _write_pid(proc.pid)
     logger.okay(f"  ✓ Server started (PID: {proc.pid})")
-    logger.mesg(f"  Log: {LOG_FILE}")
+    logger.mesg(f"  Log: {logstr.file(LOG_FILE)}")
 
 
 def cmd_stop(args):
@@ -266,7 +266,7 @@ def cmd_proxy_check(args):
         stats = manager.stats()
         for p in stats["proxies"]:
             status = "✓ healthy" if p["healthy"] else "× unhealthy"
-            logger.mesg(f"  {p['url']}: {status} ({p['latency_ms']}ms)")
+            logger.mesg(f"  {logstr.file(p['url'])}: {status} ({p['latency_ms']}ms)")
 
     asyncio.run(_run())
 
@@ -330,7 +330,7 @@ def cmd_search(args):
             )
             for i, r in enumerate(result.results):
                 logger.mesg(f"\n  [{i+1}] {r.title}")
-                logger.mesg(f"      {r.url}")
+                logger.mesg(f"      {logstr.file(r.url)}")
                 if r.snippet:
                     logger.mesg(f"      {r.snippet[:120]}...")
 
@@ -392,15 +392,15 @@ def cmd_search_test(args):
 
                 if r_dict["success"]:
                     logger.okay(
-                        f"  ✓ {purl}: {r_dict['result_count']} results "
+                        f"  ✓ {logstr.file(purl)}: {r_dict['result_count']} results "
                         f"({elapsed_ms}ms)"
                     )
                     for res in result.results[:3]:
                         logger.mesg(f"    - {res.title}")
-                        logger.mesg(f"      {res.url}")
+                        logger.mesg(f"      {logstr.file(res.url)}")
                 else:
                     reason = "CAPTCHA" if r_dict["has_captcha"] else r_dict["error"]
-                    logger.warn(f"  × {purl}: {reason} ({elapsed_ms}ms)")
+                    logger.warn(f"  × {logstr.file(purl)}: {reason} ({elapsed_ms}ms)")
 
                 if i < len(proxy_list) - 1:
                     await asyncio.sleep(2)

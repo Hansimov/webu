@@ -244,6 +244,27 @@ class GoogleResultParser:
         html_lower = html.lower()
         return any(indicator.lower() in html_lower for indicator in captcha_indicators)
 
+    def detect_consent(self, html: str) -> bool:
+        """检测是否显示了 Google Cookie 同意弹窗。"""
+        return "before you continue" in html.lower()
+
+    def _detect_no_results(self, soup) -> str:
+        """检测 Google "无结果" 页面，返回提示信息。
+
+        Google 无结果页面包含：
+        - "did not match any documents"
+        - "No results found"
+        - "No results containing all your search terms"
+        """
+        text = soup.get_text(separator=" ", strip=True).lower()
+        if "did not match any documents" in text:
+            return "did not match any documents"
+        if "no results found" in text:
+            return "no results found"
+        if "no results containing all your search terms" in text:
+            return "no results containing all your search terms"
+        return ""
+
     def parse(self, html: str, query: str = "") -> GoogleSearchResponse:
         """解析 Google 搜索结果 HTML。
 
@@ -295,6 +316,14 @@ class GoogleResultParser:
         # ── 策略 3：退化全链接法（兜底）────────────
         if not results:
             results = self._parse_fallback_links(scope)
+
+        # 检测 Google "无结果" 页面（"did not match any documents"）
+        if not results:
+            no_results_msg = self._detect_no_results(soup)
+            if no_results_msg:
+                response.error = no_results_msg
+                if self.verbose:
+                    logger.mesg(f"  ℹ Google: {no_results_msg}")
 
         # 重新编号 position
         for i, r in enumerate(results):
@@ -432,7 +461,8 @@ class GoogleResultParser:
                 title = h3.get_text(strip=True)
             else:
                 title = a_tag.get_text(strip=True)
-            # 清理标题中的多余后缀（如 "YouTube·Channel Name"）
+            # 清理标题中的多余后缀（如 "YouTube·Channel Name·3 hours ago"）
+            title = self._clean_video_title(title)
             if not title or len(title) < 3:
                 continue
 
@@ -530,20 +560,22 @@ class GoogleResultParser:
         1. data-sncf 属性（Google 的摘要标记）
         2. data-content-feature="1" 属性
         3. 排除标题/URL 后，最长的文本块
+
+        最后统一清理：去除标题前缀、URL 片段、"Translate this page" 等。
         """
         # 方法 1：data-sncf 属性
         snippet_div = container.find(attrs={"data-sncf": True})
         if snippet_div:
             text = snippet_div.get_text(strip=True)
             if text:
-                return text
+                return self._clean_snippet(text, title, container)
 
         # 方法 2：data-content-feature="1"
         content_div = container.find(attrs={"data-content-feature": "1"})
         if content_div:
             text = content_div.get_text(strip=True)
             if len(text) > 20:
-                return text
+                return self._clean_snippet(text, title, container)
 
         # 方法 3：启发式 — 在容器内找最长非标题文本
         title_text = title or ""
@@ -564,4 +596,86 @@ class GoogleResultParser:
                 continue
             longest = text
 
-        return longest
+        return self._clean_snippet(longest, title, container)
+
+    def _clean_snippet(
+        self, snippet: str, title: str = "", container: Tag = None
+    ) -> str:
+        """清理摘要文本：去除标题前缀、URL 残留、翻译提示等。"""
+        if not snippet:
+            return ""
+
+        # 1) 去除 "Translate this page" 及变体
+        snippet = re.sub(
+            r"Translate this page\.?\s*", "", snippet
+        ).strip()
+        snippet = re.sub(
+            r"翻译此页\.?\s*", "", snippet
+        ).strip()
+
+        # 2) 去除标题前缀（snippet 以 title 开头时）
+        if title and snippet.startswith(title):
+            snippet = snippet[len(title):].lstrip(" \t\n·—-–:：.。")
+
+        # 3) 去除开头的 URL 残留（如 "https://example.com › ..."）
+        snippet = re.sub(
+            r"^https?://\S+\s*›?\s*", "", snippet
+        ).strip()
+
+        # 4) 去除显示 URL（cite）残留
+        if container:
+            cite = container.find("cite")
+            if cite:
+                cite_text = cite.get_text(strip=True)
+                if cite_text and snippet.startswith(cite_text):
+                    snippet = snippet[len(cite_text):].lstrip(
+                        " \t\n·—-–:：.。"
+                    )
+
+        # 5) 去除日期前缀（如 "Jan 1, 2025 — "、"2025年1月1日 — "）
+        snippet = re.sub(
+            r"^\d{1,2}\s+\w{3,9}\s+\d{4}\s*[—–-]\s*", "", snippet
+        ).strip()
+        snippet = re.sub(
+            r"^\w{3,9}\s+\d{1,2},?\s+\d{4}\s*[—–-]\s*", "", snippet
+        ).strip()
+        snippet = re.sub(
+            r"^\d{4}年\d{1,2}月\d{1,2}日\s*[—–-]?\s*", "", snippet
+        ).strip()
+
+        return snippet
+
+    def _clean_video_title(self, title: str) -> str:
+        """清理视频标题：去除平台名、频道名、时间等元数据后缀。
+
+        Google 搜索结果中视频标题常包含：
+        - "YouTube·频道名·3 hours ago"
+        - "YouTube频道名3小时前"
+        - "Bilibili·UP主名"
+        """
+        if not title:
+            return ""
+
+        # 去除 "YouTube" + 后面的元数据（中间可能是 ·、空格、|）
+        # 如 "标题YouTube·Wanderbots·3 hours ago" → "标题"
+        title = re.sub(
+            r"YouTube[·|\s].*$", "", title
+        ).strip()
+        title = re.sub(
+            r"Bilibili[·|\s].*$", "", title
+        ).strip()
+        title = re.sub(
+            r"Vimeo[·|\s].*$", "", title
+        ).strip()
+
+        # 去除末尾的时间信息（如 "3 hours ago"、"2天前"）
+        title = re.sub(
+            r"\s*·?\s*\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago\s*$",
+            "", title, flags=re.IGNORECASE,
+        ).strip()
+        title = re.sub(
+            r"\s*·?\s*\d+\s*(?:秒|分钟|小时|天|周|个月|年)前\s*$",
+            "", title,
+        ).strip()
+
+        return title

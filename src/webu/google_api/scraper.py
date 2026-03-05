@@ -125,11 +125,11 @@ def _save_screenshot_and_html(
     if screenshot_bytes:
         png_path = out_dir / f"{base_name}.png"
         png_path.write_bytes(screenshot_bytes)
-        logger.mesg(f"  📸 Screenshot saved: {png_path}")
+        logger.mesg(f"  📸 Screenshot saved: {logstr.file(png_path)}")
 
     html_path = out_dir / f"{base_name}.html"
     html_path.write_text(page_content, encoding="utf-8")
-    logger.mesg(f"  📄 HTML saved: {html_path}")
+    logger.mesg(f"  📄 HTML saved: {logstr.file(html_path)}")
 
 
 class GoogleScraper:
@@ -275,8 +275,9 @@ class GoogleScraper:
         """
         await self._ensure_browser()
 
-        # 确定首次使用的代理
-        requested_proxy = proxy_url or self._fixed_proxy
+        # 确定首次使用的代理（保留原始值用于无 ProxyManager 时的重试）
+        original_proxy = proxy_url or self._fixed_proxy
+        requested_proxy = original_proxy
 
         for attempt in range(retry_count + 1):
             # 获取当前代理
@@ -287,14 +288,25 @@ class GoogleScraper:
             elif self.proxy_manager:
                 current_proxy = self.proxy_manager.get_proxy()
             else:
-                current_proxy = None
+                # 无 ProxyManager：回退到原始代理（避免走 direct 被封）
+                current_proxy = (
+                    original_proxy
+                    if original_proxy and original_proxy != "direct"
+                    else None
+                )
 
             if self.verbose:
                 proxy_display = current_proxy or "direct"
-                logger.note(
-                    f"> Search [{attempt + 1}/{retry_count + 1}]: "
-                    f"{logstr.mesg(query)} via {logstr.file(proxy_display)}"
-                )
+                if attempt == 0:
+                    logger.note(
+                        f"> Search: "
+                        f"{logstr.mesg(query)} via {logstr.file(proxy_display)}"
+                    )
+                else:
+                    logger.note(
+                        f"> [{attempt + 1}/{retry_count + 1}] Search: "
+                        f"{logstr.mesg(query)} via {logstr.file(proxy_display)}"
+                    )
 
             result = await self._do_search(
                 query=query,
@@ -313,22 +325,43 @@ class GoogleScraper:
                 # CAPTCHA — 报告代理失败，切换代理重试
                 if current_proxy and self.proxy_manager:
                     self.proxy_manager.report_failure(current_proxy)
-                logger.warn(
-                    f"  × CAPTCHA detected (attempt {attempt + 1}), "
-                    f"switching proxy ..."
-                )
-                # 清除 requested_proxy 以便下次从 ProxyManager 获取新代理
-                requested_proxy = None
+                if self.proxy_manager:
+                    # ProxyManager 会提供下一个代理
+                    requested_proxy = None
+                    logger.warn(
+                        f"  × CAPTCHA (attempt {attempt + 1}), "
+                        f"switching proxy ..."
+                    )
+                else:
+                    # 无 ProxyManager：保持使用原始代理重试
+                    logger.warn(
+                        f"  × CAPTCHA (attempt {attempt + 1}), "
+                        f"retrying with same proxy ..."
+                    )
                 continue
 
             if not result.results and attempt < retry_count:
+                # Google 明确表示无结果 → 不必重试
+                if result.error and "did not match" in result.error:
+                    logger.mesg(
+                        f"  ℹ Google returned no results for this query"
+                    )
+                    break
+
                 # 无结果（超时等） — 报告代理失败，切换代理重试
                 if current_proxy and self.proxy_manager:
                     self.proxy_manager.report_failure(current_proxy)
-                logger.warn(
-                    f"  × No results (attempt {attempt + 1}), retrying ..."
-                )
-                requested_proxy = None
+                if self.proxy_manager:
+                    requested_proxy = None
+                    logger.warn(
+                        f"  × No results (attempt {attempt + 1}), "
+                        f"switching proxy ..."
+                    )
+                else:
+                    logger.warn(
+                        f"  × No results (attempt {attempt + 1}), "
+                        f"retrying ..."
+                    )
                 await asyncio.sleep(random.uniform(1, 3))
                 continue
 
@@ -376,7 +409,7 @@ class GoogleScraper:
             page = await context.new_page()
             if self.verbose:
                 proxy_display = proxy_url or "direct"
-                logger.mesg(f"  ◆ Context created (proxy: {proxy_display})")
+                logger.mesg(f"  ◆ Context created (proxy: {logstr.file(proxy_display)})")
             search_perf.stop()
 
             # 注入额外的反检测脚本
@@ -412,17 +445,50 @@ class GoogleScraper:
             # 导航到搜索页
             search_perf.start("page_navigation")
             start_time = time.time()
+            if self.verbose:
+                logger.mesg(f"  → Navigating: {logstr.file(url[:100])}")
+
             await page.goto(
                 url, timeout=self.timeout * 1000, wait_until="domcontentloaded"
             )
 
-            # 等待搜索结果渲染
-            try:
-                await page.wait_for_selector(
-                    "#search, #rso, div.g", timeout=self.timeout * 1000
-                )
-            except Exception:
-                pass  # 可能超时但页面已部分加载
+            # 检查是否被重定向（consent / sorry 页面）
+            current_url = page.url
+            if current_url != url and self.verbose:
+                logger.mesg(f"  ↪ Redirected: {logstr.file(current_url[:100])}")
+
+            # 处理 Google Cookie 同意弹窗（EU 地区代理常见）
+            consent_dismissed = await self._dismiss_consent(page)
+            if consent_dismissed:
+                # 同意弹窗已关闭，等待页面刷新/重新渲染
+                await asyncio.sleep(1.0)
+
+            # 快速检测 "无结果" 页面，避免等待 8s selector 超时
+            # Google "no results" 页面有 #search 但 div 为空，selector 会超时
+            no_results_early = await self._detect_no_results_early(page)
+
+            # 等待搜索结果渲染（较短超时，页面已完成 DOM 加载）
+            if no_results_early:
+                # 已确认无结果，跳过 selector 等待
+                if self.verbose:
+                    elapsed_ms = int((time.time() - start_time) * 1000)
+                    logger.mesg(
+                        f"  ⏳ Google returned no results ({elapsed_ms}ms)"
+                    )
+            else:
+                selector_timeout = min(self.timeout, 8)
+                try:
+                    await page.wait_for_selector(
+                        "#search, #rso, div.g",
+                        timeout=selector_timeout * 1000,
+                    )
+                except Exception:
+                    elapsed_ms = int((time.time() - start_time) * 1000)
+                    if self.verbose:
+                        logger.mesg(
+                            f"  ⏳ No search results found "
+                            f"({elapsed_ms}ms, url={logstr.file(page.url[:80])})"
+                        )
             search_perf.stop()
 
             elapsed_ms = int((time.time() - start_time) * 1000)
@@ -443,6 +509,16 @@ class GoogleScraper:
             search_perf.start("parse_results")
             response = self.parser.parse(html, query=query)
             search_perf.stop()
+
+            # 如果 0 结果且没有 CAPTCHA，保存 HTML 用于调试
+            if not response.results and not response.has_captcha:
+                debug_dir = Path("data/debug")
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
+                debug_path = debug_dir / f"no_results_{ts}.html"
+                debug_path.write_text(html, encoding="utf-8")
+                if self.verbose:
+                    logger.mesg(f"  ⚠ 0 results, HTML saved: {logstr.file(debug_path)}")
 
             # 如果检测到 CAPTCHA，先尝试自动绕过
             if response.has_captcha:
@@ -514,13 +590,17 @@ class GoogleScraper:
             response.error = error_msg
             if self.verbose:
                 logger.warn(f"  × Search error: {error_msg}")
-            # 对错误情况也保存截图
+            # 对错误情况也保存截图（短超时，避免阻塞）
             if context:
                 try:
                     pages = context.pages
                     if pages:
-                        screenshot_bytes = await pages[0].screenshot(full_page=True)
-                        html_content = await pages[0].content()
+                        screenshot_bytes = await asyncio.wait_for(
+                            pages[0].screenshot(full_page=True), timeout=5
+                        )
+                        html_content = await asyncio.wait_for(
+                            pages[0].content(), timeout=5
+                        )
                         _save_screenshot_and_html(
                             page_content=html_content,
                             screenshot_bytes=screenshot_bytes,
@@ -580,6 +660,101 @@ class GoogleScraper:
                     await context.add_cookies(cookies)
         except Exception:
             pass  # Cookie 恢复失败不影响搜索
+
+    # ── Google 同意弹窗处理 ───────────────────────────────────
+
+    async def _dismiss_consent(self, page) -> bool:
+        """检测并自动关闭 Google Cookie 同意弹窗。
+
+        EU 地区的代理会触发 "Before you continue to Google" 弹窗。
+        弹窗是 aria-modal dialog，遮盖住搜索结果，导致 #search 不可见。
+        点击 "Reject all" 按钮关闭弹窗，页面会重新渲染显示搜索结果。
+
+        Returns:
+            True — 弹窗已关闭；False — 未检测到弹窗
+        """
+        try:
+            # 检测 consent dialog（500ms 快速检测，不影响正常流程）
+            dialog = page.locator(
+                'div[aria-label*="Before you continue"], '
+                'div[aria-label*="before you continue"]'
+            )
+            if await dialog.count() == 0:
+                return False
+
+            if self.verbose:
+                logger.mesg("  ⚡ Google consent banner detected")
+
+            # 优先点击 "Reject all"（避免追踪 Cookie）
+            # 按钮文本可能是 "Reject all"、"拒绝全部" 等
+            reject_btn = page.locator(
+                'button:has-text("Reject all"), '
+                'button:has-text("Reject All"), '
+                'button:has-text("拒绝全部"), '
+                'button:has-text("Alle ablehnen"), '
+                'button:has-text("Tout refuser")'
+            )
+            if await reject_btn.count() > 0:
+                await reject_btn.first.click()
+                if self.verbose:
+                    logger.mesg("  ✓ Clicked 'Reject all'")
+                # 等待弹窗关闭和页面重新渲染
+                try:
+                    await page.wait_for_selector(
+                        "#search, #rso, div.g",
+                        state="visible", timeout=8000
+                    )
+                except Exception:
+                    pass
+                return True
+
+            # 备选：点击 "Accept all"
+            accept_btn = page.locator(
+                'button:has-text("Accept all"), '
+                'button:has-text("Accept All"), '
+                'button:has-text("接受全部"), '
+                'button:has-text("Alle akzeptieren"), '
+                'button:has-text("Tout accepter")'
+            )
+            if await accept_btn.count() > 0:
+                await accept_btn.first.click()
+                if self.verbose:
+                    logger.mesg("  ✓ Clicked 'Accept all'")
+                try:
+                    await page.wait_for_selector(
+                        "#search, #rso, div.g",
+                        state="visible", timeout=8000
+                    )
+                except Exception:
+                    pass
+                return True
+
+            if self.verbose:
+                logger.mesg("  ⚠ Consent banner found but no dismiss button")
+            return False
+        except Exception as e:
+            if self.verbose:
+                logger.mesg(f"  ⚠ Consent check error: {str(e)[:100]}")
+            return False
+
+    async def _detect_no_results_early(self, page) -> bool:
+        """快速检测 Google "无结果" 页面。
+
+        Google "no results" 页面特征：
+        - 含 "did not match any documents" 文本
+        - #search 存在但为空（无 children）
+        - 无需等待 8s 的 selector 超时
+
+        使用 page.evaluate 快速检测页面文本，避免 selector 超时。
+        """
+        try:
+            return await page.evaluate("""() => {
+                const text = document.body ? document.body.innerText : '';
+                return text.includes('did not match any documents')
+                    || text.includes('No results containing all your search terms');
+            }""")
+        except Exception:
+            return False
 
     async def search_batch(
         self,
