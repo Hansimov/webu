@@ -71,3 +71,41 @@
    - 控制搜索频率，单代理约 2-5 秒间隔
    - 通过负载均衡分散请求压力
    - 定期轮换 User-Agent
+
+---
+
+## 4. 代理架构修复（2026-03-05）
+
+### 4.1 问题：`--proxy-server` 浏览器级别代理导航超时
+
+**现象：** `ggsc search "红警08" --proxy http://127.0.0.1:11119` 时 Chrome 打开后停留在 New Tab 页面，`page.goto` 超时 30 秒。
+
+**根本原因：**
+Chrome 通过 `--proxy-server=http://127.0.0.1:11119` 设置浏览器级别代理时，Chrome 的 DNS-over-HTTPS (DoH) 和后台网络功能（Safe Browsing、组件更新等）尝试绕过代理直连互联网。由于本机无法直接访问外网（`curl https://google.com` 超时），这些后台请求卡住，阻塞了正常的页面导航。
+
+**诊断过程：**
+1. 确认 `curl -x http://127.0.0.1:11119 https://google.com` 正常返回 200（代理可用）
+2. 确认直连 `curl https://google.com` 超时（本机无直接外网）
+3. 测试纯 Playwright（非 UC）+ context-level proxy → 正常工作
+4. 测试 UC Chrome + `--disable-features=DnsOverHttps` + `--disable-background-networking` → 正常工作
+5. 测试 UC Chrome（无代理）+ Playwright context-level proxy → **最佳方案**
+
+### 4.2 解决方案：Context-level 代理
+
+将代理从浏览器级别改为 Context 级别：
+
+| 对比维度 | 旧方案（browser-level） | 新方案（context-level） |
+|---------|------------------------|----------------------|
+| 代理设置位置 | `--proxy-server=...` | `browser.new_context(proxy=...)` |
+| 代理切换 | 需重启浏览器（~2s） | 创建新 Context（~0ms） |
+| Cookie 持久化 | Chrome Profile 自动保存 | 文件持久化 `google_cookies.json` |
+| DoH 干扰 | 是（需额外禁用） | 否（Context 独立处理） |
+| 重试时的代理切换 | 无法切换（仍用原代理） | 立即切换到新代理 |
+
+### 4.3 修改摘要
+
+- `_launch_uc_chrome()`: 移除 `--proxy-server`，添加 `--disable-features=DnsOverHttps`, `--disable-background-networking`, `--disable-component-update`
+- `GoogleScraper.__init__()`: `proxy_url` 改存为 `_fixed_proxy`，新增 Cookie 文件路径
+- `GoogleScraper.start()`: 启动 UC Chrome 不传代理
+- `GoogleScraper._do_search()`: 每次创建新 Context + 设置 proxy，自动恢复/保存 Cookie
+- `GoogleScraper.search()`: 重试时清除固定代理，从 ProxyManager 获取新代理

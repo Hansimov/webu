@@ -400,26 +400,43 @@ def _encode_image_file_to_base64(image_path: str) -> str:
 
 
 SOLVE_PROMPT_TEMPLATE = """\
-这是一个 reCAPTCHA 验证码图片，图中是一个 {grid_desc} 的网格。
+This is a reCAPTCHA challenge image with a {grid_desc} grid.
 {task_desc}
-每个格子的右下角有编号标注（1-{total}）。
+Each cell has a number label in the bottom-right corner (1-{total}).
 
-请仔细观察每个格子的内容，判断哪些格子符合要求，然后输出需要选择的格子编号列表。
-如果没有任何格子符合要求，返回 [-1] 表示跳过。
-
-输出格式（严格遵守）：
+IMPORTANT RULES:
+- Select ALL cells that contain ANY part of the target object, even a small portion.
+- Objects often span multiple cells — a bus, car, or crosswalk may occupy 2-4 cells.
+  ALL cells containing even a tiny sliver of the target MUST be selected.
+- Pay close attention to cell edges/boundaries; objects frequently extend across borders.
+- When in doubt, INCLUDE the cell rather than exclude it — missing cells is penalized more heavily than extra cells.
+- For "traffic lights": include the pole and the light housing.
+- For "crosswalks": include cells with ANY white stripe, even partial.
+- For vehicles (bus, car, motorcycle, bicycle): include cells with ANY part of the vehicle body, wheels, or shadow.
+{feedback}
+Output format (strict JSON only, no explanation):
 ```json
-[编号1, 编号2, ...]
+[cell_number1, cell_number2, ...]
 ```
 
-例如，如果应该选择第 1、4、7 个格子，输出：
-```json
-[1, 4, 7]
-```
-如果没有任何格子符合要求，输出：
+If NO cells match the target at all, output:
 ```json
 [-1]
 ```
+"""
+
+
+RETRY_FEEDBACK_TEMPLATE = """\
+
+CRITICAL FEEDBACK from the previous attempt (your answer was WRONG):
+{error_info}
+{prev_attempt_info}
+Re-examine the image VERY CAREFULLY. Look at EVERY cell again.
+Common mistakes:
+- Missing cells at the edges/boundaries of the target object
+- Overlooking small/partial appearances of the target in corner cells
+- Confusing similar-looking objects
+Adjust your selection accordingly.
 """
 
 
@@ -454,6 +471,8 @@ class CaptchaSolver:
         image_bytes: bytes,
         task_text: str | None = None,
         grid_size: tuple[int, int] | None = None,
+        error_feedback: str | None = None,
+        prev_indices: list[int] | None = None,
     ) -> list[int]:
         """解答 CAPTCHA。
 
@@ -461,6 +480,8 @@ class CaptchaSolver:
             image_bytes: challenge 区域的截图 (PNG/JPG)
             task_text: 题目文本（如 "Select all images with crosswalks"）
             grid_size: 强制指定网格 (rows, cols)；None 自动检测
+            error_feedback: 上一轮的错误反馈信息（用于重试时提供上下文）
+            prev_indices: 上一轮选择的格子编号（用于让 VLM 知道之前选了什么）
 
         Returns:
             需要点击的格子编号列表（1-based），空列表表示失败
@@ -487,14 +508,27 @@ class CaptchaSolver:
         grid_desc = f"{rows}×{cols}"
 
         if task_text:
-            task_desc = f"题目要求：{task_text}"
+            task_desc = f"Task: {task_text}"
         else:
-            task_desc = "请根据图片中的提示文字，判断应该选择哪些格子。"
+            task_desc = "Follow the instructions shown in the image header."
+
+        # 构建反馈部分（重试时提供上一轮错误信息）
+        feedback = ""
+        if error_feedback or prev_indices:
+            error_info = error_feedback or "Your previous selection was incorrect."
+            prev_info = ""
+            if prev_indices:
+                prev_info = f"Your previous selection was: {prev_indices}"
+            feedback = RETRY_FEEDBACK_TEMPLATE.format(
+                error_info=error_info,
+                prev_attempt_info=prev_info,
+            )
 
         prompt = SOLVE_PROMPT_TEMPLATE.format(
             grid_desc=grid_desc,
             task_desc=task_desc,
             total=total,
+            feedback=feedback,
         )
 
         if self.verbose:

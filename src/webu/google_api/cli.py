@@ -284,8 +284,11 @@ def cmd_search(args):
     query = getattr(args, "query", "test")
     proxy_url = getattr(args, "proxy", None)
     num = getattr(args, "num", 10)
+    profile_dir = getattr(args, "profile", None)
 
     async def _run():
+        search_start = time.time()
+
         # 如果指定了代理，直接使用；否则用 ProxyManager
         if proxy_url:
             manager = None
@@ -301,6 +304,8 @@ def cmd_search(args):
             proxy_manager=manager,
             headless=True,
             verbose=True,
+            proxy_url=proxy_url,  # 传给 _fixed_proxy，每次搜索 context 级别使用
+            profile_dir=profile_dir,
         )
         try:
             await scraper.start()
@@ -328,6 +333,10 @@ def cmd_search(args):
                 logger.mesg(f"      {r.url}")
                 if r.snippet:
                     logger.mesg(f"      {r.snippet[:120]}...")
+
+            # 总耗时统计
+            total_s = time.time() - search_start
+            logger.note(f"\n> Total elapsed: {total_s:.2f}s")
         finally:
             await scraper.stop()
             if manager:
@@ -479,6 +488,10 @@ def main():
         help="指定代理 URL（默认使用 ProxyManager 自动选择）",
     )
     sp_search.add_argument("--num", type=int, default=10, help="结果数量")
+    sp_search.add_argument(
+        "--profile",
+        help="Chrome Profile 目录（持久化 Cookie / 验证状态）",
+    )
     sp_search.set_defaults(func=cmd_search)
 
     # search-test

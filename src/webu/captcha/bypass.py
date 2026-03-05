@@ -298,22 +298,32 @@ class CaptchaBypass:
         proxy_url: str,
         attempt: int,
     ) -> bool:
-        """执行一轮图片验证解题（含 Next 多步和 Skip 处理）。
+        """执行一轮图片验证解题（含 Next 多步、Skip 处理和错误反馈）。
 
         reCAPTCHA 动作按钮有三种状态：
           - Verify: 提交答案，验证是否正确
           - Next:   提交答案后进入下一题（多步验证）
           - Skip:   跳过当前题目，获取新题
 
+        错误恢复策略：
+          - 如果 Verify 后仍有 challenge → 检测错误类型
+          - "select more" 错误 → 告诉 VLM 上次漏选了
+          - "incorrect response" → 告诉 VLM 上次选错了
+          - 将错误反馈传给 solver 的下一次调用
+
         流程：
           1. 查找 challenge frame → 检测网格 → 获取题目 → 截图
-          2. 调用 VLM solver → 点击格子
+          2. 调用 VLM solver（附带上一轮的错误反馈） → 点击格子
           3. 检测动作按钮类型并点击：
-             - Verify → 等待页面跳转
+             - Verify → 等待页面跳转 / 检测错误并重试
              - Next   → 继续下一子轮
-             - Skip   → 跟 Next 处理类似：跳过 → 继续
+             - Skip   → 跳过 → 继续
         """
-        MAX_SUB_ROUNDS = 5
+        MAX_SUB_ROUNDS = 8
+
+        # 跟踪上一轮的状态，供反馈使用
+        prev_error_feedback = None
+        prev_selected_indices = None
 
         for sub in range(MAX_SUB_ROUNDS):
             rl = f"r{attempt}" if sub == 0 else f"r{attempt}.{sub}"
@@ -341,12 +351,21 @@ class CaptchaBypass:
                         f"{grid_rect['width']:.0f}×{grid_rect['height']:.0f})"
                     )
 
-                # 3) 提取题目文本
+                # 3) 提取题目文本（含动态错误提示）
                 task_text = await self._get_challenge_task_text(
                     challenge_frame
                 )
                 if self.verbose:
                     logger.mesg(f"    Task: {task_text or '(unknown)'}")
+
+                # 检测 reCAPTCHA 显示的错误状态
+                error_state = await self._detect_error_state(challenge_frame)
+                if error_state and self.verbose:
+                    logger.mesg(f"    ⚠ Error state: {error_state}")
+
+                # 如果页面显示了错误，更新反馈信息
+                if error_state:
+                    prev_error_feedback = error_state
 
                 # 4) 截取 bframe 截图
                 challenge_image_bytes = await self._capture_challenge_image(
@@ -362,11 +381,13 @@ class CaptchaBypass:
                         challenge_image_bytes, f"challenge_{rl}", proxy_url
                     )
 
-                # 5) 调用 VLM solver
+                # 5) 调用 VLM solver（附带错误反馈和上次选择）
                 cell_indices = await solver.solve(
                     image_bytes=challenge_image_bytes,
                     task_text=task_text,
                     grid_size=(rows, cols),
+                    error_feedback=prev_error_feedback,
+                    prev_indices=prev_selected_indices,
                 )
 
                 # VLM 返回 [-1] 表示无匹配 → 点 Skip
@@ -383,6 +404,8 @@ class CaptchaBypass:
                             logger.mesg(
                                 f"    → Clicked {action.capitalize()}"
                             )
+                        prev_error_feedback = None
+                        prev_selected_indices = None
                         await asyncio.sleep(random.uniform(1.0, 2.0))
                         continue
                     return False
@@ -394,6 +417,9 @@ class CaptchaBypass:
 
                 if self.verbose:
                     logger.mesg(f"    Solver says click: {cell_indices}")
+
+                # 记录本次选择（供反馈使用）
+                prev_selected_indices = list(cell_indices)
 
                 # 6) 模拟点击每个格子
                 for idx in cell_indices:
@@ -443,13 +469,49 @@ class CaptchaBypass:
 
                 if action == "verify":
                     await asyncio.sleep(random.uniform(1.5, 2.5))
-                    # 检查验证码是否仍在（格子可能已刷新新图片）
+                    # 检查验证码是否仍在
                     if await self._has_image_challenge(page):
-                        if self.verbose:
-                            logger.mesg(
-                                "    → Challenge still present "
-                                "(new images?), re-solving ..."
+                        # 检测错误类型，构建反馈信息
+                        cf = self._find_challenge_frame(page)
+                        if cf:
+                            err = await self._detect_error_state(cf)
+                        else:
+                            err = None
+
+                        if err and "select" in err.lower() and "more" in err.lower():
+                            prev_error_feedback = (
+                                "You did NOT select enough cells. "
+                                "Some matching cells were MISSED. "
+                                "Look more carefully at ALL cells, "
+                                "especially at the edges/boundaries."
                             )
+                            if self.verbose:
+                                logger.mesg(
+                                    "    → 'Select more' error — "
+                                    "VLM missed some cells, retrying with feedback ..."
+                                )
+                        elif err and ("incorrect" in err.lower() or "try again" in err.lower()):
+                            prev_error_feedback = (
+                                "Your selection was INCORRECT. "
+                                "You may have selected wrong cells. "
+                                "Re-examine each cell carefully."
+                            )
+                            if self.verbose:
+                                logger.mesg(
+                                    "    → 'Incorrect' error — "
+                                    "VLM selected wrong cells, retrying with feedback ..."
+                                )
+                        else:
+                            prev_error_feedback = (
+                                "Previous attempt failed. "
+                                "The challenge refreshed with new images."
+                            )
+                            prev_selected_indices = None
+                            if self.verbose:
+                                logger.mesg(
+                                    "    → Challenge still present "
+                                    "(new images?), re-solving ..."
+                                )
                         continue
                     # 页面已离开 CAPTCHA，等待导航完成
                     nav = await self._wait_for_navigation(
@@ -460,12 +522,18 @@ class CaptchaBypass:
                 elif action == "next":
                     if self.verbose:
                         logger.mesg("    → Next sub-round ...")
+                    # Next 意味着答对了当前步骤，清除错误反馈
+                    prev_error_feedback = None
+                    prev_selected_indices = None
                     await asyncio.sleep(random.uniform(1.5, 3.0))
                     continue
 
                 elif action == "skip":
                     if self.verbose:
                         logger.mesg("    → Skipped, new challenge ...")
+                    # Skip 也清除反馈
+                    prev_error_feedback = None
+                    prev_selected_indices = None
                     await asyncio.sleep(random.uniform(1.0, 2.0))
                     continue
 
@@ -494,6 +562,45 @@ class CaptchaBypass:
             ):
                 return frame
         return None
+
+    async def _detect_error_state(self, challenge_frame) -> Optional[str]:
+        """检测 reCAPTCHA 当前显示的错误状态。
+
+        reCAPTCHA 在验证失败时会显示不同的错误提示：
+        - "Please select all matching images" → 漏选了格子
+        - "Please also check the new images" → 新图片需要选择
+        - "Please try again" → 选错了
+        - "Verification expired" → 超时
+
+        Returns:
+            错误消息文本，或 None（无错误）
+        """
+        try:
+            error_text = await challenge_frame.evaluate("""() => {
+                // reCAPTCHA 错误提示元素
+                const selectors = [
+                    '.rc-imageselect-error-select-more',
+                    '.rc-imageselect-error-dynamic-more',
+                    '.rc-imageselect-incorrect-response',
+                    '.rc-imageselect-error-select-something',
+                ];
+                let texts = [];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el) {
+                        const s = window.getComputedStyle(el);
+                        if (s.display !== 'none' && s.visibility !== 'hidden'
+                            && s.opacity !== '0') {
+                            const t = el.innerText.trim();
+                            if (t) texts.push(t);
+                        }
+                    }
+                }
+                return texts.length ? texts.join(' | ') : null;
+            }""")
+            return error_text
+        except Exception:
+            return None
 
     async def _capture_challenge_image(self, page) -> Optional[bytes]:
         """截取 reCAPTCHA challenge 区域的截图。

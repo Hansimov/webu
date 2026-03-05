@@ -3,6 +3,8 @@
 > 基于 undetected-chromedriver + Playwright CDP 的自建 Google 搜索服务。
 >
 > 使用固定 HTTP 代理列表 + round-robin 负载均衡 + 自动故障转移。
+>
+> **代理在 context 级别设置（非浏览器级别），支持无需重启浏览器的即时代理切换。**
 
 ---
 
@@ -34,6 +36,22 @@
 | **GoogleResultParser** | `parser.py` | 解析 Google 搜索结果 HTML，提取标题/URL/摘要 |
 | **FastAPI Server** | `server.py` | HTTP API 服务，提供搜索和代理状态接口 |
 | **CLI** | `cli.py` | 命令行工具 `ggsc`，管理服务生命周期和手动搜索 |
+
+### 浏览器 + 代理架构（关键设计）
+
+```
+UC Chrome (无代理启动)          ← 仅提供反指纹检测
+    └─ Playwright CDP 连接
+         ├─ Context A (proxy: http://127.0.0.1:11119)  ← 搜索 1
+         ├─ Context B (proxy: http://127.0.0.1:11111)  ← 搜索 2（换代理）
+         └─ Context C (proxy: http://127.0.0.1:11119)  ← 搜索 3
+```
+
+**设计要点：**
+- UC Chrome 启动时**不设置** `--proxy-server`（避免 DoH/背景网络干扰）
+- 代理在**每次搜索的 BrowserContext 级别**设置
+- 代理切换无需重启浏览器（~0ms vs ~2s）
+- Cookie 通过文件持久化（`google_cookies.json`），CAPTCHA 绕过状态跨 context 共享
 
 ---
 
@@ -103,17 +121,27 @@ class ProxyState:
 ```
 用户请求 → Server → Scraper.search()
   ├─ ProxyManager.get_proxy() → 获取代理 URL
-  ├─ undetected-chromedriver 启动 Chrome
-  ├─ Playwright CDP 连接并控制页面
+  ├─ 创建新 BrowserContext（设置 context-level 代理）
+  ├─ 恢复持久化 Cookie（CAPTCHA bypass 状态）
   ├─ 导航到 Google 搜索页面
   ├─ 检测是否出现 CAPTCHA
   │   ├─ 是 → VLM 识别验证码，自动处理
   │   └─ 否 → 继续
   ├─ 获取页面 HTML
   ├─ GoogleResultParser 解析结果
+  ├─ 保存 Cookie 到文件
   ├─ report_success() / report_failure()
+  ├─ 关闭 Context（释放资源）
   └─ 返回 GoogleSearchResponse
 ```
+
+### 重试与代理切换
+
+搜索失败时的重试策略：
+1. 失败（超时/CAPTCHA/无结果）→ `report_failure(proxy)`
+2. 清除固定代理，从 ProxyManager 获取下一个代理
+3. 创建新 Context（新代理），无需重启浏览器
+4. 最多重试 2 次（共 3 次尝试）
 
 ### CAPTCHA 处理
 

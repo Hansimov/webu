@@ -43,9 +43,10 @@ class TestGoogleScraper:
         assert self.scraper.timeout == 10
         assert self.scraper.headless is True
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_start_stop(self):
-        """测试浏览器启动和停止。"""
+        """测试浏览器启动和停止（需要 Chrome）。"""
         await self.scraper.start()
         assert self.scraper._browser is not None
         assert self.scraper._playwright is not None
@@ -59,9 +60,10 @@ class TestGoogleScraper:
         """测试未启动时停止不报错。"""
         await self.scraper.stop()  # 不应抛出异常
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_double_start(self):
-        """测试重复启动不创建多个浏览器。"""
+        """测试重复启动不创建多个浏览器（需要 Chrome）。"""
         await self.scraper.start()
         browser1 = self.scraper._browser
 
@@ -149,3 +151,68 @@ class TestGoogleScraperIntegration:
         assert browser1 is not browser2
 
         await scraper.stop()
+
+
+# ═══════════════════════════════════════════════════════════════
+# PerfTimer 测试
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestPerfTimer:
+    """PerfTimer 性能计时器测试。"""
+
+    def test_basic_timing(self):
+        """测试基本计时功能。"""
+        from webu.google_api.scraper import PerfTimer
+        import time
+
+        perf = PerfTimer()
+        perf.start("test_stage")
+        time.sleep(0.05)
+        perf.stop()
+
+        assert len(perf.stages) == 1
+        assert perf.stages[0][0] == "test_stage"
+        assert perf.stages[0][1] >= 0.04  # 至少 40ms
+
+    def test_auto_stop_previous(self):
+        """测试开始新阶段时自动结束上一个。"""
+        from webu.google_api.scraper import PerfTimer
+
+        perf = PerfTimer()
+        perf.start("stage_a")
+        perf.start("stage_b")  # 自动结束 stage_a
+        perf.stop()
+
+        assert len(perf.stages) == 2
+        assert perf.stages[0][0] == "stage_a"
+        assert perf.stages[1][0] == "stage_b"
+
+    def test_summary_format(self):
+        """测试 summary 输出格式。"""
+        from webu.google_api.scraper import PerfTimer
+
+        perf = PerfTimer()
+        perf.start("fast")
+        perf.stop()
+
+        summary = perf.summary()
+        assert "fast" in summary
+        assert "TOTAL" in summary
+
+    def test_total_wall_time(self):
+        """测试总墙钟时间。"""
+        from webu.google_api.scraper import PerfTimer
+        import time
+
+        perf = PerfTimer()
+        time.sleep(0.05)
+        assert perf.total >= 0.04
+
+    def test_init_params(self):
+        """测试 GoogleScraper 新增参数。"""
+        scraper = GoogleScraper(headless=True, verbose=False, proxy_url="http://127.0.0.1:11119")
+        assert scraper._fixed_proxy == "http://127.0.0.1:11119"
+        assert scraper._profile_dir is not None
+        assert scraper._cookie_file is not None
+        assert scraper.perf is not None
