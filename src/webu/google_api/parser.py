@@ -3,6 +3,12 @@
 功能：
 1. 纯化 HTML — 移除 script、style、无用标签，保留核心内容
 2. 解析搜索结果 — 提取标题、链接、摘要等结构化数据
+
+设计原则：
+- 不依赖特定 CSS class 名（Google 经常更换）
+- 以 <a href> + <h3> 组合作为核心锚点，这是最稳定的结构特征
+- 分层提取：有机结果 → 视频结果 → 退化提取
+- 去重 + 过滤内部链接
 """
 
 import re
@@ -11,6 +17,110 @@ from bs4 import BeautifulSoup, Tag
 from dataclasses import dataclass, field, asdict
 from tclogger import logger, logstr
 from typing import Optional
+from urllib.parse import unquote, urlparse
+
+
+# ── 过滤规则 ──────────────────────────────────────
+
+# Google 内部域名（不算有机结果）
+_GOOGLE_DOMAINS = {
+    "google.com",
+    "google.co.uk",
+    "google.co.jp",
+    "google.de",
+    "google.fr",
+    "google.es",
+    "google.it",
+    "google.ca",
+    "google.com.au",
+    "google.com.br",
+    "google.co.in",
+    "googleapis.com",
+    "gstatic.com",
+    "googleusercontent.com",
+    "google.com.hk",
+    "google.co.kr",
+    "google.ru",
+    "accounts.google.com",
+    "support.google.com",
+    "policies.google.com",
+    "maps.google.com",
+}
+
+
+def _is_google_internal(url: str) -> bool:
+    """判断 URL 是否属于 Google 内部链接。"""
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return True
+
+    # 白名单：有实际内容的 Google 子域
+    _ALLOWED_SUBDOMAINS = {
+        "developers.google.com",
+        "cloud.google.com",
+        "ai.google.dev",
+        "colab.research.google.com",
+    }
+    if host in _ALLOWED_SUBDOMAINS:
+        return False
+
+    # 精确匹配 or *.google.com 子域
+    if host in _GOOGLE_DOMAINS:
+        return True
+    for gd in _GOOGLE_DOMAINS:
+        if host.endswith("." + gd):
+            return True
+    if host.endswith(".google.com") or host.endswith(".google.co.uk"):
+        return True
+    return False
+
+
+def _normalize_url(href: str) -> str:
+    """规范化 Google 搜索结果链接。
+
+    处理 /url?q=... 重定向 和 fragment 链接。
+    """
+    if href.startswith("/url?"):
+        m = re.search(r"[?&]q=([^&]+)", href)
+        if m:
+            return unquote(m.group(1))
+    return href
+
+
+def _clean_url(url: str) -> str:
+    """去掉 #:~:text= 等 fragment（Google 高亮跳转），保留有用 fragment。"""
+    if "#:~:text=" in url:
+        return url.split("#:~:text=")[0]
+    return url
+
+
+def _dedup_key(url: str) -> str:
+    """生成用于去重的 URL key。
+
+    - 去掉 #:~:text= fragment
+    - 去掉 Google 的 tracking 参数（ved, sa, usg 等）
+    - 保留有意义的 query 参数（如 YouTube 的 v=, list=）
+    """
+    url = _clean_url(url)
+    try:
+        parsed = urlparse(url)
+        # 去掉常见 tracking 参数，保留有意义参数
+        if parsed.query:
+            from urllib.parse import parse_qs, urlencode
+
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            tracking_keys = {"ved", "sa", "usg", "ei", "source", "opi", "gs_lcrp"}
+            clean_params = {
+                k: v for k, v in params.items() if k not in tracking_keys
+            }
+            clean_query = urlencode(clean_params, doseq=True)
+            return f"{parsed.scheme}://{parsed.hostname}{parsed.path}" + (
+                f"?{clean_query}" if clean_query else ""
+            )
+        return f"{parsed.scheme}://{parsed.hostname}{parsed.path}"
+    except Exception:
+        return url
 
 
 @dataclass
@@ -22,6 +132,7 @@ class GoogleSearchResult:
     displayed_url: str = ""
     snippet: str = ""
     position: int = 0
+    result_type: str = "organic"  # organic | video | featured | knowledge
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,9 +164,15 @@ class GoogleSearchResponse:
 
 
 class GoogleResultParser:
-    """Google 搜索结果 HTML 解析器。"""
+    """Google 搜索结果 HTML 解析器。
 
-    # 需要移除的标签
+    核心思路：以 <h3> 为锚点定位有机搜索结果。
+    Google 无论怎么改 class / id，<a href="..."><h3>Title</h3></a>
+    这个组合始终不变。解析器据此提取标题 + URL，再在上下文中找
+    cite（显示 URL）和 snippet（摘要）。
+    """
+
+    # 需要移除的标签（用于 clean_html）
     REMOVE_TAGS = [
         "script",
         "style",
@@ -69,7 +186,7 @@ class GoogleResultParser:
         "footer",
     ]
 
-    # 需要移除的属性（清理冗余）
+    # 需要移除的属性（用于 clean_html）
     REMOVE_ATTRS = [
         "style",
         "onclick",
@@ -91,22 +208,21 @@ class GoogleResultParser:
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
 
+    # ── public API ──────────────────────────────────
+
     def clean_html(self, html: str) -> str:
         """纯化 HTML：移除 script/style/无用标签和属性。"""
         soup = BeautifulSoup(html, "html.parser")
 
-        # 移除无用标签
         for tag_name in self.REMOVE_TAGS:
             for tag in soup.find_all(tag_name):
                 tag.decompose()
 
-        # 移除无用属性
         for tag in soup.find_all(True):
             for attr in list(tag.attrs.keys()):
                 if attr in self.REMOVE_ATTRS or attr.startswith("data-"):
                     del tag[attr]
 
-        # 移除空标签（递归）
         for tag in soup.find_all(True):
             if not tag.get_text(strip=True) and not tag.find_all(
                 ["img", "a", "input", "br"]
@@ -131,19 +247,23 @@ class GoogleResultParser:
     def parse(self, html: str, query: str = "") -> GoogleSearchResponse:
         """解析 Google 搜索结果 HTML。
 
+        解析策略（由精确到宽松，逐级 fallback）：
+        1. h3 锚点法 —— 在 #search 内找所有 <h3>，回溯到包含外链的 <a>
+        2. 视频结果 —— 提取 YouTube 等视频链接（不与有机结果重复）
+        3. 退化全链接 —— 扫描 #search 内所有外链（最后手段）
+
         Args:
             html: 原始 HTML 内容
-            query: 搜索查询词（用于记录）
+            query: 搜索查询词
 
         Returns:
-            GoogleSearchResponse 结构化搜索结果
+            GoogleSearchResponse
         """
         response = GoogleSearchResponse(
             query=query,
             raw_html_length=len(html),
         )
 
-        # 检测 CAPTCHA
         if self.detect_captcha(html):
             response.has_captcha = True
             response.error = "CAPTCHA detected"
@@ -153,24 +273,32 @@ class GoogleResultParser:
 
         soup = BeautifulSoup(html, "html.parser")
 
-        # 提取搜索结果数量文本（如 "About 1,000,000 results"）
+        # 提取搜索结果数量文本
         result_stats = soup.find("div", id="result-stats")
         if result_stats:
             response.total_results_text = result_stats.get_text(strip=True)
 
-        # ── 策略 1：标准搜索结果（div.g 容器）──────────────
+        # 确定搜索范围（优先 #search，再 #rso，最后整个页面）
+        scope = (
+            soup.find("div", id="search")
+            or soup.find("div", id="rso")
+            or soup
+        )
 
-        results = self._parse_standard_results(soup)
+        # ── 策略 1：h3 锚点法（最稳健）──────────────
+        results, seen_urls = self._parse_by_h3_anchors(scope)
 
-        # ── 策略 2：如果策略 1 未找到，尝试 #rso 内的直接子元素 ──
+        # ── 策略 2：视频结果 ──────────────────────
+        video_results = self._parse_video_results(scope, seen_urls)
+        results.extend(video_results)
 
+        # ── 策略 3：退化全链接法（兜底）────────────
         if not results:
-            results = self._parse_rso_results(soup)
+            results = self._parse_fallback_links(scope)
 
-        # ── 策略 3：退化到所有带 href 的链接 ──────────────
-
-        if not results:
-            results = self._parse_fallback_links(soup)
+        # 重新编号 position
+        for i, r in enumerate(results):
+            r.position = i + 1
 
         response.results = results
 
@@ -179,143 +307,261 @@ class GoogleResultParser:
         response.clean_html_length = len(clean)
 
         if self.verbose:
+            n_organic = sum(1 for r in results if r.result_type == "organic")
+            n_video = sum(1 for r in results if r.result_type == "video")
+            parts = [f"{n_organic} organic"]
+            if n_video:
+                parts.append(f"{n_video} video")
             logger.okay(
                 f"  ✓ Parsed {logstr.mesg(len(results))} results "
+                f"({', '.join(parts)}) "
                 f"(raw={len(html)}, clean={len(clean)})"
             )
 
         return response
 
-    def _parse_standard_results(self, soup: BeautifulSoup) -> list[GoogleSearchResult]:
-        """策略 1：解析标准 div.g 搜索结果。"""
-        results = []
-        g_divs = soup.select("div.g")
+    # ── 策略 1：h3 锚点法 ────────────────────────
 
-        for i, g in enumerate(g_divs):
-            result = self._extract_result_from_g(g, position=i + 1)
-            if result and result.url and result.title:
-                results.append(result)
+    def _parse_by_h3_anchors(
+        self, scope: Tag
+    ) -> tuple[list[GoogleSearchResult], set[str]]:
+        """以 <h3> 为锚点提取有机搜索结果。
 
-        return results
+        思路：遍历 scope 内所有 <h3>，对每个 <h3>：
+        1. 检查 <h3> 是否在 <a> 中 — 取 <a> 的 href
+        2. 若不在 <a> 中，向上查找最近的包含外链 <a> 的祖先容器
+        3. 从该容器中提取 cite（显示 URL）和 snippet（摘要）
+        """
+        results: list[GoogleSearchResult] = []
+        seen_urls: set[str] = set()
 
-    def _parse_rso_results(self, soup: BeautifulSoup) -> list[GoogleSearchResult]:
-        """策略 2：从 #rso 容器中解析。"""
-        results = []
-        rso = soup.find("div", id="rso")
-        if not rso:
-            return results
-
-        # 遍历 #rso 的直接子元素
-        for i, child in enumerate(rso.children):
-            if not isinstance(child, Tag):
+        for h3 in scope.find_all("h3"):
+            title = h3.get_text(strip=True)
+            if not title or len(title) < 2:
                 continue
-            result = self._extract_result_from_g(child, position=i + 1)
-            if result and result.url and result.title:
-                results.append(result)
 
-        return results
+            # —— 定位包含外链的 <a> ——
+            url = ""
+            anchor = h3.find_parent("a")
+            if anchor:
+                url = self._resolve_href(anchor.get("href", ""))
+            if not url:
+                # h3 不在 <a> 中，向上找包含外链 <a> 的容器
+                container = self._find_result_container(h3)
+                if container:
+                    a_tag = container.find("a", href=True)
+                    if a_tag:
+                        url = self._resolve_href(a_tag["href"])
 
-    def _parse_fallback_links(self, soup: BeautifulSoup) -> list[GoogleSearchResult]:
-        """策略 3：退化解析 — 从所有链接中提取搜索结果。"""
-        results = []
-        search_div = soup.find("div", id="search") or soup
-
-        seen_urls = set()
-        position = 0
-        for a_tag in search_div.find_all("a", href=True):
-            href = a_tag["href"]
-
-            # 过滤非搜索结果链接
-            if not href.startswith("http") or "google.com" in href:
+            if not url:
                 continue
-            if href in seen_urls:
-                continue
-            seen_urls.add(href)
 
-            title = a_tag.get_text(strip=True)
+            # 去重（基于规范化 URL key）
+            clean = _clean_url(url)
+            key = _dedup_key(url)
+            if key in seen_urls:
+                continue
+            seen_urls.add(key)
+
+            # —— 定位结果容器，提取 cite + snippet ——
+            container = self._find_result_container(h3)
+            displayed_url = ""
+            snippet = ""
+
+            if container:
+                cite = container.find("cite")
+                if cite:
+                    displayed_url = cite.get_text(strip=True)
+                snippet = self._extract_snippet(container, title)
+
+            results.append(
+                GoogleSearchResult(
+                    title=title,
+                    url=clean,
+                    displayed_url=displayed_url,
+                    snippet=snippet,
+                    result_type="organic",
+                )
+            )
+
+        return results, seen_urls
+
+    # ── 策略 2：视频结果 ─────────────────────────
+
+    def _parse_video_results(
+        self, scope: Tag, seen_urls: set[str]
+    ) -> list[GoogleSearchResult]:
+        """提取视频搜索结果（YouTube 等）。
+
+        视频结果的典型结构：
+        - 主链接指向 YouTube 视频页面
+        - 可能包含视频时间线（带 &t= 参数的链接）
+        - 有些是 playlist 链接
+
+        我们只提取主视频链接（不含 &t= 时间线片段）。
+        """
+        results: list[GoogleSearchResult] = []
+        video_domains = {"youtube.com", "youtu.be", "vimeo.com", "dailymotion.com"}
+
+        for a_tag in scope.find_all("a", href=True):
+            href = self._resolve_href(a_tag["href"])
+            if not href:
+                continue
+
+            # 只处理视频域名
+            try:
+                host = urlparse(href).hostname or ""
+            except Exception:
+                continue
+            is_video = any(vd in host for vd in video_domains)
+            if not is_video:
+                continue
+
+            # 跳过时间线片段链接（&t=123）
+            if "&t=" in href:
+                continue
+            # 跳过 #:~:text= 高亮链接
+            clean = _clean_url(href)
+            key = _dedup_key(href)
+            if key in seen_urls:
+                continue
+
+            # 提取标题：优先 <h3>，其次 <a> 的文本
+            h3 = a_tag.find("h3")
+            if h3:
+                title = h3.get_text(strip=True)
+            else:
+                title = a_tag.get_text(strip=True)
+            # 清理标题中的多余后缀（如 "YouTube·Channel Name"）
             if not title or len(title) < 3:
-                # 尝试从父元素获取标题
+                continue
+
+            seen_urls.add(key)
+            results.append(
+                GoogleSearchResult(
+                    title=title,
+                    url=clean,
+                    result_type="video",
+                )
+            )
+
+        return results
+
+    # ── 策略 3：退化全链接法 ──────────────────────
+
+    def _parse_fallback_links(self, scope: Tag) -> list[GoogleSearchResult]:
+        """退化解析 — 扫描所有外链，按出现顺序收集。"""
+        results: list[GoogleSearchResult] = []
+        seen_urls: set[str] = set()
+
+        for a_tag in scope.find_all("a", href=True):
+            href = self._resolve_href(a_tag["href"])
+            if not href:
+                continue
+
+            base = _clean_url(href)
+            if base in seen_urls:
+                continue
+            seen_urls.add(base)
+
+            # 尝试获取标题
+            h3 = a_tag.find("h3")
+            title = h3.get_text(strip=True) if h3 else ""
+            if not title:
+                title = a_tag.get_text(strip=True)
+            if not title or len(title) < 3:
                 parent = a_tag.find_parent("div")
                 if parent:
                     h3 = parent.find("h3")
                     if h3:
                         title = h3.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
 
-            if title and len(title) >= 3:
-                position += 1
-                results.append(
-                    GoogleSearchResult(
-                        title=title,
-                        url=href,
-                        position=position,
-                    )
+            results.append(
+                GoogleSearchResult(
+                    title=title,
+                    url=base,
                 )
+            )
 
         return results
 
-    def _extract_result_from_g(
-        self, element: Tag, position: int
-    ) -> Optional[GoogleSearchResult]:
-        """从一个搜索结果容器中提取结构化数据。"""
-        result = GoogleSearchResult(position=position)
+    # ── 辅助方法 ─────────────────────────────────
 
-        # 提取标题（h3 标签）
-        h3 = element.find("h3")
-        if h3:
-            result.title = h3.get_text(strip=True)
+    def _resolve_href(self, href: str) -> str:
+        """解析 href：过滤无效/内部链接，处理 /url?q= 重定向。"""
+        if not href:
+            return ""
+        href = _normalize_url(href)
+        if not href.startswith("http"):
+            return ""
+        if _is_google_internal(href):
+            return ""
+        return href
 
-        # 提取链接（a 标签的 href）
-        a_tag = element.find("a", href=True)
-        if a_tag:
-            href = a_tag["href"]
-            if href.startswith("http") and "google.com" not in href:
-                result.url = href
-            elif href.startswith("/url?q="):
-                # Google 有时使用重定向链接
-                match = re.search(r"/url\?q=([^&]+)", href)
-                if match:
-                    from urllib.parse import unquote
-                    result.url = unquote(match.group(1))
+    def _find_result_container(self, element: Tag) -> Optional[Tag]:
+        """从一个元素向上查找搜索结果的容器 div。
 
-        # 提取显示 URL（cite 标签）
-        cite = element.find("cite")
-        if cite:
-            result.displayed_url = cite.get_text(strip=True)
+        启发式：向上遍历祖先，找到同时包含 <h3> 和 <cite> 的最小容器，
+        或者包含 class 含 'g' 的 div，或者向上最多 6 层的 div。
+        """
+        # 先尝试找包含 cite 的最小祖先 div
+        for parent in element.parents:
+            if not isinstance(parent, Tag) or parent.name == "html":
+                break
+            if parent.name == "div" and parent.find("cite"):
+                return parent
+        # 如果没找到 cite，回退到向上 6 层
+        depth = 0
+        for parent in element.parents:
+            if not isinstance(parent, Tag):
+                break
+            if parent.name == "div":
+                depth += 1
+                if depth >= 4:
+                    return parent
+        return None
 
-        # 提取摘要
-        snippet = self._extract_snippet(element)
-        if snippet:
-            result.snippet = snippet
+    def _extract_snippet(self, container: Tag, title: str = "") -> str:
+        """从搜索结果容器中提取摘要文本。
 
-        return result
-
-    def _extract_snippet(self, element: Tag) -> str:
-        """从搜索结果容器中提取摘要文本。"""
-        # 方法 1：查找 data-sncf 属性的元素（Google 摘要容器）
-        snippet_div = element.find(attrs={"data-sncf": True})
+        多种策略逐级尝试：
+        1. data-sncf 属性（Google 的摘要标记）
+        2. data-content-feature="1" 属性
+        3. 排除标题/URL 后，最长的文本块
+        """
+        # 方法 1：data-sncf 属性
+        snippet_div = container.find(attrs={"data-sncf": True})
         if snippet_div:
-            return snippet_div.get_text(strip=True)
-
-        # 方法 2：查找 class 包含 "VwiC3b" 的 span（常见的摘要 class）
-        for span in element.find_all("span"):
-            text = span.get_text(strip=True)
-            # 摘要通常较长（>40 chars）且不是标题或 URL
-            if len(text) > 40 and not text.startswith("http"):
+            text = snippet_div.get_text(strip=True)
+            if text:
                 return text
 
-        # 方法 3：从 div 中提取最长的文本
-        longest_text = ""
-        for div in element.find_all("div"):
-            text = div.get_text(strip=True)
-            if (
-                len(text) > len(longest_text)
-                and len(text) > 40
-                and not text.startswith("http")
-            ):
-                # 排除标题和 URL 文本
-                h3 = element.find("h3")
-                if h3 and text == h3.get_text(strip=True):
-                    continue
-                longest_text = text
+        # 方法 2：data-content-feature="1"
+        content_div = container.find(attrs={"data-content-feature": "1"})
+        if content_div:
+            text = content_div.get_text(strip=True)
+            if len(text) > 20:
+                return text
 
-        return longest_text
+        # 方法 3：启发式 — 在容器内找最长非标题文本
+        title_text = title or ""
+        cite = container.find("cite")
+        cite_text = cite.get_text(strip=True) if cite else ""
+
+        longest = ""
+        for elem in container.find_all(["span", "div", "em"]):
+            text = elem.get_text(strip=True)
+            if len(text) <= len(longest) or len(text) < 30:
+                continue
+            if text == title_text or text == cite_text:
+                continue
+            if text.startswith("http"):
+                continue
+            # 避免选到整个容器的完整文本
+            if len(text) > 500:
+                continue
+            longest = text
+
+        return longest
