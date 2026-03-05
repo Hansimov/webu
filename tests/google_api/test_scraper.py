@@ -21,7 +21,7 @@ class TestGoogleScraper:
 
     def setup_method(self):
         self.manager = MagicMock(spec=ProxyManager)
-        self.manager.get_proxy.return_value = "socks5://127.0.0.1:11000"
+        self.manager.get_proxy.return_value = "http://127.0.0.1:11111"
         self.scraper = GoogleScraper(
             proxy_manager=self.manager,
             headless=True,

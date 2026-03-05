@@ -55,7 +55,7 @@ class TestGoogleSearchServerUnit:
 class TestGoogleSearchServerIntegration:
     """FastAPI 服务集成测试。
 
-    需要代理端口（11000, 11111, 11119）可用。
+    需要代理端口（11111, 11119）可用。
 
     运行: pytest tests/google_api/test_server.py -xvs -m integration
     """

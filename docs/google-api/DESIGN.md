@@ -1,323 +1,183 @@
 # ggsc (GooGle-SearCh) — 系统设计文档
 
-> 基于 undetected-chromedriver + Playwright CDP + MongoDB 的自建 Google 搜索服务。
+> 基于 undetected-chromedriver + Playwright CDP 的自建 Google 搜索服务。
 >
-> 代理池基础设施已拆分到 `proxy_api` 模块，详见 [proxy-api/DESIGN.md](../proxy-api/DESIGN.md)。
+> 使用固定 HTTP 代理列表 + round-robin 负载均衡 + 自动故障转移。
 
 ---
 
-## 1. 架构概览
+## 1. 整体架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       VPS 服务器                              │
-│                                                              │
-│  ┌──────────────┐     ┌───────────────────────┐             │
-│  │  FastAPI 服务  │────→│  UC+CDP 浏览器         │             │
-│  │  (server.py)  │     │  (scraper.py)          │             │
-│  │               │     │  ├── undetected Chrome  │             │
-│  │  /search      │     │  └── Playwright CDP API │             │
-│  │  /proxy/*     │     └───────────────────────┘             │
-│  │  /health      │              │                             │
-│  └──────────────┘              │                             │
-│         │                      ▼                             │
-│  ┌──────┴──────┐     ┌───────────────────┐                  │
-│  │  HTML 解析   │     │  proxy_api 代理池   │                  │
-│  │ (parser.py)  │     │  (MongoProxyStore)  │                  │
-│  └─────────────┘     │  ├── ips            │                  │
-│                      │  └── google_ips     │                  │
-│                      └───────────────────┘                  │
-│                           ▲       ▲                          │
-│                      ┌────┘       └────┐                     │
-│           ┌──────────────────┐  ┌──────────────┐            │
-│           │ Google 两级检测    │  │  Google 搜索池 │            │
-│           │ (checker.py)     │  │  (pool.py)    │            │
-│           │ L1(proxy_api)+L2 │  │ GoogleSearch  │            │
-│           └──────────────────┘  │  Pool         │            │
-│                                 └──────────────┘            │
-│                                                              │
-│  ┌─────────────────────────────────────────────────┐        │
-│  │  CLI 管理 (cli.py) — ggsc 命令                    │        │
-│  │  start / stop / restart / status / logs           │        │
-│  │  collect / check / stats / refresh / diag         │        │
-│  │  abandon / parse-test                             │        │
-│  └─────────────────────────────────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
+┌─────────┐     ┌─────────────┐     ┌─────────────┐     ┌──────────┐
+│  客户端   │────▶│  FastAPI     │────▶│  GoogleScraper│────▶│  Google   │
+│ (SDK/CLI)│◀────│  Server      │◀────│  + Parser    │◀────│  搜索页面  │
+└─────────┘     └─────────────┘     └─────────────┘     └──────────┘
+                       │                    │
+                       │              ┌─────▼──────┐
+                       │              │ ProxyManager│
+                       │              │ (round-robin│
+                       │              │  + 健康检查) │
+                       └──────────────┴────────────┘
+                                          │
+                              ┌───────────┼───────────┐
+                              ▼                       ▼
+                     http://127.0.0.1:11111  http://127.0.0.1:11119
 ```
 
----
+### 核心组件
 
-## 2. 模块设计
-
-### 2.1 模块依赖关系
-
-```
-proxy_api (基础设施)              google_api (Google 搜索)
-├── constants.py ────────────→ constants.py (重新导出 + Google 常量)
-├── mongo.py ────────────────→ 直接使用 MongoProxyStore
-├── collector.py ────────────→ 直接使用 ProxyCollector
-├── checker.py (L1) ────────→ checker.py (L2 + ProxyChecker)
-├── pool.py (ProxyPool) ────→ pool.py (GoogleSearchPool 继承)
-│                              scraper.py (UC + CDP 搜索)
-│                              parser.py (HTML 解析)
-│                              server.py (FastAPI 搜索服务)
-└──────────────────────────→ cli.py (ggsc 命令行)
-```
-
-### 2.2 各模块职责
-
-| 模块 | 职责 | 关键类/函数 |
-|------|------|------------|
-| `constants.py` | Google 搜索常量 + 从 proxy_api 重新导出 | `GOOGLE_SEARCH_URL`, `SEARCH_TIMEOUT` |
-| `checker.py` | Level-2 Google 搜索检测 + 两级编排 | `ProxyChecker`, `check_level2_batch` ⚠️ L2 对 SOCKS 无效 |
-| `pool.py` | Google 搜索代理池（继承 ProxyPool） | `GoogleSearchPool` |
-| `scraper.py` | UC+CDP 驱动的 Google 搜索抓取器 | `GoogleScraper` |
-| `parser.py` | Google 搜索结果 HTML 解析 | `GoogleResultParser` |
-| `server.py` | FastAPI HTTP API 服务 | `create_google_search_server()` |
-| `cli.py` | 命令行服务管理工具 (`ggsc`) | `main()` |
-
----
-
-## 3. 数据流设计
-
-### 3.1 代理采集流程
-
-```
-[代理源 URL] ──HTTP GET──→ [ProxyCollector]
-     ▲ (需通过本地代理)          │ 解析 ip:port
-     │ FETCH_PROXY               ▼
-     │                      [MongoProxyStore]
-     │                           │ upsert 到 ips collection
-     │                           ▼
-     │                      [MongoDB: ips]
-```
-
-- 采集时使用 `FETCH_PROXY`（默认 `http://127.0.0.1:11119`）访问代理源 URL
-- 支持 `ip:port` 和 `protocol://ip:port` 两种格式
-- 通过 `(ip, port, protocol)` 唯一索引实现自动去重
-
-### 3.2 代理检测流程（两级系统）
-
-```
-[MongoDB: ips] ──取未检测的 IP──→ [ProxyChecker]
-                                      │
-                                ┌─────┴─────┐
-                                ▼           │
-                          [Level-1: aiohttp]│
-                          HTTP 请求轻量端点   │
-                          generate_204 (204)│
-                          robots.txt (200)  │
-                          并发 50，超时 10s   │
-                                │           │
-                          ┌─────┴─────┐     │
-                          ▼           ▼     │
-                       通过 IP      失败 IP  │
-                          │         存储结果 │
-                          ▼               │
-                    [Level-2: aiohttp]    │
-                    HTTP 请求 Google 搜索   │
-                    检查响应大小/CAPTCHA    │
-                    并发 30-50，超时 20s    │
-                          │               │
-                          ▼               │
-                    [MongoProxyStore]      │
-                    upsert 到 google_ips   │
-                          │               │
-                          ▼               │
-                    [MongoDB: google_ips]──┘
-```
-
-**Level-1 (快速过滤)**：
-- 使用 `aiohttp` + `aiohttp-socks` 发送 HTTP 请求
-- 检测 Google 轻量端点（`generate_204`、`robots.txt`）
-- 并发度 50，超时 10s，流量极小
-- HTTP 代理用 `proxy=` 参数，SOCKS5 用 `ProxyConnector`
-- 可过滤 ~85% 的死亡 IP
-
-**Level-2 (搜索连通性验证)**：
-- 使用 aiohttp 发送 HTTP 请求到 Google 搜索 URL
-- 检查响应大小（正常 ~86KB, CAPTCHA/sorry <10KB）
-- 检测 CAPTCHA / sorry 重定向标记
-- HTTP 请求不触发 Google 的浏览器自动化检测
-- 记录 `is_valid`、`latency_ms`、`last_error`、`check_level`
-
-> ⚠️ **已知局限（2026-03-04 实测）**：Level-2 对 SOCKS 代理通过率为 **0%**（200/200 失败）。Google 对公开 SOCKS 代理 IP 实施 IP 层封锁，在 TCP/TLS 层直接关闭连接（`ServerDisconnectedError`），导致超时（71%）或连接错误（24%）。L2 HTTP 检测对 **HTTP 协议代理**有一定效果，对 SOCKS 代理无效。
->
-> 实际 Google 搜索测试应直接使用 `scraper.py`（UC+Playwright）并跳过 L2 预检，参见 `tests/google_api/run_socks_browser_test.py`。
-
-### 3.3 搜索执行流程
-
-```
-[用户请求] ──/search──→ [FastAPI Server]
-                              │
-                              ▼
-                        [GoogleScraper]
-                              │
-                              ├── 从 ProxyPool 获取可用代理
-                              │     └── 排除最近使用的 IP
-                              │
-                              ▼
-                        [Playwright Browser]
-                        新建 Context(proxy=选中的代理)
-                        随机化: UA / Viewport / Locale
-                        导航到 Google 搜索 URL
-                        等待 DOM 渲染
-                              │
-                              ▼
-                        [GoogleResultParser]
-                        纯化 HTML
-                        三策略解析搜索结果
-                        检测 CAPTCHA
-                              │
-                              ▼
-                        [SearchResponse] ──JSON──→ 用户
-```
-
----
-
-## 4. 关键设计决策
-
-### 4.1 浏览器策略：持久浏览器 + 新上下文
-
-选择 **策略 B**（持久浏览器 + 每次搜索新上下文）：
-- 浏览器启动开销大（1-3s），只启动一次
-- 每次搜索创建新 `BrowserContext`（50-100ms），指定不同代理
-- 搜索完成后关闭 Context 释放内存
-- 每 200 次搜索自动重启浏览器，避免内存泄漏
-
-### 4.2 代理选取策略
-
-- 按 `latency_ms` 升序排序，从 top 10 中随机选取
-- 维护 `_recent_ips` 列表（最近 20 个），优先排除已用 IP
-- 如果排除后无可用代理，放宽限制重新查询
-
-### 4.3 反检测策略
-
-- 每次搜索随机化 User-Agent、Viewport、Locale
-- 请求间添加 1-3 秒随机延迟
-- 使用 `--disable-blink-features=AutomationControlled` 参数
-- CAPTCHA 检测：自动切换代理重试
-
-### 4.4 HTML 解析三策略
-
-1. **标准策略**：从 `div.g` 容器中提取 title/url/snippet
-2. **RSO 策略**：从 `#rso` 容器子元素中提取
-3. **退化策略**：从所有 `<a href>` 链接中提取
-
----
-
-## 5. MongoDB 数据模型
-
-### 5.1 `ips` Collection
-
-| 字段 | 类型 | 说明 |
+| 组件 | 文件 | 职责 |
 |------|------|------|
-| `ip` | string | IP 地址 |
-| `port` | int | 端口号 |
-| `protocol` | string | 协议 (http/https/socks5) |
-| `source` | string | 来源标识 |
-| `collected_at` | string | 采集时间 (ISO 8601) |
-
-唯一索引：`(ip, port, protocol)`
-
-### 5.2 `google_ips` Collection
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `ip` | string | IP 地址 |
-| `port` | int | 端口号 |
-| `protocol` | string | 协议 |
-| `proxy_url` | string | 完整代理 URL |
-| `is_valid` | bool | 是否可用 |
-| `latency_ms` | int | 检测延迟 (ms) |
-| `checked_at` | string | 检测时间 |
-| `fail_count` | int | 累计失败次数 |
-| `success_count` | int | 累计成功次数 |
-| `last_error` | string | 最后一次错误信息 |
-| `check_level` | int | 检测级别（1=Level-1, 2=Level-2）|
-| `is_abandoned` | bool | 是否已废弃 |
-| `abandoned_at` | string | 废弃标记时间 |
-| `abandoned_reason` | string | 废弃原因 |
-| `revived_at` | string | 复活时间（废弃代理重新通过检测时设置）|
-
-唯一索引：`(ip, port, protocol)`
-查询索引：`(is_valid, latency_ms)`
+| **ProxyManager** | `proxy_manager.py` | 固定代理列表管理，健康检查，round-robin 负载均衡，故障转移 |
+| **GoogleScraper** | `scraper.py` | 通过 undetected-chromedriver + Playwright CDP 驱动浏览器执行搜索 |
+| **GoogleResultParser** | `parser.py` | 解析 Google 搜索结果 HTML，提取标题/URL/摘要 |
+| **FastAPI Server** | `server.py` | HTTP API 服务，提供搜索和代理状态接口 |
+| **CLI** | `cli.py` | 命令行工具 `ggsc`，管理服务生命周期和手动搜索 |
 
 ---
 
-## 6. API 接口设计
+## 2. 代理管理设计
+
+### 2.1 固定代理列表
+
+放弃了旧的基于 MongoDB 的动态代理池方案，改用固定代理列表：
+
+```python
+DEFAULT_PROXIES = [
+    {"url": "http://127.0.0.1:11111", "name": "proxy-11111"},
+    {"url": "http://127.0.0.1:11119", "name": "proxy-11119"},
+]
+```
+
+**设计理由：**
+- WARP SOCKS5 代理 (11000) 已被 Google 严格风控，不再可用
+- 两个 HTTP 代理地位平等，无主备之分
+- 固定代理更可控、更稳定，避免免费代理的不可靠性
+
+### 2.2 负载均衡策略
+
+采用 **round-robin 轮换 + 健康感知** 的策略：
+
+```python
+def get_proxy(self) -> Optional[str]:
+    # 1. 在健康代理中 round-robin 轮换
+    healthy = [p for p in self._proxies if p.healthy]
+    if healthy:
+        idx = self._round_robin_index % len(healthy)
+        self._round_robin_index += 1
+        return healthy[idx].url
+
+    # 2. 降级：所有代理都不健康，选失败次数最少的
+    all_sorted = sorted(self._proxies, key=lambda p: p.consecutive_failures)
+    return all_sorted[0].url if all_sorted else None
+```
+
+### 2.3 健康检查机制
+
+- **定期检查**：每 30 秒对所有代理执行健康检查
+- **加速恢复**：有代理不健康时，缩短检查间隔到 15 秒
+- **使用反馈**：搜索成功/失败实时更新代理状态
+- **阈值控制**：连续失败 3 次后标记为不健康
+- **自动恢复**：不健康代理通过健康检查恢复后自动重新参与轮换
+
+### 2.4 ProxyState 数据模型
+
+```python
+@dataclass
+class ProxyState:
+    url: str              # 代理 URL
+    name: str             # 名称标识
+    healthy: bool         # 是否健康
+    latency_ms: int       # 最近一次检查延迟
+    consecutive_failures: int   # 连续失败次数
+    consecutive_successes: int  # 连续成功次数
+    total_successes: int  # 累计成功
+    total_failures: int   # 累计失败
+```
+
+---
+
+## 3. 搜索流程
+
+```
+用户请求 → Server → Scraper.search()
+  ├─ ProxyManager.get_proxy() → 获取代理 URL
+  ├─ undetected-chromedriver 启动 Chrome
+  ├─ Playwright CDP 连接并控制页面
+  ├─ 导航到 Google 搜索页面
+  ├─ 检测是否出现 CAPTCHA
+  │   ├─ 是 → VLM 识别验证码，自动处理
+  │   └─ 否 → 继续
+  ├─ 获取页面 HTML
+  ├─ GoogleResultParser 解析结果
+  ├─ report_success() / report_failure()
+  └─ 返回 GoogleSearchResponse
+```
+
+### CAPTCHA 处理
+
+scraper 内置 VLM (Vision Language Model) CAPTCHA 自动识别：
+- 检测 reCAPTCHA / hCaptcha 等
+- 通过 VLM API 分析验证码图片
+- 自动点击验证选项
+
+---
+
+## 4. API 设计
+
+### 4.1 FastAPI 端点
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/health` | 健康检查 |
+| GET | `/health` | 服务健康检查 |
 | GET/POST | `/search` | 执行 Google 搜索 |
-| GET | `/proxy/stats` | 代理池统计 |
-| POST | `/proxy/collect` | 采集代理 IP |
-| POST | `/proxy/check` | 检测代理可用性 |
-| POST | `/proxy/refresh` | 一键刷新（采集+检测）|
-| GET | `/proxy/valid` | 获取可用代理列表 |
-| GET | `/proxy/get` | 获取推荐的可用代理 |
+| GET | `/proxy/status` | 获取所有代理健康状态 |
+| GET | `/proxy/current` | 获取当前推荐代理 |
+| POST | `/proxy/check` | 立即执行代理健康检查 |
+
+### 4.2 搜索响应结构
+
+```json
+{
+  "query": "搜索关键词",
+  "results": [
+    {
+      "position": 1,
+      "title": "结果标题",
+      "url": "https://example.com",
+      "displayed_url": "example.com",
+      "snippet": "结果摘要..."
+    }
+  ],
+  "total_results": 10,
+  "has_captcha": false,
+  "error": null
+}
+```
 
 ---
 
-## 7. 废弃机制 (Abandoned Mechanism)
-
-### 7.1 设计目标
-
-免费代理池中大量代理长期不可用，持续检测浪费资源。废弃机制自动将连续失败的代理标记为 "废弃"（`is_abandoned=True`），使其不参与后续检测和选取，同时保留复活通道。
-
-### 7.2 废弃条件
-
-代理同时满足以下条件时被标记废弃：
-1. `fail_count >= ABANDONED_FAIL_THRESHOLD`（默认 5）
-2. `checked_at` 距今超过 `ABANDONED_STALE_HOURS`（默认 24 小时）
-3. `is_valid = False`
-4. 尚未被标记废弃
-
-### 7.3 关键常量
-
-| 常量 | 默认值 | 说明 |
-|------|--------|------|
-| `ABANDONED_FAIL_THRESHOLD` | 5 | 连续失败 N 次后判定废弃 |
-| `ABANDONED_STALE_HOURS` | 24 | 最后检测距今超过 N 小时 |
-
-### 7.4 核心方法
-
-| 层 | 方法 | 说明 |
-|----|------|------|
-| `MongoProxyStore` | `mark_abandoned(ip, port, protocol, reason)` | 手动标记单个代理废弃 |
-| `MongoProxyStore` | `scan_and_mark_abandoned()` | 批量扫描并标记满足条件的代理 |
-| `MongoProxyStore` | `get_abandoned_count()` | 获取废弃代理数量 |
-| `MongoProxyStore` | `get_abandoned_ips_set()` | 获取废弃 IP 集合（用于快速过滤） |
-| `MongoProxyStore` | `revive_proxy(ip, port, protocol)` | 复活废弃代理（重新检测通过时） |
-| `ProxyPool` | `scan_abandoned()` | 编排层调用 `scan_and_mark_abandoned()` |
-| `ProxyPool` | `get_abandoned_stats()` | 返回废弃代理统计 |
-
-### 7.5 数据流
+## 5. 文件结构
 
 ```
-[google_ips] ──查找 fail_count >= 5 且 stale──→ [scan_and_mark_abandoned]
-                                                       │
-                                                 $set is_abandoned=True
-                                                 $set abandoned_at=now
-                                                       │
-                                                       ▼
-                                               [废弃代理被排除]
-                                                 ├── get_valid_proxies() 排除 is_abandoned
-                                                 ├── check 时跳过废弃代理
-                                                 └── stats 中显示 total_abandoned
+src/webu/google_api/
+├── __init__.py          # 模块导出
+├── __main__.py          # python -m webu.google_api 入口
+├── cli.py               # ggsc CLI 工具 (525 行)
+├── constants.py         # 配置常量 (47 行)
+├── parser.py            # Google 结果解析器 (321 行)
+├── proxy_manager.py     # 代理管理器 (415 行)
+├── scraper.py           # 浏览器搜索引擎 (585 行)
+└── server.py            # FastAPI 服务 (252 行)
 
-[重新检测通过] ──→ [revive_proxy]
-                       │
-                 $set is_abandoned=False
-                 $set revived_at=now
-                 $set fail_count=0
+tests/google_api/
+├── test_cli.py          # CLI 单元测试
+├── test_cli_e2e.py      # CLI E2E 测试
+├── test_parser.py       # 解析器测试
+├── test_proxy_manager.py# 代理管理器测试
+├── test_scraper.py      # 搜索引擎测试
+├── test_search.py       # 搜索集成测试
+├── test_server.py       # API 服务测试
+└── test_uc_cdp.py       # UC + CDP 连接测试
 ```
-
-### 7.6 时间戳格式
-
-所有时间戳统一使用 Asia/Shanghai (+8) 时区，格式为 `YYYY-MM-DD HH:MM:SS`（无时区后缀，空格分隔日期和时间）。通过 `_now_shanghai()` 辅助函数生成。
-
----
-
-*文档更新日期：2026-03-01*

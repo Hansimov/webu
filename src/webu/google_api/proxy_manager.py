@@ -1,14 +1,14 @@
 """代理管理器 — 基于固定代理列表的健康检查、负载均衡和自动故障转移。
 
-取代旧的基于 MongoDB 代理池的方案，专注于使用给定的代理列表：
-- 主代理：socks5://127.0.0.1:11000 (Cloudflare WARP)
-- 备用代理：http://127.0.0.1:11111, http://127.0.0.1:11119
+使用本地 HTTP 代理进行 Google 搜索：
+- http://127.0.0.1:11111
+- http://127.0.0.1:11119
 
-功能：
-- 周期性健康检查
-- 自动故障转移：主代理不可用时，切换到备用代理
-- 自动恢复：周期性检查主代理是否恢复，恢复后自动切回
-- 使用报告反馈：搜索成功/失败时更新代理状态
+两个代理地位平等，通过 round-robin 轮换 + 健康检查实现负载均衡：
+- 周期性健康检查（默认 30 秒）
+- 不健康代理自动跳过，加速恢复检测（15 秒）
+- 搜索成功/失败实时更新代理状态
+- 连续失败超过阈值后标记为不健康
 """
 
 import asyncio
@@ -16,7 +16,6 @@ import random
 import time
 
 from dataclasses import dataclass, field
-from enum import Enum
 from tclogger import logger, logstr
 from typing import Optional
 
@@ -29,15 +28,14 @@ from aiohttp_socks import ProxyConnector
 # ═══════════════════════════════════════════════════════════════
 
 DEFAULT_PROXIES = [
-    {"url": "socks5://127.0.0.1:11000", "role": "primary", "name": "warp-socks5"},
-    {"url": "http://127.0.0.1:11111", "role": "backup", "name": "backup-11111"},
-    {"url": "http://127.0.0.1:11119", "role": "backup", "name": "backup-11119"},
+    {"url": "http://127.0.0.1:11111", "name": "proxy-11111"},
+    {"url": "http://127.0.0.1:11119", "name": "proxy-11119"},
 ]
 
 # 健康检查间隔（秒）
 HEALTH_CHECK_INTERVAL = 30
 
-# 恢复检查间隔（秒）— 当主代理不可用时，多久检查一次是否恢复
+# 恢复检查间隔（秒）— 当有代理不可用时，多久检查一次是否恢复
 RECOVERY_CHECK_INTERVAL = 15
 
 # 健康检查超时（秒）
@@ -59,18 +57,12 @@ HEALTH_CHECK_URLS = [
 # ═══════════════════════════════════════════════════════════════
 
 
-class ProxyRole(str, Enum):
-    PRIMARY = "primary"
-    BACKUP = "backup"
-
-
 @dataclass
 class ProxyState:
     """单个代理的运行时状态。"""
 
     url: str
     name: str
-    role: ProxyRole
     healthy: bool = True
     latency_ms: int = 0
     last_check_time: float = 0.0
@@ -80,10 +72,6 @@ class ProxyState:
     consecutive_successes: int = 0
     total_successes: int = 0
     total_failures: int = 0
-
-    @property
-    def is_primary(self) -> bool:
-        return self.role == ProxyRole.PRIMARY
 
     @property
     def success_rate(self) -> float:
@@ -96,7 +84,6 @@ class ProxyState:
         return {
             "url": self.url,
             "name": self.name,
-            "role": self.role.value,
             "healthy": self.healthy,
             "latency_ms": self.latency_ms,
             "consecutive_failures": self.consecutive_failures,
@@ -127,7 +114,7 @@ async def check_proxy_health(
     通过代理发送 HTTP 请求到检测端点，验证连通性。
 
     Args:
-        proxy_url: 代理 URL (e.g. "socks5://127.0.0.1:11000")
+        proxy_url: 代理 URL (e.g. "http://127.0.0.1:11111")
         timeout_s: 超时秒数
         check_url: 检测 URL（默认使用 Google）
 
@@ -187,19 +174,20 @@ async def check_proxy_health(
 
 
 class ProxyManager:
-    """固定代理列表管理器 — 健康检查 + 自动故障转移 + 自动恢复。
+    """固定代理列表管理器 — 健康检查 + 轮换负载均衡 + 自动故障转移。
 
     使用流程：
     1. manager = ProxyManager(proxies=[...])
     2. await manager.start()  # 启动后台健康检查
-    3. proxy_url = manager.get_proxy()  # 获取最佳可用代理
+    3. proxy_url = manager.get_proxy()  # 获取可用代理（round-robin）
     4. manager.report_success(proxy_url) / manager.report_failure(proxy_url)
     5. await manager.stop()  # 停止
 
-    故障转移逻辑：
-    - 优先使用健康的主代理
-    - 主代理不可用时，轮换使用健康的备用代理
-    - 后台定期检查主代理是否恢复，恢复后自动切回
+    负载均衡逻辑：
+    - 所有代理地位平等，通过 round-robin 轮换
+    - 不健康的代理自动跳过
+    - 所有代理都不健康时，降级使用失败次数最少的
+    - 后台定期检查，不健康代理加速恢复检测
     """
 
     def __init__(
@@ -219,17 +207,15 @@ class ProxyManager:
         proxy_configs = proxies or DEFAULT_PROXIES
         self._proxies: list[ProxyState] = []
         for cfg in proxy_configs:
-            role = ProxyRole(cfg.get("role", "backup"))
             self._proxies.append(
                 ProxyState(
                     url=cfg["url"],
                     name=cfg.get("name", cfg["url"]),
-                    role=role,
                 )
             )
 
-        # 用于轮换备用代理的索引
-        self._backup_index = 0
+        # round-robin 轮换索引
+        self._round_robin_index = 0
 
         # 后台任务
         self._check_task: Optional[asyncio.Task] = None
@@ -273,32 +259,20 @@ class ProxyManager:
     # ── 代理选取 ──────────────────────────────────────────────
 
     def get_proxy(self) -> Optional[str]:
-        """获取最佳可用代理 URL。
+        """获取可用代理 URL（round-robin 轮换）。
 
-        优先级：
-        1. 健康的主代理
-        2. 健康的备用代理（轮换）
-        3. 最近失败次数最少的代理（降级）
+        策略：
+        1. 在健康代理中 round-robin 轮换
+        2. 所有代理都不健康时，降级使用失败次数最少的
 
         Returns:
             代理 URL 字符串，或 None（无可用代理）
         """
-        # 优先：健康的主代理
-        for p in self._proxies:
-            if p.is_primary and p.healthy:
-                return p.url
-
-        # 其次：健康的备用代理（轮换）
-        healthy_backups = [p for p in self._proxies if not p.is_primary and p.healthy]
-        if healthy_backups:
-            idx = self._backup_index % len(healthy_backups)
-            self._backup_index += 1
-            selected = healthy_backups[idx]
-            if self.verbose:
-                logger.mesg(
-                    f"  ↪ Primary unavailable, using backup: "
-                    f"{logstr.mesg(selected.name)}"
-                )
+        healthy = [p for p in self._proxies if p.healthy]
+        if healthy:
+            idx = self._round_robin_index % len(healthy)
+            self._round_robin_index += 1
+            selected = healthy[idx]
             return selected.url
 
         # 降级：所有代理都不健康，选失败次数最少的
@@ -362,15 +336,10 @@ class ProxyManager:
         """获取代理管理器统计信息。"""
         total = len(self._proxies)
         healthy = sum(1 for p in self._proxies if p.healthy)
-        primary_healthy = any(
-            p.healthy for p in self._proxies if p.is_primary
-        )
         return {
             "total_proxies": total,
             "healthy_proxies": healthy,
             "unhealthy_proxies": total - healthy,
-            "primary_healthy": primary_healthy,
-            "using_primary": primary_healthy,
             "proxies": [p.to_dict() for p in self._proxies],
         }
 
@@ -422,17 +391,14 @@ class ProxyManager:
         """后台健康检查循环。
 
         - 每 check_interval 秒检查所有代理
-        - 如果主代理不健康，每 recovery_interval 秒额外检查主代理
+        - 任一代理不健康时，缩短为 recovery_interval 加速恢复检测
         """
         try:
             while self._running:
-                # 等待到下一次检查
-                primary_healthy = any(
-                    p.healthy for p in self._proxies if p.is_primary
-                )
+                # 有不健康代理时加速检查
+                any_unhealthy = any(not p.healthy for p in self._proxies)
                 interval = (
-                    self.recovery_interval
-                    if not primary_healthy
+                    self.recovery_interval if any_unhealthy
                     else self.check_interval
                 )
                 await asyncio.sleep(interval)
@@ -440,23 +406,8 @@ class ProxyManager:
                 if not self._running:
                     break
 
-                # 执行健康检查
-                if not primary_healthy:
-                    # 主代理不健康，只检查主代理（快速恢复检测）
-                    primary_proxies = [
-                        p for p in self._proxies if p.is_primary
-                    ]
-                    for p in primary_proxies:
-                        await self._check_single(p)
-                    # 如果主代理恢复了，标志性地检查一下备用代理
-                    if any(pp.healthy for pp in primary_proxies):
-                        logger.okay(
-                            "  ✓ Primary proxy recovered! "
-                            "Switching back to primary."
-                        )
-                else:
-                    # 常规全量检查
-                    await self._check_all()
+                # 全量健康检查
+                await self._check_all()
 
         except asyncio.CancelledError:
             pass

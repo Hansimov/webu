@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from webu.google_api.proxy_manager import (
     ProxyManager,
     ProxyState,
-    ProxyRole,
     DEFAULT_PROXIES,
     check_proxy_health,
 )
@@ -27,36 +26,33 @@ class TestProxyState:
 
     def test_init_defaults(self):
         state = ProxyState(
-            url="socks5://127.0.0.1:11000",
-            name="warp",
-            role=ProxyRole.PRIMARY,
+            url="http://127.0.0.1:11111",
+            name="proxy-11111",
         )
         assert state.healthy is True
         assert state.latency_ms == 0
         assert state.consecutive_failures == 0
-        assert state.is_primary is True
 
     def test_success_rate_empty(self):
-        state = ProxyState(url="x", name="x", role=ProxyRole.PRIMARY)
+        state = ProxyState(url="http://x", name="x")
         assert state.success_rate == 1.0
 
     def test_success_rate(self):
         state = ProxyState(
-            url="x", name="x", role=ProxyRole.BACKUP,
+            url="http://x", name="x",
             total_successes=7, total_failures=3,
         )
         assert abs(state.success_rate - 0.7) < 0.01
 
     def test_to_dict(self):
         state = ProxyState(
-            url="socks5://127.0.0.1:11000",
-            name="warp",
-            role=ProxyRole.PRIMARY,
+            url="http://127.0.0.1:11111",
+            name="proxy-11111",
         )
         d = state.to_dict()
-        assert d["url"] == "socks5://127.0.0.1:11000"
-        assert d["role"] == "primary"
+        assert d["url"] == "http://127.0.0.1:11111"
         assert d["healthy"] is True
+        assert "role" not in d
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -69,33 +65,45 @@ class TestProxyManager:
 
     def test_init_default_proxies(self):
         manager = ProxyManager(verbose=False)
-        assert len(manager._proxies) == 3
+        assert len(manager._proxies) == 2
 
     def test_init_custom_proxies(self):
         proxies = [
-            {"url": "socks5://1.2.3.4:1080", "role": "primary", "name": "p1"},
-            {"url": "http://5.6.7.8:8080", "role": "backup", "name": "b1"},
+            {"url": "http://1.2.3.4:8080", "name": "p1"},
+            {"url": "http://5.6.7.8:8080", "name": "p2"},
+            {"url": "http://9.10.11.12:8080", "name": "p3"},
         ]
         manager = ProxyManager(proxies=proxies, verbose=False)
-        assert len(manager._proxies) == 2
-        assert manager._proxies[0].url == "socks5://1.2.3.4:1080"
-        assert manager._proxies[0].is_primary is True
+        assert len(manager._proxies) == 3
+        assert manager._proxies[0].url == "http://1.2.3.4:8080"
 
     def test_get_proxy_all_healthy(self):
-        """所有代理健康时，应返回主代理。"""
+        """所有代理健康时，应 round-robin 返回。"""
         manager = ProxyManager(verbose=False)
-        url = manager.get_proxy()
-        assert url == "socks5://127.0.0.1:11000"
+        url1 = manager.get_proxy()
+        url2 = manager.get_proxy()
+        assert url1 == "http://127.0.0.1:11111"
+        assert url2 == "http://127.0.0.1:11119"
 
-    def test_get_proxy_primary_down(self):
-        """主代理不健康时，应返回备用代理。"""
+    def test_get_proxy_round_robin(self):
+        """验证 round-robin 轮换。"""
         manager = ProxyManager(verbose=False)
-        # 标记主代理为不健康
-        for p in manager._proxies:
-            if p.is_primary:
-                p.healthy = False
-        url = manager.get_proxy()
-        assert url in ["http://127.0.0.1:11111", "http://127.0.0.1:11119"]
+        urls = [manager.get_proxy() for _ in range(4)]
+        assert urls == [
+            "http://127.0.0.1:11111",
+            "http://127.0.0.1:11119",
+            "http://127.0.0.1:11111",
+            "http://127.0.0.1:11119",
+        ]
+
+    def test_get_proxy_one_down(self):
+        """一个代理不健康时，应只返回健康的那个。"""
+        manager = ProxyManager(verbose=False)
+        manager._proxies[0].healthy = False
+        url1 = manager.get_proxy()
+        url2 = manager.get_proxy()
+        assert url1 == "http://127.0.0.1:11119"
+        assert url2 == "http://127.0.0.1:11119"
 
     def test_get_proxy_all_unhealthy(self):
         """所有代理不健康时，应返回失败次数最少的。"""
@@ -109,7 +117,7 @@ class TestProxyManager:
 
     def test_report_success(self):
         manager = ProxyManager(verbose=False)
-        url = "socks5://127.0.0.1:11000"
+        url = "http://127.0.0.1:11111"
         manager.report_success(url)
         state = manager._find_proxy(url)
         assert state.total_successes == 1
@@ -117,7 +125,7 @@ class TestProxyManager:
 
     def test_report_failure_triggers_unhealthy(self):
         manager = ProxyManager(failure_threshold=2, verbose=False)
-        url = "socks5://127.0.0.1:11000"
+        url = "http://127.0.0.1:11111"
         manager.report_failure(url)
         state = manager._find_proxy(url)
         assert state.healthy is True  # 1 failure < threshold 2
@@ -127,37 +135,24 @@ class TestProxyManager:
 
     def test_report_success_recovers_proxy(self):
         manager = ProxyManager(verbose=False)
-        url = "socks5://127.0.0.1:11000"
+        url = "http://127.0.0.1:11111"
         state = manager._find_proxy(url)
         state.healthy = False
         manager.report_success(url)
         assert state.healthy is True
 
-    def test_backup_rotation(self):
-        """备用代理应轮换使用。"""
-        manager = ProxyManager(verbose=False)
-        for p in manager._proxies:
-            if p.is_primary:
-                p.healthy = False
-
-        urls = set()
-        for _ in range(4):
-            urls.add(manager.get_proxy())
-        # 应该轮换到至少 2 个不同的备用代理
-        assert len(urls) == 2
-
     def test_stats(self):
         manager = ProxyManager(verbose=False)
         stats = manager.stats()
-        assert stats["total_proxies"] == 3
-        assert stats["healthy_proxies"] == 3
-        assert stats["primary_healthy"] is True
-        assert len(stats["proxies"]) == 3
+        assert stats["total_proxies"] == 2
+        assert stats["healthy_proxies"] == 2
+        assert "primary_healthy" not in stats
+        assert len(stats["proxies"]) == 2
 
     def test_get_all_proxies(self):
         manager = ProxyManager(verbose=False)
         urls = manager.get_all_proxies()
-        assert len(urls) == 3
+        assert len(urls) == 2
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -223,7 +218,7 @@ class TestProxyManagerAsync:
 class TestProxyManagerIntegration:
     """ProxyManager 集成测试。
 
-    需要本地代理端口（11000, 11111, 11119）实际运行。
+    需要本地代理端口（11111, 11119）实际运行。
 
     运行: pytest tests/google_api/test_proxy_manager.py -xvs -m integration
     """
@@ -256,17 +251,14 @@ class TestProxyManagerIntegration:
 
     @pytest.mark.asyncio
     async def test_failover_simulation(self):
-        """模拟主代理故障，验证自动切换到备用。"""
+        """模拟一个代理故障，验证自动切换到另一个。"""
         manager = ProxyManager(verbose=True)
         await manager._check_all()
 
-        # 手动标记主代理为不健康
-        for p in manager._proxies:
-            if p.is_primary:
-                p.healthy = False
-                p.consecutive_failures = 5
+        # 手动标记第一个代理为不健康
+        manager._proxies[0].healthy = False
+        manager._proxies[0].consecutive_failures = 5
 
         url = manager.get_proxy()
-        print(f"\nAfter primary failure, using: {url}")
-        assert url != "socks5://127.0.0.1:11000"
-        assert url in ["http://127.0.0.1:11111", "http://127.0.0.1:11119"]
+        print(f"\nAfter first proxy failure, using: {url}")
+        assert url == "http://127.0.0.1:11119"

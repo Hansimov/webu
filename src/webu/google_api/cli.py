@@ -176,9 +176,6 @@ def cmd_status(args):
                 logger.mesg(
                     f"  Proxies: {data['healthy_proxies']}/{data['total_proxies']} healthy"
                 )
-                logger.mesg(
-                    f"  Primary: {'✓ healthy' if data['primary_healthy'] else '× unhealthy'}"
-                )
         except Exception:
             pass
     else:
@@ -236,15 +233,13 @@ def cmd_proxy_status(args):
             status = "✓" if p["healthy"] else "×"
             logger.mesg(
                 f"  {status} {p['name']:20s} "
-                f"role={p['role']:8s} "
                 f"latency={p['latency_ms']:5d}ms "
                 f"successes={p['total_successes']} "
                 f"failures={p['total_failures']}"
             )
         logger.mesg(
             f"\n  Total: {stats['total_proxies']} proxies, "
-            f"{stats['healthy_proxies']} healthy, "
-            f"primary: {'✓' if stats['primary_healthy'] else '×'}"
+            f"{stats['healthy_proxies']} healthy"
         )
 
     asyncio.run(_run())

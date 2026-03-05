@@ -16,7 +16,7 @@ class TestGoogleSearchIntegration:
     """端到端集成测试。
 
     需要：
-    - 本地代理端口（11000, 11111, 11119）可用
+    - 本地代理端口（11111, 11119）可用
     - 网络连接
     - Playwright 浏览器已安装
     """
@@ -35,7 +35,7 @@ class TestGoogleSearchIntegration:
         print(f"\nProxy stats: {stats}")
         assert "total_proxies" in stats
         assert "healthy_proxies" in stats
-        assert stats["total_proxies"] == 3
+        assert stats["total_proxies"] == 2
 
     @pytest.mark.asyncio
     async def test_proxy_health_check(self):
@@ -49,8 +49,8 @@ class TestGoogleSearchIntegration:
         assert stats["healthy_proxies"] > 0
 
     @pytest.mark.asyncio
-    async def test_search_with_warp_proxy(self, manager):
-        """测试通过 warp 代理进行 Google 搜索。"""
+    async def test_search_with_proxy(self, manager):
+        """测试通过 HTTP 代理进行 Google 搜索。"""
         scraper = GoogleScraper(
             proxy_manager=manager,
             headless=True,
@@ -60,10 +60,10 @@ class TestGoogleSearchIntegration:
         try:
             response = await scraper.search(
                 query="Python programming language",
-                proxy_url="socks5://127.0.0.1:11000",
+                proxy_url="http://127.0.0.1:11111",
                 retry_count=1,
             )
-            print(f"\nWarp search: {len(response.results)} results")
+            print(f"\nProxy search: {len(response.results)} results")
             if response.error:
                 print(f"Error: {response.error}")
             if response.has_captcha:

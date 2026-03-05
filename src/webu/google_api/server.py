@@ -59,7 +59,6 @@ class ProxyStatusItem(BaseModel):
 
     url: str = ""
     name: str = ""
-    role: str = ""
     healthy: bool = False
     latency_ms: int = 0
     consecutive_failures: int = 0
@@ -75,8 +74,6 @@ class ProxyStatusResponse(BaseModel):
     total_proxies: int = 0
     healthy_proxies: int = 0
     unhealthy_proxies: int = 0
-    primary_healthy: bool = False
-    using_primary: bool = False
     proxies: list[ProxyStatusItem] = []
 
 
@@ -205,8 +202,6 @@ def create_google_search_server(
             total_proxies=stats["total_proxies"],
             healthy_proxies=stats["healthy_proxies"],
             unhealthy_proxies=stats["unhealthy_proxies"],
-            primary_healthy=stats["primary_healthy"],
-            using_primary=stats["using_primary"],
             proxies=[ProxyStatusItem(**p) for p in stats["proxies"]],
         )
 

@@ -1,7 +1,7 @@
 """Google 搜索模块 — 基于 ProxyManager + undetected chromedriver。
 
-使用固定代理列表（warp + 备用）进行 Google 搜索，
-包含自动故障转移、健康检查和 CAPTCHA 绕过功能。
+使用固定 HTTP 代理列表（11111 + 11119）进行 Google 搜索，
+包含 round-robin 负载均衡、健康检查、自动故障转移和 CAPTCHA 绕过。
 """
 
 from .proxy_manager import ProxyManager, ProxyState, DEFAULT_PROXIES

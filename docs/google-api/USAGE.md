@@ -1,317 +1,227 @@
 # ggsc (GooGle-SearCh) — 使用指南
 
-> 如何使用 CLI 管理服务、调用 API 接口、以及管理代理池。
+> ggsc CLI 工具和 API 的完整使用说明。
 
 ---
 
-## 1. CLI 命令行工具
-
-CLI 工具通过 `ggsc` 命令使用（`pip install -e .` 安装后自动注册）。
-
-> `ggsc` 全称 **G**oo**G**le-**S**ear**C**h，是一个集代理池管理、Google 搜索 API 于一体的命令行工具。
+## 1. CLI 命令
 
 ### 1.1 服务管理
 
 ```bash
-# 启动服务（后台模式，默认端口 18000）
-ggsc start
-
-# 指定端口启动
-ggsc start --port 19000
-
-# 查看服务状态（PID、内存、CPU）
-ggsc status
-
-# 查看日志（最后 50 行）
-ggsc logs
-
-# 实时跟踪日志（Ctrl+C 退出）
-ggsc logs -f
-
-# 查看更多日志
-ggsc logs -n 200
+# 启动服务（后台运行）
+ggsc start [--port 7800] [--headless] [--proxies "url1,url2"]
 
 # 停止服务
 ggsc stop
 
 # 重启服务
 ggsc restart
+
+# 查看服务状态
+ggsc status
+
+# 查看服务日志
+ggsc logs [--follow] [--lines 50]
 ```
 
-### 1.2 代理池管理
+### 1.2 搜索
 
 ```bash
-# 从所有代理源采集 IP
-ggsc collect
+# 手动搜索（通过运行中的服务）
+ggsc search "Python programming" [--proxy http://127.0.0.1:11111] [--num 10]
 
-# 从指定代理源采集
-ggsc collect --source proxifly
-
-# 检测代理可用性 — 两级检测（默认 200 个）
-ggsc check
-
-# 仅运行 Level-1 快速检测（aiohttp，过滤死亡 IP）
-ggsc check --level 1
-
-# 仅运行 Level-2 搜索检测（Playwright，验证 Google 搜索）
-ggsc check --level 2
-
-# 运行完整两级检测（Level-1 过滤 → Level-2 验证）
-ggsc check --level all
-
-# 检测更多代理
-ggsc check --limit 500
-
-# 检测所有代理
-ggsc check --mode all --limit 0
-
-# 重新检测已过期的代理
-ggsc check --mode stale
-
-# 一键刷新（采集 + 检测）
-ggsc refresh
-
-# 查看代理池统计
-ggsc stats
-
-# 全面诊断（采集 + 全量检测 + 生成报告）
-ggsc diag
-
-# 扫描并标记废弃代理（连续失败 >= 5 次且距今 > 24h 的无效代理）
-ggsc abandon
-
-# 用有效代理测试 Google 搜索结果解析（Playwright 浏览器渲染）
-ggsc parse-test
-ggsc parse-test --query "python tutorial" --limit 10
+# 批量搜索测试
+ggsc search-test
 ```
 
-#### 两级检测说明
+### 1.3 代理管理
 
-| 级别 | 方式 | 目的 | 速度 | 流量 |
-|------|------|------|------|------|
-| Level-1 | aiohttp HTTP 请求 | 过滤死亡 IP | 极快（~100 并发） | 极小（204 响应） |
-| Level-2 | aiohttp HTTP 请求 | 验证 Google 搜索连通性 | 较慢（~10 并发） | 中等（~86KB JS SPA）|
+```bash
+# 查看代理状态
+ggsc proxy-status
 
-典型结果：免费 SOCKS5 代理 Level-1 通过率 ~15-50%，SOCKS4 ~38%，HTTP ~0%。Level-2 通过率较低（Google 反爬）。
-
-> **注意**：Level-2 通过 aiohttp 发送 HTTP 请求验证连通性，不做 HTML 解析。Google 对 HTTP 请求返回 JS SPA（~86KB, 98% JavaScript），无法直接解析搜索结果。实际搜索结果解析需使用 `ggsc parse-test`（Playwright 浏览器渲染）。
+# 立即执行代理健康检查
+ggsc proxy-check [--proxies "url1,url2"]
+```
 
 ---
 
-## 2. HTTP API 接口
+## 2. API 接口
 
-服务启动后，API 文档可在 `http://HOST:PORT/docs` 查看（Swagger UI）。
-
-### 2.1 搜索接口
-
-#### GET /search
+### 2.1 健康检查
 
 ```bash
-# 基本搜索
-curl "http://localhost:18000/search?q=python+programming&num=10"
-
-# 指定语言
-curl "http://localhost:18000/search?q=test&num=5&lang=zh"
+curl http://127.0.0.1:7800/health
 ```
 
-#### POST /search
+```json
+{"status": "ok", "browser_ready": true}
+```
+
+### 2.2 搜索
 
 ```bash
-curl -X POST "http://localhost:18000/search" \
+# GET 请求
+curl "http://127.0.0.1:7800/search?q=hello+world&num=10"
+
+# POST 请求
+curl -X POST http://127.0.0.1:7800/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "python programming", "num": 10, "lang": "en"}'
+  -d '{"query": "hello world", "num_results": 10}'
 ```
 
-**响应示例：**
+响应：
 
 ```json
 {
-  "success": true,
-  "query": "python programming",
+  "query": "hello world",
   "results": [
     {
-      "title": "Welcome to Python.org",
-      "url": "https://www.python.org/",
-      "displayed_url": "https://www.python.org",
-      "snippet": "The official home of the Python Programming Language...",
-      "position": 1
+      "position": 1,
+      "title": "结果标题",
+      "url": "https://example.com",
+      "displayed_url": "example.com",
+      "snippet": "摘要内容..."
     }
   ],
-  "result_count": 10,
-  "total_results_text": "About 1,200,000,000 results",
+  "total_results": 10,
   "has_captcha": false,
-  "error": ""
+  "error": null
 }
 ```
 
-### 2.2 代理池接口
+### 2.3 代理状态
 
 ```bash
-# 查看代理池统计
-curl "http://localhost:18000/proxy/stats"
-
-# 采集代理
-curl -X POST "http://localhost:18000/proxy/collect"
-
-# 检测代理（未检测的）
-curl -X POST "http://localhost:18000/proxy/check?limit=100&mode=unchecked"
-
-# 一键刷新
-curl -X POST "http://localhost:18000/proxy/refresh?check_limit=200"
-
-# 获取可用代理列表
-curl "http://localhost:18000/proxy/valid?limit=20"
-
-# 获取一个推荐代理
-curl "http://localhost:18000/proxy/get"
+curl http://127.0.0.1:7800/proxy/status
 ```
 
-### 2.3 健康检查
+```json
+{
+  "total_proxies": 2,
+  "healthy_proxies": 2,
+  "unhealthy_proxies": 0,
+  "proxies": [
+    {
+      "url": "http://127.0.0.1:11111",
+      "name": "proxy-11111",
+      "healthy": true,
+      "latency_ms": 350,
+      "consecutive_failures": 0,
+      "total_successes": 42,
+      "total_failures": 1,
+      "success_rate": "97.7%",
+      "last_check": "14:30:00"
+    },
+    {
+      "url": "http://127.0.0.1:11119",
+      "name": "proxy-11119",
+      "healthy": true,
+      "latency_ms": 280,
+      "consecutive_failures": 0,
+      "total_successes": 38,
+      "total_failures": 0,
+      "success_rate": "100.0%",
+      "last_check": "14:30:00"
+    }
+  ]
+}
+```
+
+### 2.4 当前代理
 
 ```bash
-curl "http://localhost:18000/health"
-# {"status": "ok", "version": "1.0.0"}
+curl http://127.0.0.1:7800/proxy/current
+```
+
+```json
+{"proxy_url": "http://127.0.0.1:11111"}
+```
+
+### 2.5 立即健康检查
+
+```bash
+curl -X POST http://127.0.0.1:7800/proxy/check
 ```
 
 ---
 
-## 3. Python SDK 用法
+## 3. Python SDK
 
-### 3.1 代理池操作
+### 3.1 基础用法
 
 ```python
-from webu.google_api import ProxyPool
+from webu.google_api import ProxyManager, GoogleScraper
 
-pool = ProxyPool()
+# 使用默认代理
+manager = ProxyManager()
+await manager.start()
 
-# 采集
-pool.collect()
+scraper = GoogleScraper(proxy_manager=manager, headless=True)
+await scraper.start()
 
-# 获取统计
-print(pool.stats())
+response = await scraper.search("Python programming")
+for result in response.results:
+    print(f"[{result.position}] {result.title}")
+    print(f"  {result.url}")
 
-# 获取一个可用代理
-proxy = pool.get_proxy()
-print(proxy)  # {"ip": "...", "port": ..., "proxy_url": "...", "latency_ms": ...}
+await scraper.stop()
+await manager.stop()
 ```
 
-### 3.2 搜索操作
+### 3.2 自定义代理
 
 ```python
-import asyncio
-from webu.google_api import ProxyPool, GoogleScraper
-
-async def search():
-    pool = ProxyPool()
-    scraper = GoogleScraper(proxy_pool=pool, headless=True)
-    await scraper.start()
-
-    result = await scraper.search(query="Python tutorial")
-    for r in result.results:
-        print(f"[{r.position}] {r.title}")
-        print(f"    {r.url}")
-
-    await scraper.stop()
-
-asyncio.run(search())
+custom_proxies = [
+    {"url": "http://my-proxy-1:8080", "name": "proxy-1"},
+    {"url": "http://my-proxy-2:8080", "name": "proxy-2"},
+]
+manager = ProxyManager(proxies=custom_proxies)
 ```
 
-### 3.3 批量搜索
+### 3.3 手动代理控制
 
 ```python
-import asyncio
-from webu.google_api import ProxyPool, GoogleScraper
+# 获取当前推荐代理
+proxy_url = manager.get_proxy()
 
-async def batch_search():
-    pool = ProxyPool()
-    scraper = GoogleScraper(proxy_pool=pool)
-    await scraper.start()
+# 搜索后报告结果
+manager.report_success(proxy_url)
+# 或
+manager.report_failure(proxy_url)
 
-    results = await scraper.search_batch(
-        queries=["Python", "JavaScript", "Rust"],
-        num=10,
-        delay_range=(2, 5),  # 随机延迟 2-5 秒
-    )
-
-    for resp in results:
-        print(f"Query: {resp.query}, Results: {len(resp.results)}")
-
-    await scraper.stop()
-
-asyncio.run(batch_search())
+# 获取统计信息
+stats = manager.stats()
+print(f"Healthy: {stats['healthy_proxies']}/{stats['total_proxies']}")
 ```
 
 ---
 
-## 4. 常见操作流程
+## 4. 配置参数
 
-### 4.1 首次部署
+### 4.1 ProxyManager 参数
 
-```bash
-# 1. 安装依赖
-pip install -e .
-playwright install chromium
-
-# 2. 采集代理
-ggsc collect
-
-# 3. 检测代理
-ggsc check --limit 200
-
-# 4. 查看统计
-ggsc stats
-
-# 5. 启动服务
-ggsc start
-```
-
-### 4.2 日常维护
-
-```bash
-# 一键刷新代理池
-ggsc refresh
-
-# 检查服务状态
-ggsc status
-
-# 查看日志
-ggsc logs -n 50
-```
-
-### 4.3 全面诊断
-
-```bash
-# 全面诊断：采集所有源 → Level-1 全量检测 → Level-2 检测 → 生成 REPORT.md
-ggsc diag
-```
-
----
-
-## 5. 配置说明
-
-主要配置在 `src/webu/google_api/constants.py`：
-
-| 常量 | 默认值 | 说明 |
+| 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `MONGO_CONFIGS` | `localhost:27017/webu` | MongoDB 连接 |
-| `FETCH_PROXY` | `http://127.0.0.1:11119` | 采集代理列表时使用的 HTTP 代理 |
-| `PROXY_CHECK_TIMEOUT` | 15 秒 | Level-2 代理检测超时 |
-| `SEARCH_TIMEOUT` | 30 秒 | 搜索超时 |
-| `CHECK_CONCURRENCY` | 20 | Level-2 并发检测数 |
-| Level-1 timeout | 10 秒 | Level-1 快速检测超时 |
-| Level-1 concurrency | 100 | Level-1 并发检测数 |
+| `proxies` | DEFAULT_PROXIES | 代理列表 |
+| `check_interval` | 30 | 健康检查间隔（秒）|
+| `recovery_interval` | 15 | 恢复检查间隔（秒）|
+| `failure_threshold` | 3 | 连续失败阈值 |
+| `verbose` | True | 是否输出日志 |
 
-### 5.1 依赖说明
+### 4.2 Server 参数
 
-| 包 | 用途 |
-|----|------|
-| `aiohttp` | Level-1 快速 HTTP 代理检测 |
-| `aiohttp-socks` | Level-1 SOCKS4/5 代理支持 |
-| `playwright` | Level-2 浏览器检测 + Google 搜索 |
-| `pymongo` | MongoDB 数据存储 |
-| `fastapi` + `uvicorn` | HTTP API 服务 |
-| `beautifulsoup4` | HTML 解析 |
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `port` | 7800 | 服务端口 |
+| `headless` | True | Chrome 是否无头模式 |
+| `proxies` | DEFAULT_PROXIES | 代理列表 |
 
----
+### 4.3 常量配置 (`constants.py`)
 
-*文档更新日期：2026-03-01*
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `DEFAULT_PORT` | 7800 | 默认服务端口 |
+| `PID_FILE` | `/tmp/ggsc.pid` | PID 文件路径 |
+| `LOG_FILE` | `/tmp/ggsc.log` | 日志文件路径 |
