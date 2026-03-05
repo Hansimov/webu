@@ -400,18 +400,14 @@ def _encode_image_file_to_base64(image_path: str) -> str:
 
 
 SOLVE_PROMPT_TEMPLATE = """\
-这是一道 reCAPTCHA 图片验证题，{grid_desc} 网格，每格右下角有编号（1-{total}）。
+这是一道 reCAPTCHA 图片验证难题，{grid_desc} 网格，每格右下角是编号 (1-{total})。
 {task_desc}
 
-规则：
-- 选出所有包含目标物体（哪怕只有一小部分）的格子
-- 物体常跨越多个格子，边缘/角落的小片也必须选
-- 宁可多选，不要漏选
-- 你需要每个格子都仔细检查，特别注意边缘和角落区域
+要求：选出所有符合要求的格子，必须依次对每个格子进行检查和思考。
 {feedback}
-严格按 JSON 数组输出：
+输出为 JSON 数组，例如：
 ```json
-[格子编号1, 格子编号2, ...]
+[1, 4, 7]
 ```
 完全没有匹配则输出：
 ```json
@@ -441,13 +437,17 @@ class CaptchaSolver:
     def __init__(
         self,
         endpoint: str | None = None,
-        max_tokens: int = 512,
+        max_tokens: int = 2048,
         temperature: float = 0.2,
         timeout: float = 60.0,
         verbose: bool = True,
     ):
         config = _load_captcha_config()
-        self.endpoint = (endpoint or config.get("endpoint", "")).rstrip("/")
+        # old format: {"endpoint": "..."}
+        # new format: {"vlm": {"endpoint": "..."}}
+        vlm_config = config.get("vlm", {})
+        config_endpoint = vlm_config.get("endpoint", config.get("endpoint", ""))
+        self.endpoint = (endpoint or config_endpoint).rstrip("/")
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
@@ -578,13 +578,16 @@ class CaptchaSolver:
             "stream": False,
         }
 
+        # Use endpoint directly if it already contains the API path,
+        # otherwise append /v1/chat/completions
+        url = self.endpoint
+        if not url.endswith("/chat/completions"):
+            url = f"{url}/v1/chat/completions"
+
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout)
         ) as client:
-            resp = await client.post(
-                f"{self.endpoint}/v1/chat/completions",
-                json=payload,
-            )
+            resp = await client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
 

@@ -13,10 +13,12 @@ LlmApiType = Literal["openai", "ollama", "doubao"]
 
 class LLMConfigsType(TypedDict):
     endpoint: str
-    api_key: str
-    model: str
+    api_key: str = ""
+    model: str = ""
     api_format: LlmApiType = "openai"
     stream: bool = None
+    max_tokens: int = None
+    timeout: float = None
     init_messages: list = []
     enable_thinking: bool = None
     delta_func: callable = None
@@ -41,10 +43,12 @@ class LLMClient:
     def __init__(
         self,
         endpoint: str,
-        api_key: str,
+        api_key: str = "",
         api_format: LlmApiType = "openai",
         model: str = None,
         stream: bool = None,
+        max_tokens: int = None,
+        timeout: float = None,
         init_messages: list = [],
         enable_thinking: bool = None,  # used by qwen3 and doubao
         delta_func: callable = None,
@@ -58,10 +62,12 @@ class LLMClient:
         verbose: bool = False,
     ):
         self.endpoint = endpoint
-        self.api_key = api_key
+        self.api_key = api_key or ""
         self.api_format = api_format
         self.model = model
         self.stream = stream
+        self.max_tokens = max_tokens
+        self.timeout = timeout
         self.init_messages = init_messages
         self.enable_thinking = enable_thinking
         self.delta_func = delta_func
@@ -100,6 +106,8 @@ class LLMClient:
         temperature: float = None,
         seed: int = None,
         stream: bool = None,
+        max_tokens: int = None,
+        timeout: float = None,
     ):
         headers = {
             "accept": "application/json",
@@ -116,6 +124,9 @@ class LLMClient:
             "messages": self.init_messages + messages,
             "stream": stream,
         }
+        max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         options = {}
         if temperature is not None:
             options["temperature"] = temperature
@@ -133,8 +144,14 @@ class LLMClient:
                 payload["thinking"] = {"type": thinking_type}
             else:
                 payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        timeout = timeout if timeout is not None else self.timeout
+        req_kwargs = {}
+        if timeout is not None:
+            # (connect_timeout, read_timeout) — generous read timeout for thinking models
+            req_kwargs["timeout"] = (min(timeout, 30), timeout)
         response = requests.post(
-            self.endpoint, headers=headers, json=payload, stream=stream
+            self.endpoint, headers=headers, json=payload, stream=stream,
+            **req_kwargs,
         )
         return response
 
@@ -149,6 +166,7 @@ class LLMClient:
     def parse_stream_response(self, response: requests.Response) -> tuple[str, dict]:
         response_content = ""
         usage = None
+        role = "assistant"
         for line in response.iter_lines():
             if self.terminate_event and self.terminate_event.is_set():
                 break
@@ -169,14 +187,25 @@ class LLMClient:
                         logger.err(e)
                         raise e
 
+                # Handle API error responses in stream
+                if "error" in line_data:
+                    err_msg = line_data["error"]
+                    if isinstance(err_msg, dict):
+                        err_msg = err_msg.get("message", str(err_msg))
+                    logger.warn(f"× API Error: {err_msg}")
+                    break
+
                 if self.api_format == "ollama":
                     # https://github.com/ollama/ollama/blob/main/docs/api.md#response-9
                     delta_data = line_data["message"]
                     finish_reason = "stop" if line_data["done"] else None
                 else:
                     # https://platform.openai.com/docs/api-reference/chat/streaming
-                    delta_data = line_data["choices"][0]["delta"]
-                    finish_reason = line_data["choices"][0].get("finish_reason", None)
+                    choices = line_data.get("choices", [])
+                    if not choices:
+                        continue
+                    delta_data = choices[0].get("delta", {})
+                    finish_reason = choices[0].get("finish_reason", None)
                 if "role" in delta_data:
                     role = delta_data["role"]
                 delta_reasoning_content = delta_data.get("reasoning_content", None)
@@ -204,14 +233,20 @@ class LLMClient:
                         raise e
                     logger.mesg(delta_content, end="", verbose=self.verbose_content)
                     self.exec_delta_func(role, delta_content)
-                if finish_reason == "stop":
+                if finish_reason is not None:
                     if line_data.get("usage", {}):
                         usage = line_data["usage"]
                         logger.file(
                             "\n" + dict_to_str(usage), verbose=self.verbose_usage
                         )
-                    logger.success("\n[Finished]", end="", verbose=self.verbose_finish)
+                    finish_tag = f"\n[Finished: {finish_reason}]"
+                    logger.success(finish_tag, end="", verbose=self.verbose_finish)
                     self.exec_delta_func("stop", "")
+
+        # Ensure thinking tag is closed
+        if self.is_thinking:
+            response_content += "</think>"
+            self.reset_think_status()
 
         return response_content, usage
 
@@ -245,6 +280,32 @@ class LLMClient:
             logger.warn(f"× Error: {response.text}")
         return response_content, usage
 
+    @staticmethod
+    def extract_user_prompt(messages: list) -> str:
+        """Extract displayable user prompt from the last message.
+
+        Handles both text-only messages (str content) and
+        VLM multimodal messages (list of content parts).
+        """
+        content = messages[-1]["content"]
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            image_count = 0
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        text_parts.append(part["text"])
+                    elif part.get("type") == "image_url":
+                        image_count += 1
+            summary = ""
+            if image_count:
+                summary += f"[{image_count} image(s)] "
+            summary += " ".join(text_parts)
+            return summary
+        return str(content)
+
     def chat(
         self,
         messages: list,
@@ -253,6 +314,7 @@ class LLMClient:
         temperature: float = None,
         seed: int = None,
         stream: bool = None,
+        max_tokens: int = None,
         verbose: bool = None,
     ) -> str:
         timer = Runtimer(verbose=False)
@@ -266,7 +328,7 @@ class LLMClient:
 
         if self.verbose_user:
             try:
-                user_prompt = messages[-1]["content"]
+                user_prompt = self.extract_user_prompt(messages)
                 logger.note(f"USER: {user_prompt}")
             except Exception as e:
                 logger.warn(messages)
@@ -280,7 +342,19 @@ class LLMClient:
             temperature=temperature,
             seed=seed,
             stream=stream,
+            max_tokens=max_tokens,
         )
+
+        # Check HTTP status before parsing
+        if response.status_code != 200:
+            try:
+                err_body = response.json()
+                err_msg = err_body.get("error", {}).get("message", response.text[:500])
+            except Exception:
+                err_msg = response.text[:500]
+            logger.warn(f"× HTTP {response.status_code}: {err_msg}")
+            logger.exit_quiet(not verbose)
+            return ""
 
         if self.verbose_assistant:
             logger.mesg("ASSISTANT: ", end="")
