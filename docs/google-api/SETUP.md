@@ -21,21 +21,7 @@ cd /home/asimov/repos/webu
 pip install -e .
 ```
 
-### 1.3 Chrome 浏览器
-
-undetected-chromedriver 需要 Chrome/Chromium：
-
-```bash
-# Ubuntu/Debian
-sudo apt install google-chrome-stable
-# 或
-sudo apt install chromium-browser
-
-# 验证
-google-chrome --version
-```
-
-### 1.4 Playwright 浏览器
+### 1.3 Playwright 浏览器
 
 ```bash
 playwright install chromium

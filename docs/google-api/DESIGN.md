@@ -1,6 +1,6 @@
 # ggsc (GooGle-SearCh) — 系统设计文档
 
-> 基于 undetected-chromedriver + Playwright CDP 的自建 Google 搜索服务。
+> 基于 Playwright + 反检测策略的自建 Google 搜索服务。
 >
 > 使用固定 HTTP 代理列表 + round-robin 负载均衡 + 自动故障转移。
 >
@@ -32,7 +32,7 @@
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | **ProxyManager** | `proxy_manager.py` | 固定代理列表管理，健康检查，round-robin 负载均衡，故障转移 |
-| **GoogleScraper** | `scraper.py` | 通过 undetected-chromedriver + Playwright CDP 驱动浏览器执行搜索 |
+| **GoogleScraper** | `scraper.py` | 通过 Playwright + 反检测策略驱动浏览器执行搜索 |
 | **GoogleResultParser** | `parser.py` | 解析 Google 搜索结果 HTML，提取标题/URL/摘要 |
 | **FastAPI Server** | `server.py` | HTTP API 服务，提供搜索和代理状态接口 |
 | **CLI** | `cli.py` | 命令行工具 `ggsc`，管理服务生命周期和手动搜索 |
@@ -40,18 +40,19 @@
 ### 浏览器 + 代理架构（关键设计）
 
 ```
-UC Chrome (无代理启动)          ← 仅提供反指纹检测
-    └─ Playwright CDP 连接
+Playwright Chromium (反检测参数)
          ├─ Context A (proxy: http://127.0.0.1:11119)  ← 搜索 1
          ├─ Context B (proxy: http://127.0.0.1:11111)  ← 搜索 2（换代理）
          └─ Context C (proxy: http://127.0.0.1:11119)  ← 搜索 3
 ```
 
 **设计要点：**
-- UC Chrome 启动时**不设置** `--proxy-server`（避免 DoH/背景网络干扰）
+- Playwright 启动 Chromium 时附加反检测参数（`--disable-blink-features=AutomationControlled` 等）
+- 每个页面注入反检测脚本（隐藏 `navigator.webdriver`、伪造 `plugins`/`languages` 等）
 - 代理在**每次搜索的 BrowserContext 级别**设置
 - 代理切换无需重启浏览器（~0ms vs ~2s）
 - Cookie 通过文件持久化（`google_cookies.json`），CAPTCHA 绕过状态跨 context 共享
+- 无需 chromedriver / undetected-chromedriver 等外部依赖
 
 ---
 
@@ -196,7 +197,7 @@ src/webu/google_api/
 ├── constants.py         # 配置常量 (47 行)
 ├── parser.py            # Google 结果解析器 (321 行)
 ├── proxy_manager.py     # 代理管理器 (415 行)
-├── scraper.py           # 浏览器搜索引擎 (585 行)
+├── scraper.py           # 浏览器搜索引擎 (613 行)
 └── server.py            # FastAPI 服务 (252 行)
 
 tests/google_api/
@@ -207,5 +208,5 @@ tests/google_api/
 ├── test_scraper.py      # 搜索引擎测试
 ├── test_search.py       # 搜索集成测试
 ├── test_server.py       # API 服务测试
-└── test_uc_cdp.py       # UC + CDP 连接测试
+└── test_browser.py      # 浏览器集成测试
 ```

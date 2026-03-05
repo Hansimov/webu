@@ -346,7 +346,7 @@ def cmd_search(args):
 
 
 def cmd_search_test(args):
-    """用多个代理测试 UC+CDP Google 搜索。"""
+    """用多个代理测试 Google 搜索。"""
     from .scraper import GoogleScraper
     from .proxy_manager import ProxyManager, DEFAULT_PROXIES
 

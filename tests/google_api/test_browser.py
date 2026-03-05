@@ -1,52 +1,23 @@
-"""测试 undetected-chromedriver + Playwright CDP 搜索抓取。
+"""测试 Playwright 浏览器搜索抓取。
 
 用 self-built 代理 (127.0.0.1:11111 和 11119) 验证:
-1. UC Chrome 启动和 CDP 连接
+1. Playwright 浏览器启动和停止
 2. 通过代理进行 Google 搜索
 3. 反检测效果
 
-运行: pytest tests/google_api/test_uc_cdp.py -xvs -m integration
+运行: pytest tests/google_api/test_browser.py -xvs -m integration
 """
 
 import asyncio
 import pytest
 
-from webu.google_api.scraper import GoogleScraper, _find_free_port, _launch_uc_chrome
+from webu.google_api.scraper import GoogleScraper
 
 
 SELF_BUILT_PROXIES = [
     "http://127.0.0.1:11111",
     "http://127.0.0.1:11119",
 ]
-
-
-# ═══════════════════════════════════════════════════════════════
-# UC Chrome 启动测试
-# ═══════════════════════════════════════════════════════════════
-
-
-class TestUCChromeLaunch:
-    """测试 UC Chrome 启动和 CDP 端口。"""
-
-    def test_find_free_port(self):
-        """端口分配正常。"""
-        port = _find_free_port()
-        assert isinstance(port, int)
-        assert 1024 < port < 65536
-
-    @pytest.mark.integration
-    def test_launch_uc_chrome(self):
-        """UC Chrome 能正常启动并返回驱动。"""
-        driver, port = _launch_uc_chrome(headless=True)
-        try:
-            assert driver is not None
-            assert isinstance(port, int)
-            assert port > 0
-        finally:
-            try:
-                driver.quit()
-            except Exception:
-                pass
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -152,7 +123,7 @@ class TestLocalProxySearch:
 
 
 class TestAntiDetection:
-    """验证 UC+CDP 的反检测效果。"""
+    """验证 Playwright 反检测效果。"""
 
     @pytest.mark.integration
     async def test_webdriver_not_detected(self):

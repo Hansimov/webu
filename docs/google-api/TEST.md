@@ -15,7 +15,7 @@
 | `test_cli.py` | TestPIDManagement, TestCLICommands, TestCLIEntry | CLI 单元测试 |
 | `test_cli_e2e.py` | TestCLIBasicCommands, TestGGSCEntryPoint | CLI E2E 测试 |
 | `test_search.py` | TestGoogleSearchIntegration | 端到端搜索集成测试 |
-| `test_uc_cdp.py` | TestUCCDP | UC + CDP 连接测试 |
+| `test_browser.py` | TestGoogleScraperStartStop, TestLocalProxySearch, TestAntiDetection | 浏览器集成测试 |
 
 ---
 

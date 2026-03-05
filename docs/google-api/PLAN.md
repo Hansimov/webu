@@ -52,7 +52,7 @@
 
 | 组件 | 选型 | 理由 |
 |------|------|------|
-| 浏览器自动化 | undetected-chromedriver + Playwright CDP | 绕过 bot 检测 |
+| 浏览器自动化 | Playwright + 反检测策略 | 轻量、无 chromedriver 依赖 |
 | HTTP 代理 | 本地 HTTP 代理 (11111, 11119) | 稳定、可控 |
 | API 框架 | FastAPI | 异步、自动文档、类型安全 |
 | HTML 解析 | BeautifulSoup4 | 灵活、容错 |
@@ -70,7 +70,7 @@
 │  ┌─── ggsc 服务 ────────┐   │
 │  │ FastAPI :7800         │   │
 │  │ ProxyManager          │   │
-│  │ undetected-chromedriver│   │
+│  │ Playwright Chromium   │   │
 │  └───────────────────────┘   │
 │         │          │         │
 │    ┌────▼───┐ ┌────▼───┐    │

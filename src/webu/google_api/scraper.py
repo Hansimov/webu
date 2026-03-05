@@ -1,17 +1,14 @@
-"""Google 搜索抓取器 — 使用 undetected-chromedriver + Playwright CDP 绕过自动化检测。
+"""Google 搜索抓取器 — 使用 Playwright + 反检测策略绕过自动化检测。
 
 架构：
-1. 使用 undetected-chromedriver (UC) 启动 Chrome — 去除自动化浏览器指纹
-2. 通过 Playwright 连接到 UC 启动的 Chrome 实例（CDP 协议）— 享受 Playwright 的高级 API
-3. 复用浏览器默认上下文，保留已通过的人机验证状态
-
-这种方案结合了 UC 的反检测能力和 Playwright 的易用性，
-有效规避 Google 对自动化浏览器的严格识别。
+1. 使用 Playwright 启动 Chromium，附加反检测参数（禁用 automation 指纹等）
+2. 每次搜索创建独立 BrowserContext，在 context 级别设置代理
+3. 注入反检测脚本（隐藏 webdriver、伪造 plugins/languages 等）
+4. Cookie 文件持久化，跨搜索共享 CAPTCHA 绕过状态
 
 性能优化：
-- 持久化 Chrome Profile（user_data_dir）：已通过的验证 Cookie 在下次启动时自动恢复
-- 缓存 Chrome 版本和 chromedriver 路径：避免每次启动重新检测
-- 复用默认 BrowserContext：搜索之间共享 Cookie 状态
+- Cookie 持久化：已通过的 CAPTCHA 验证自动恢复
+- Context 级别代理：切换代理无需重启浏览器
 - 内置性能计时：定位各阶段耗时瓶颈
 """
 
@@ -19,10 +16,6 @@ import asyncio
 import json
 import random
 import time
-import subprocess
-import socket
-import os
-import signal
 
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -46,9 +39,8 @@ from webu.captcha import CaptchaBypass
 SCREENSHOT_DIR = Path("data/google_api_screenshots")
 TZ_SHANGHAI = timezone(timedelta(hours=8))
 
-# Chrome 持久化配置
+# Cookie 持久化目录
 DEFAULT_PROFILE_DIR = Path("data/google_api/chrome_profile")
-CHROME_CACHE_FILE = Path("data/google_api/.chrome_cache.json")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -114,46 +106,6 @@ class PerfTimer:
         return "\n".join(lines)
 
 
-# ═══════════════════════════════════════════════════════════════
-# Chrome 版本 / chromedriver 路径缓存
-# ═══════════════════════════════════════════════════════════════
-
-
-def _load_chrome_cache() -> dict | None:
-    """读取缓存的 Chrome 版本和 chromedriver 路径。
-
-    缓存过期条件：
-    - 缓存文件不存在
-    - chromedriver 路径已失效（二进制被删除/移动）
-    - 缓存超过 7 天
-    """
-    try:
-        if not CHROME_CACHE_FILE.exists():
-            return None
-        data = json.loads(CHROME_CACHE_FILE.read_text())
-        # 验证 chromedriver 仍存在
-        cd_path = data.get("chromedriver_path")
-        if cd_path and not os.path.isfile(cd_path):
-            return None
-        # 7 天过期
-        ts = data.get("cached_at", 0)
-        if time.time() - ts > 7 * 86400:
-            return None
-        return data
-    except Exception:
-        return None
-
-
-def _save_chrome_cache(data: dict):
-    """保存 Chrome 版本和 chromedriver 路径到缓存。"""
-    try:
-        CHROME_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data["cached_at"] = time.time()
-        CHROME_CACHE_FILE.write_text(json.dumps(data, indent=2))
-    except Exception:
-        pass
-
-
 def _save_screenshot_and_html(
     page_content: str,
     screenshot_bytes: bytes | None,
@@ -180,153 +132,19 @@ def _save_screenshot_and_html(
     logger.mesg(f"  📄 HTML saved: {html_path}")
 
 
-def _find_free_port() -> int:
-    """找到一个可用的端口。"""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
-
-
-def _launch_uc_chrome(
-    headless: bool = True,
-    debug_port: int = None,
-    proxy_url: str = None,
-    user_data_dir: str | Path = None,
-) -> tuple[subprocess.Popen, int]:
-    """使用 undetected-chromedriver 启动 Chrome 浏览器。
-
-    UC 会自动 patch chromedriver 并启动 Chrome，
-    去除 navigator.webdriver、window.chrome 等自动化指纹。
-
-    Args:
-        headless: 是否使用 headless 模式
-        debug_port: 远程调试端口（None 则自动分配）
-        proxy_url: 浏览器级别代理 URL
-        user_data_dir: Chrome profile 目录（持久化 Cookie/会话）
-
-    Returns:
-        (driver, debug_port) — UC driver 和远程调试端口
-    """
-    import undetected_chromedriver as uc
-    import shutil
-
-    if debug_port is None:
-        debug_port = _find_free_port()
-
-    # 优先使用缓存的 Chrome 版本和 chromedriver 路径
-    cache = _load_chrome_cache()
-    chrome_version_main = None
-    system_chromedriver = None
-
-    if cache:
-        chrome_version_main = cache.get("version_main")
-        system_chromedriver = cache.get("chromedriver_path")
-        logger.mesg(
-            f"  ↻ Using cached Chrome v{chrome_version_main}, "
-            f"driver: {system_chromedriver or 'auto'}"
-        )
-    else:
-        # 首次运行：检测系统 Chrome 版本（约 0.5~1s）
-        logger.mesg("  ⏳ Detecting Chrome version (first run, will be cached) ...")
-        try:
-            result = subprocess.run(
-                ["google-chrome", "--version"],
-                capture_output=True, text=True, timeout=5,
-            )
-            ver_str = result.stdout.strip().split()[-1]  # e.g. "138.0.7204.168"
-            chrome_version_main = int(ver_str.split(".")[0])
-        except Exception:
-            pass
-
-        # 检测系统 chromedriver — 优先使用用户可写的副本
-        user_chromedriver = os.path.expanduser("~/.local/bin/chromedriver")
-        if os.path.isfile(user_chromedriver) and os.access(user_chromedriver, os.X_OK):
-            system_chromedriver = user_chromedriver
-        else:
-            found = shutil.which("chromedriver")
-            if found and os.access(found, os.W_OK):
-                system_chromedriver = found
-
-        # 保存缓存
-        _save_chrome_cache({
-            "version_main": chrome_version_main,
-            "chromedriver_path": system_chromedriver,
-        })
-
-    options = uc.ChromeOptions()
-    options.add_argument(f"--remote-debugging-port={debug_port}")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-extensions")
-    # 禁用可能干扰代理的功能
-    options.add_argument("--disable-features=DnsOverHttps")
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-component-update")
-
-    if headless:
-        options.add_argument("--headless=new")
-
-    if proxy_url:
-        # 浏览器级别代理（仅在需要所有流量走代理时使用）
-        options.add_argument(f"--proxy-server={proxy_url}")
-
-    uc_kwargs = {
-        "options": options,
-        "use_subprocess": True,
-    }
-
-    # 持久化 Chrome profile — 保留 Cookie / 会话 / reCAPTCHA 验证状态
-    if user_data_dir:
-        uc_kwargs["user_data_dir"] = str(user_data_dir)
-
-    # 固定 Chrome 主版本号 — 防止 UC 下载不匹配的 chromedriver
-    if chrome_version_main:
-        uc_kwargs["version_main"] = chrome_version_main
-
-    # 使用系统 chromedriver（如果与 Chrome 版本匹配）
-    if system_chromedriver:
-        uc_kwargs["driver_executable_path"] = system_chromedriver
-
-    # UC 的 Chrome() 会启动 Chrome 并返回 driver
-    # 我们只需要 Chrome 进程，后续通过 Playwright CDP 控制
-    driver = uc.Chrome(**uc_kwargs)
-
-    # 从 driver capabilities 获取实际的调试端口
-    # UC/chromedriver 会自动分配端口，不一定使用我们指定的
-    actual_port = debug_port
-    try:
-        debug_address = driver.capabilities.get(
-            "goog:chromeOptions", {}
-        ).get("debuggerAddress", "")
-        if debug_address and ":" in debug_address:
-            actual_port = int(debug_address.split(":")[-1])
-    except (ValueError, KeyError):
-        pass
-
-    return driver, actual_port
-
-
 class GoogleScraper:
-    """undetected-chromedriver + Playwright CDP 驱动的 Google 搜索抓取器。
+    """Playwright 驱动的 Google 搜索抓取器。
 
     架构：
-    - 使用 UC 启动 Chrome（去除自动化指纹），**不设置浏览器级别代理**
-    - 通过 Playwright CDP 连接到 UC 的 Chrome 实例
+    - 使用 Playwright 启动 Chromium，附加反检测参数
     - 每次搜索创建新 BrowserContext 并设置 **context 级别代理**
+    - 注入反检测脚本（隐藏 webdriver / 伪造 plugins 等）
     - 通过 ProxyManager 管理代理切换 / 负载均衡 / 故障转移
 
-    这种设计的优势：
-    - UC 提供反指纹检测（所有 context 都受益）
+    设计优势：
     - 代理在 context 级别设置，**无需重启浏览器即可切换代理**
     - Cookie 通过文件持久化，CAPTCHA 绕过状态在 context 间共享
-
-    性能优化：
-    - 缓存 Chrome 版本 / chromedriver 路径 → 跳过首次检测
-    - Cookie 持久化 → 已通过的 CAPTCHA 验证自动恢复
-    - 内置 PerfTimer → 精确定位各阶段耗时
+    - 无外部依赖（不需要 chromedriver / undetected-chromedriver）
     """
 
     def __init__(
@@ -353,29 +171,23 @@ class GoogleScraper:
 
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
-        self._default_context = None
-        self._uc_driver = None
-        self._debug_port: int = 0
         self._search_count = 0
         self._max_searches_before_restart = 200
-        # 是否使用 UC 模式（影响 context 创建方式）
-        self._is_uc_mode = False
 
         # 性能计时器 — start() 时重建
         self.perf = PerfTimer()
 
     async def start(self):
-        """启动浏览器（UC Chrome + Playwright CDP）。
+        """启动 Playwright 浏览器。
 
-        UC Chrome 不设置浏览器级代理 — 代理在每次搜索的 context 级别设置。
+        浏览器不设置代理 — 代理在每次搜索的 context 级别设置。
         这样可以在不重启浏览器的情况下切换代理。
         """
         if self._browser:
             return
 
         self.perf = PerfTimer()
-        logger.note("> Starting undetected Chrome + Playwright CDP ...")
-        logger.mesg(f"  Profile dir: {self._profile_dir}")
+        logger.note("> Starting Playwright browser ...")
         if self._fixed_proxy:
             logger.mesg(f"  Fixed proxy: {logstr.file(self._fixed_proxy)}")
         elif self.proxy_manager:
@@ -383,57 +195,8 @@ class GoogleScraper:
         else:
             logger.mesg(f"  Proxy: none (direct)")
 
-        # Step 1: 用 UC 启动 Chrome（不设置代理）
-        self.perf.start("uc_chrome_launch")
-        self._debug_port = _find_free_port()
-        try:
-            self._uc_driver, self._debug_port = _launch_uc_chrome(
-                headless=self.headless,
-                debug_port=self._debug_port,
-                proxy_url=None,  # 不设置浏览器级别代理
-                user_data_dir=self._profile_dir,
-            )
-            self._is_uc_mode = True
-        except Exception as e:
-            self.perf.stop()
-            logger.warn(f"  × UC Chrome failed: {e}, falling back to Playwright")
-            await self._start_playwright_fallback()
-            return
-        self.perf.stop()
-
-        # Step 2: 等待 Chrome 的 CDP 端口就绪
-        self.perf.start("cdp_port_wait")
-        await self._wait_for_cdp_port(self._debug_port)
-        self.perf.stop()
-
-        # Step 3: 用 Playwright 连接到 Chrome CDP
-        self.perf.start("playwright_connect")
+        self.perf.start("browser_launch")
         self._playwright = await async_playwright().start()
-        cdp_url = f"http://127.0.0.1:{self._debug_port}"
-        try:
-            self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
-            self._search_count = 0
-
-            # 获取默认上下文（仅用于 cookie 管理，不用于搜索）
-            if self._browser.contexts:
-                self._default_context = self._browser.contexts[0]
-            logger.okay(
-                f"  ✓ Connected via CDP (port {self._debug_port})"
-            )
-        except Exception as e:
-            logger.warn(f"  × CDP connection failed: {e}, falling back to Playwright")
-            self._cleanup_uc()
-            await self._start_playwright_fallback()
-        self.perf.stop()
-
-        if self.verbose:
-            logger.mesg(f"\n> Startup timing:\n{self.perf.summary()}\n")
-
-    async def _start_playwright_fallback(self):
-        """Playwright 回退方案（如果 UC 不可用）。"""
-        logger.note("> Starting Playwright browser (fallback) ...")
-        if not self._playwright:
-            self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
             args=[
@@ -445,35 +208,14 @@ class GoogleScraper:
             ],
         )
         self._search_count = 0
-        self._default_context = None
-        self._is_uc_mode = False
-        logger.okay("  ✓ Playwright browser started (fallback mode)")
+        self.perf.stop()
+        logger.okay("  ✓ Playwright browser started")
 
-    async def _wait_for_cdp_port(self, port: int, timeout: float = 15.0):
-        """等待 CDP 端口可连接。"""
-        start = time.time()
-        while time.time() - start < timeout:
-            try:
-                reader, writer = await asyncio.open_connection("127.0.0.1", port)
-                writer.close()
-                await writer.wait_closed()
-                return
-            except (ConnectionRefusedError, OSError):
-                await asyncio.sleep(0.3)
-        raise TimeoutError(f"CDP port {port} not ready after {timeout}s")
-
-    def _cleanup_uc(self):
-        """清理 UC Chrome 进程。"""
-        if self._uc_driver:
-            try:
-                self._uc_driver.quit()
-            except Exception:
-                pass
-            self._uc_driver = None
+        if self.verbose:
+            logger.mesg(f"\n> Startup timing:\n{self.perf.summary()}\n")
 
     async def stop(self):
-        """关闭浏览器（确保 Cookie 刷入 Profile 目录）。"""
-        self._default_context = None
+        """关闭浏览器。"""
         if self._browser:
             try:
                 await self._browser.close()
@@ -486,8 +228,7 @@ class GoogleScraper:
             except Exception:
                 pass
             self._playwright = None
-        self._cleanup_uc()
-        logger.note("> Browser stopped (profile saved)")
+        logger.note("> Browser stopped")
 
     async def _ensure_browser(self):
         """确保浏览器可用，必要时重启。"""
@@ -604,7 +345,7 @@ class GoogleScraper:
 
         架构策略：
         - 每次搜索创建新 BrowserContext，设置 context 级别代理
-        - UC 的反指纹检测在浏览器进程级别生效，所有 context 受益
+        - 反检测脚本在每个 page 中注入（隐藏 webdriver 等）
         - Cookie 通过文件持久化，搜索前自动恢复
         """
         search_perf = PerfTimer()
