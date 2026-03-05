@@ -6,7 +6,7 @@
 import asyncio
 import pytest
 
-from webu.google_api.pool import GoogleSearchPool as ProxyPool
+from webu.google_api.proxy_manager import ProxyManager, DEFAULT_PROXIES
 from webu.google_api.scraper import GoogleScraper
 from webu.google_api.parser import GoogleResultParser
 
@@ -16,92 +16,124 @@ class TestGoogleSearchIntegration:
     """端到端集成测试。
 
     需要：
-    - MongoDB 在 localhost:27017 运行
+    - 本地代理端口（11000, 11111, 11119）可用
     - 网络连接
     - Playwright 浏览器已安装
     """
 
-    TEST_CONFIGS = {
-        "host": "localhost",
-        "port": 27017,
-        "dbname": "webu_test",
-    }
-
     @pytest.fixture
-    def pool(self):
-        return ProxyPool(configs=self.TEST_CONFIGS, verbose=True)
+    async def manager(self):
+        m = ProxyManager(verbose=True)
+        await m.start()
+        yield m
+        await m.stop()
 
-    def test_collect_proxies(self, pool):
-        """测试采集代理 IP。"""
-        result = pool.collect()
-        print(f"\nCollect result: {result}")
-        assert result["total_fetched"] > 0
-        assert result["total"] > 0
-
-    def test_pool_stats(self, pool):
-        """测试代理池统计。"""
-        stats = pool.stats()
-        print(f"\nPool stats: {stats}")
-        assert "total_ips" in stats
-        assert "total_valid" in stats
+    def test_proxy_manager_stats(self):
+        """测试代理管理器统计。"""
+        manager = ProxyManager(verbose=False)
+        stats = manager.stats()
+        print(f"\nProxy stats: {stats}")
+        assert "total_proxies" in stats
+        assert "healthy_proxies" in stats
+        assert stats["total_proxies"] == 3
 
     @pytest.mark.asyncio
-    async def test_check_proxies(self, pool):
-        """测试检测代理可用性（仅检测少量）。"""
-        # 先采集
-        pool.collect()
-
-        # 检测少量（避免测试太慢）
-        results = await pool.check_unchecked(limit=5)
-        print(f"\nCheck results: {len(results)} checked")
-        for r in results:
-            status = "✓" if r.get("is_valid") else "×"
-            print(f"  {status} {r['proxy_url']} ({r.get('latency_ms', 0)}ms)")
+    async def test_proxy_health_check(self):
+        """测试代理健康检查。"""
+        manager = ProxyManager(verbose=True)
+        await manager._check_all()
+        stats = manager.stats()
+        print(f"\nHealth check results:")
+        for p in stats["proxies"]:
+            print(f"  {p['name']}: healthy={p['healthy']}, latency={p['latency_ms']}ms")
+        assert stats["healthy_proxies"] > 0
 
     @pytest.mark.asyncio
-    async def test_full_search_flow(self, pool):
-        """测试完整搜索流程：采集 → 检测 → 搜索。"""
-        # 1. 采集
-        collect_result = pool.collect()
-        print(f"\n1. Collected: {collect_result['total_fetched']} proxies")
-
-        # 2. 检测少量
-        check_results = await pool.check_unchecked(limit=10)
-        valid_count = sum(1 for r in check_results if r.get("is_valid"))
-        print(f"2. Checked: {len(check_results)}, valid: {valid_count}")
-
-        if valid_count == 0:
-            pytest.skip("No valid proxies found, skipping search test")
-
-        # 3. 搜索
-        scraper = GoogleScraper(proxy_pool=pool, headless=True)
+    async def test_search_with_warp_proxy(self, manager):
+        """测试通过 warp 代理进行 Google 搜索。"""
+        scraper = GoogleScraper(
+            proxy_manager=manager,
+            headless=True,
+            verbose=True,
+        )
         await scraper.start()
         try:
-            response = await scraper.search(query="Python programming language")
-            print(f"3. Search results: {len(response.results)}")
+            response = await scraper.search(
+                query="Python programming language",
+                proxy_url="socks5://127.0.0.1:11000",
+                retry_count=1,
+            )
+            print(f"\nWarp search: {len(response.results)} results")
+            if response.error:
+                print(f"Error: {response.error}")
+            if response.has_captcha:
+                print("CAPTCHA detected")
             for r in response.results[:5]:
-                print(f"   [{r.position}] {r.title}")
-                print(f"       {r.url}")
-            assert len(response.results) > 0
+                print(f"  [{r.position}] {r.title}")
+                print(f"      {r.url}")
+        finally:
+            await scraper.stop()
+
+    @pytest.mark.asyncio
+    async def test_search_with_auto_proxy(self, manager):
+        """测试自动代理选择（ProxyManager）。"""
+        scraper = GoogleScraper(
+            proxy_manager=manager,
+            headless=True,
+            verbose=True,
+        )
+        await scraper.start()
+        try:
+            response = await scraper.search(
+                query="test query",
+                retry_count=2,
+            )
+            print(f"\nAuto proxy search: {len(response.results)} results")
+            if response.error:
+                print(f"Error: {response.error}")
+            if response.has_captcha:
+                print("CAPTCHA detected")
         finally:
             await scraper.stop()
 
     @pytest.mark.asyncio
     async def test_search_direct(self):
         """测试直连搜索（不通过代理）。"""
-        pool = ProxyPool(configs=self.TEST_CONFIGS, verbose=True)
-        scraper = GoogleScraper(proxy_pool=pool, headless=True)
+        scraper = GoogleScraper(headless=True, verbose=True)
         await scraper.start()
         try:
-            # 直接搜索不使用代理
             response = await scraper.search(
                 query="test query one two three",
-                proxy_url="direct",  # 不使用代理
+                proxy_url="direct",
             )
             print(f"\nDirect search: {len(response.results)} results")
             if response.error:
                 print(f"Error: {response.error}")
             if response.has_captcha:
                 print("CAPTCHA detected (expected for direct IP)")
+        finally:
+            await scraper.stop()
+
+    @pytest.mark.asyncio
+    async def test_search_all_proxies(self, manager):
+        """测试使用每个代理逐一搜索。"""
+        scraper = GoogleScraper(headless=True, verbose=True)
+        await scraper.start()
+        try:
+            for proxy_cfg in DEFAULT_PROXIES:
+                url = proxy_cfg["url"]
+                print(f"\n> Testing proxy: {url}")
+                response = await scraper.search(
+                    query="hello world",
+                    proxy_url=url,
+                    retry_count=0,
+                )
+                status = "✓" if response.results and not response.has_captcha else "×"
+                print(
+                    f"  {status} {url}: "
+                    f"{len(response.results)} results, "
+                    f"captcha={response.has_captcha}"
+                )
+                await asyncio.sleep(2)
         finally:
             await scraper.stop()

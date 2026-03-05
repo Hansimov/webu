@@ -32,6 +32,7 @@ from .constants import (
     LOCALES,
 )
 from .parser import GoogleResultParser, GoogleSearchResponse
+from .proxy_manager import ProxyManager
 from webu.captcha import CaptchaBypass
 
 # 截图保存目录
@@ -169,16 +170,17 @@ class GoogleScraper:
     - 使用 UC 启动 Chrome（去除自动化指纹）
     - 通过 Playwright CDP 连接浏览器（高级 API）
     - 每次搜索创建新的 BrowserContext（指定代理 + 随机化指纹）
+    - 通过 ProxyManager 管理代理的健康检查和故障转移
     """
 
     def __init__(
         self,
-        proxy_pool=None,
+        proxy_manager: ProxyManager = None,
         headless: bool = True,
         timeout: int = SEARCH_TIMEOUT,
         verbose: bool = True,
     ):
-        self.proxy_pool = proxy_pool
+        self.proxy_manager = proxy_manager
         self.headless = headless
         self.timeout = timeout
         self.verbose = verbose
@@ -312,7 +314,7 @@ class GoogleScraper:
             query: 搜索关键词
             num: 期望的结果数量
             lang: 搜索语言
-            proxy_url: 指定代理 URL（为 None 则自动从代理池获取）
+            proxy_url: 指定代理 URL（为 None 则自动从 ProxyManager 获取）
             retry_count: 重试次数
         """
         await self._ensure_browser()
@@ -324,12 +326,8 @@ class GoogleScraper:
             elif proxy_url:
                 current_proxy = proxy_url
             else:
-                if self.proxy_pool:
-                    proxy_info = self.proxy_pool.get_proxy()
-                    if proxy_info:
-                        current_proxy = proxy_info["proxy_url"]
-                    else:
-                        current_proxy = None
+                if self.proxy_manager:
+                    current_proxy = self.proxy_manager.get_proxy()
                 else:
                     current_proxy = None
 
@@ -348,9 +346,15 @@ class GoogleScraper:
             )
 
             if result.results and not result.has_captcha:
+                # 成功 — 报告代理成功
+                if current_proxy and self.proxy_manager:
+                    self.proxy_manager.report_success(current_proxy)
                 return result
 
             if result.has_captcha:
+                # CAPTCHA — 报告代理失败
+                if current_proxy and self.proxy_manager:
+                    self.proxy_manager.report_failure(current_proxy)
                 logger.warn(
                     f"  × CAPTCHA detected (attempt {attempt + 1}), "
                     f"switching proxy ..."
@@ -359,6 +363,9 @@ class GoogleScraper:
                 continue
 
             if not result.results and attempt < retry_count:
+                # 无结果 — 报告代理失败
+                if current_proxy and self.proxy_manager:
+                    self.proxy_manager.report_failure(current_proxy)
                 logger.warn(
                     f"  × No results (attempt {attempt + 1}), retrying ..."
                 )

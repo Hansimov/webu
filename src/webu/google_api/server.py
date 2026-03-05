@@ -1,4 +1,8 @@
-"""Google Search FastAPI 服务 — 搜索 API + 代理管理 API。"""
+"""Google Search FastAPI 服务 — 搜索 API + 代理状态 API。
+
+使用 ProxyManager 管理固定代理列表（warp + 备用），
+不再依赖 MongoDB 代理池。
+"""
 
 import asyncio
 import uvicorn
@@ -9,8 +13,7 @@ from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
 
-from .constants import MONGO_CONFIGS, MongoConfigsType
-from .pool import GoogleSearchPool
+from .proxy_manager import ProxyManager, DEFAULT_PROXIES
 from .scraper import GoogleScraper
 from ..fastapis.styles import setup_swagger_ui
 
@@ -51,50 +54,37 @@ class SearchResponse(BaseModel):
     error: str = ""
 
 
-class ProxyStatsResponse(BaseModel):
-    """代理池统计响应。"""
+class ProxyStatusItem(BaseModel):
+    """单个代理状态。"""
 
-    total_ips: int = 0
-    total_checked: int = 0
-    level1_passed: int = 0
-    total_valid: int = 0
-    total_abandoned: int = 0
-    valid_ratio: str = "N/A"
-
-
-class ProxyCollectResponse(BaseModel):
-    """代理采集响应。"""
-
-    total_fetched: int = 0
-    inserted: int = 0
-    updated: int = 0
-    total: int = 0
-
-
-class ProxyCheckResponse(BaseModel):
-    """代理检测响应。"""
-
-    checked: int = 0
-    valid: int = 0
-    invalid: int = 0
-
-
-class ProxyListItem(BaseModel):
-    """代理列表项。"""
-
-    ip: str = ""
-    port: int = 0
-    protocol: str = ""
-    proxy_url: str = ""
+    url: str = ""
+    name: str = ""
+    role: str = ""
+    healthy: bool = False
     latency_ms: int = 0
-    is_valid: bool = False
+    consecutive_failures: int = 0
+    total_successes: int = 0
+    total_failures: int = 0
+    success_rate: str = ""
+    last_check: str = ""
+
+
+class ProxyStatusResponse(BaseModel):
+    """代理状态响应。"""
+
+    total_proxies: int = 0
+    healthy_proxies: int = 0
+    unhealthy_proxies: int = 0
+    primary_healthy: bool = False
+    using_primary: bool = False
+    proxies: list[ProxyStatusItem] = []
 
 
 class HealthResponse(BaseModel):
     """健康检查。"""
 
     status: str = "ok"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -103,39 +93,60 @@ class HealthResponse(BaseModel):
 
 
 def create_google_search_server(
-    configs: MongoConfigsType = None,
+    proxies: list[dict] = None,
     headless: bool = True,
 ) -> FastAPI:
-    """创建 Google 搜索 FastAPI 应用。"""
+    """创建 Google 搜索 FastAPI 应用。
 
-    pool: GoogleSearchPool = None
+    Args:
+        proxies: 代理列表配置（默认使用 DEFAULT_PROXIES）
+        headless: 是否无头浏览器模式
+    """
+
+    proxy_manager: ProxyManager = None
     scraper: GoogleScraper = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal pool, scraper
+        nonlocal proxy_manager, scraper
         logger.note("> Initializing Google Search Server ...")
-        pool = GoogleSearchPool(configs=configs)
-        scraper = GoogleScraper(proxy_pool=pool, headless=headless)
+
+        # 启动代理管理器
+        proxy_manager = ProxyManager(
+            proxies=proxies or DEFAULT_PROXIES,
+            verbose=True,
+        )
+        await proxy_manager.start()
+
+        # 启动搜索抓取器
+        scraper = GoogleScraper(
+            proxy_manager=proxy_manager,
+            headless=headless,
+        )
         await scraper.start()
+
         logger.okay("  ✓ Google Search Server ready")
         yield
+
         if scraper:
             await scraper.stop()
+        if proxy_manager:
+            await proxy_manager.stop()
 
     app = FastAPI(
         title="Google Search API",
         description=(
             "基于 Playwright 的 Google 搜索 API。\n\n"
-            "支持：搜索接口、代理池管理（采集/检测/选取）。"
+            "使用固定代理列表（warp + 备用）进行搜索，"
+            "支持自动故障转移和健康检查。"
         ),
-        version="1.0.0",
+        version="1.1.0",
         lifespan=lifespan,
     )
     setup_swagger_ui(app)
 
     def _ensure_ready():
-        if not pool or not scraper:
+        if not proxy_manager or not scraper:
             raise HTTPException(status_code=503, detail="Server not ready")
 
     # ── 系统接口 ──────────────────────────────────────────────
@@ -183,83 +194,37 @@ def create_google_search_server(
         req = SearchRequest(query=q, num=num, lang=lang)
         return await search(req)
 
-    # ── 代理管理接口 ──────────────────────────────────────────
+    # ── 代理状态接口 ──────────────────────────────────────────
 
-    @app.get("/proxy/stats", response_model=ProxyStatsResponse, tags=["代理池"])
-    async def proxy_stats():
-        """获取代理池统计信息。"""
+    @app.get("/proxy/status", response_model=ProxyStatusResponse, tags=["代理"])
+    async def proxy_status():
+        """获取代理健康状态。"""
         _ensure_ready()
-        stats = pool.stats()
-        return ProxyStatsResponse(**stats)
-
-    @app.post("/proxy/collect", response_model=ProxyCollectResponse, tags=["代理池"])
-    async def proxy_collect():
-        """从所有代理源采集 IP。"""
-        _ensure_ready()
-        result = pool.collect()
-        return ProxyCollectResponse(**result)
-
-    @app.post("/proxy/check", response_model=ProxyCheckResponse, tags=["代理池"])
-    async def proxy_check(
-        limit: int = Query(200, description="最大检测数量", ge=1, le=5000),
-        mode: str = Query(
-            "unchecked",
-            description="检测模式: unchecked=未检测的, stale=过期的, all=全部",
-        ),
-        level: str = Query(
-            "all",
-            description="检测级别: 1=快速检测, 2=Google搜索, all=全部",
-        ),
-    ):
-        """检测代理 IP 可用性（支持两级检测）。"""
-        _ensure_ready()
-        if mode == "unchecked":
-            results = await pool.check_unchecked(limit=limit, level=level)
-        elif mode == "stale":
-            results = await pool.check_stale(limit=limit)
-        elif mode == "all":
-            results = await pool.check_all(limit=limit)
-        else:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid mode: {mode}"
-            )
-
-        valid = sum(1 for r in results if r.get("is_valid"))
-        return ProxyCheckResponse(
-            checked=len(results),
-            valid=valid,
-            invalid=len(results) - valid,
+        stats = proxy_manager.stats()
+        return ProxyStatusResponse(
+            total_proxies=stats["total_proxies"],
+            healthy_proxies=stats["healthy_proxies"],
+            unhealthy_proxies=stats["unhealthy_proxies"],
+            primary_healthy=stats["primary_healthy"],
+            using_primary=stats["using_primary"],
+            proxies=[ProxyStatusItem(**p) for p in stats["proxies"]],
         )
 
-    @app.post("/proxy/refresh", tags=["代理池"])
-    async def proxy_refresh(
-        check_limit: int = Query(200, description="检测数量上限"),
-    ):
-        """一键刷新：采集 + 检测未检测的 IP。"""
+    @app.get("/proxy/current", tags=["代理"])
+    async def proxy_current():
+        """获取当前推荐的代理。"""
         _ensure_ready()
-        result = await pool.refresh(check_limit=check_limit)
-        return result
+        proxy_url = proxy_manager.get_proxy()
+        if not proxy_url:
+            raise HTTPException(status_code=404, detail="No proxy available")
+        return {"proxy_url": proxy_url}
 
-    @app.get("/proxy/valid", response_model=list[ProxyListItem], tags=["代理池"])
-    async def proxy_valid(
-        limit: int = Query(20, description="最大返回数量", ge=1, le=200),
-        max_latency_ms: int = Query(10000, description="最大延迟(ms)"),
-    ):
-        """获取当前可用的代理列表。"""
+    @app.post("/proxy/check", tags=["代理"])
+    async def proxy_check_now():
+        """立即对所有代理执行健康检查。"""
         _ensure_ready()
-        proxies = pool.store.get_valid_proxies(
-            limit=limit, max_latency_ms=max_latency_ms
-        )
-        return [ProxyListItem(**{k: v for k, v in p.items() if k != "_id"}) for p in proxies]
-
-    @app.get("/proxy/get", tags=["代理池"])
-    async def proxy_get():
-        """获取一个推荐的可用代理。"""
-        _ensure_ready()
-        proxy = pool.get_proxy()
-        if not proxy:
-            raise HTTPException(status_code=404, detail="No valid proxy available")
-        return {k: v for k, v in proxy.items() if k != "_id"}
+        await proxy_manager._check_all()
+        return proxy_manager.stats()
 
     return app
 

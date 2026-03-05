@@ -1,17 +1,9 @@
-"""Google 搜索模块 — 基于 proxy_api 代理池 + undetected chromedriver。"""
+"""Google 搜索模块 — 基于 ProxyManager + undetected chromedriver。
 
-# 从 proxy_api 重新导出代理基础设施（向后兼容）
-from webu.proxy_api.constants import (
-    MONGO_CONFIGS, PROXY_SOURCES, MongoConfigsType,
-    ABANDONED_FAIL_THRESHOLD, ABANDONED_STALE_HOURS, ABANDONED_COOLDOWN_HOURS,
-)
-from webu.proxy_api.mongo import MongoProxyStore
-from webu.proxy_api.collector import ProxyCollector
-from webu.proxy_api.checker import check_level1_batch, build_proxy_url
-from webu.proxy_api.pool import ProxyPool
+使用固定代理列表（warp + 备用）进行 Google 搜索，
+包含自动故障转移、健康检查和 CAPTCHA 绕过功能。
+"""
 
-# Google 搜索特有模块
-from .checker import ProxyChecker, check_level2_batch
-from .pool import GoogleSearchPool
+from .proxy_manager import ProxyManager, ProxyState, DEFAULT_PROXIES
 from .scraper import GoogleScraper
 from .parser import GoogleResultParser, GoogleSearchResult, GoogleSearchResponse

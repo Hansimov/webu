@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from webu.google_api.scraper import GoogleScraper
-from webu.google_api.pool import GoogleSearchPool as ProxyPool
+from webu.google_api.proxy_manager import ProxyManager
 from webu.google_api.parser import GoogleSearchResponse, GoogleSearchResult
 
 
@@ -20,9 +20,10 @@ class TestGoogleScraper:
     """GoogleScraper 单元测试。"""
 
     def setup_method(self):
-        self.pool = MagicMock(spec=ProxyPool)
+        self.manager = MagicMock(spec=ProxyManager)
+        self.manager.get_proxy.return_value = "socks5://127.0.0.1:11000"
         self.scraper = GoogleScraper(
-            proxy_pool=self.pool,
+            proxy_manager=self.manager,
             headless=True,
             timeout=10,
             verbose=False,
@@ -30,8 +31,8 @@ class TestGoogleScraper:
 
     def test_init_default_params(self):
         """测试默认参数。"""
-        pool = MagicMock(spec=ProxyPool)
-        scraper = GoogleScraper(proxy_pool=pool)
+        manager = MagicMock(spec=ProxyManager)
+        scraper = GoogleScraper(proxy_manager=manager)
         assert scraper.headless is True
         assert scraper.timeout > 0
         assert scraper._search_count == 0
@@ -81,14 +82,14 @@ class TestScraperParserIntegration:
 
     def test_parser_is_initialized(self):
         """测试 Scraper 初始化时创建了 Parser。"""
-        pool = MagicMock(spec=ProxyPool)
-        scraper = GoogleScraper(proxy_pool=pool, verbose=False)
+        manager = MagicMock(spec=ProxyManager)
+        scraper = GoogleScraper(proxy_manager=manager, verbose=False)
         assert scraper.parser is not None
 
     def test_search_count_tracking(self):
         """测试搜索计数器初始化。"""
-        pool = MagicMock(spec=ProxyPool)
-        scraper = GoogleScraper(proxy_pool=pool, verbose=False)
+        manager = MagicMock(spec=ProxyManager)
+        scraper = GoogleScraper(proxy_manager=manager, verbose=False)
         assert scraper._search_count == 0
         assert scraper._max_searches_before_restart == 200
 
@@ -107,17 +108,10 @@ class TestGoogleScraperIntegration:
     运行: pytest tests/google_api/test_scraper.py -xvs -m integration
     """
 
-    TEST_CONFIGS = {
-        "host": "localhost",
-        "port": 27017,
-        "dbname": "webu_test",
-    }
-
     @pytest.mark.asyncio
     async def test_search_direct_no_proxy(self):
         """测试直连搜索（不通过代理）。"""
-        pool = ProxyPool(configs=self.TEST_CONFIGS, verbose=True)
-        scraper = GoogleScraper(proxy_pool=pool, headless=True, verbose=True)
+        scraper = GoogleScraper(headless=True, verbose=True)
         await scraper.start()
         try:
             response = await scraper.search(
@@ -137,10 +131,10 @@ class TestGoogleScraperIntegration:
     @pytest.mark.asyncio
     async def test_browser_restart_after_max_searches(self):
         """测试浏览器在达到最大搜索次数后自动重启。"""
-        pool = MagicMock(spec=ProxyPool)
-        pool.get_proxy.return_value = None
+        manager = MagicMock(spec=ProxyManager)
+        manager.get_proxy.return_value = None
 
-        scraper = GoogleScraper(proxy_pool=pool, headless=True, verbose=False)
+        scraper = GoogleScraper(proxy_manager=manager, headless=True, verbose=False)
         scraper._max_searches_before_restart = 2  # 设置极小值方便测试
 
         await scraper.start()

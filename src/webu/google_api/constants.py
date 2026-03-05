@@ -1,10 +1,11 @@
 """Google 搜索相关常量。
 
-代理池基础设施常量请参见 webu.proxy_api.constants。
+本模块只包含 google_api 模块自身需要的常量。
+代理管理由 ProxyManager 负责，不再依赖 proxy_api 模块。
 """
 
 # ═══════════════════════════════════════════════════════════════
-# Google 搜索相关常量
+# Google 搜索
 # ═══════════════════════════════════════════════════════════════
 
 GOOGLE_SEARCH_URL = "https://www.google.com/search"
@@ -17,26 +18,30 @@ GOOGLE_CHECK_QUERY = "test"
 SEARCH_TIMEOUT = 30
 
 # ═══════════════════════════════════════════════════════════════
-# 向后兼容 — 从 proxy_api 重新导出常用常量
+# 浏览器指纹随机化
 # ═══════════════════════════════════════════════════════════════
 
-from webu.proxy_api.constants import (
-    MONGO_CONFIGS,
-    MongoConfigsType,
-    PROXY_SOURCES,
-    ProxySourceType,
-    COLLECTION_IPS,
-    COLLECTION_CHECKED_IPS,
-    PROXY_CHECK_TIMEOUT,
-    CHECK_CONCURRENCY,
-    FETCH_PROXY,
-    ABANDONED_FAIL_THRESHOLD,
-    ABANDONED_STALE_HOURS,
-    ABANDONED_COOLDOWN_HOURS,
-    USER_AGENTS,
-    VIEWPORT_SIZES,
-    LOCALES,
-)
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+]
 
-# 向后兼容别名
-COLLECTION_GOOGLE_IPS = COLLECTION_CHECKED_IPS
+VIEWPORT_SIZES = [
+    {"width": 1920, "height": 1080},
+    {"width": 1366, "height": 768},
+    {"width": 1440, "height": 900},
+    {"width": 1536, "height": 864},
+    {"width": 1280, "height": 720},
+    {"width": 2560, "height": 1440},
+]
+
+LOCALES = [
+    "en-US",
+    "en-GB",
+    "en-CA",
+    "en-AU",
+]

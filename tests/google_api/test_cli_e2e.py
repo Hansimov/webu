@@ -36,34 +36,29 @@ class TestCLIBasicCommands:
         assert "ggsc" in output.lower()
 
     def test_help_lists_all_commands(self):
-        """--help 列出所有命令。"""
+        """--help 列出所有新命令。"""
         r = _run_ggsc("--help")
         output = r.stdout
         for cmd in ["start", "stop", "restart", "status", "logs",
-                     "collect", "check", "stats", "refresh", "diag"]:
+                     "search", "search-test", "proxy-status", "proxy-check"]:
             assert cmd in output, f"Command '{cmd}' missing from help output"
 
     def test_each_subcommand_help(self):
         """每个子命令都有 --help。"""
         for cmd in ["start", "stop", "restart", "status", "logs",
-                     "collect", "check", "stats", "refresh", "diag"]:
+                     "search", "search-test", "proxy-status", "proxy-check"]:
             r = _run_ggsc(cmd, "--help")
             assert r.returncode == 0, f"{cmd} --help failed: {r.stderr}"
 
-    def test_check_accepts_level_arg(self):
-        """check 子命令支持 --level 参数。"""
-        r = _run_ggsc("check", "--help")
-        assert "level" in r.stdout.lower()
-        assert "1" in r.stdout
-        assert "2" in r.stdout
-        assert "all" in r.stdout
+    def test_search_accepts_proxy_arg(self):
+        """search 子命令支持 --proxy 参数。"""
+        r = _run_ggsc("search", "--help")
+        assert "--proxy" in r.stdout
 
-    def test_check_accepts_mode_arg(self):
-        """check 子命令支持 --mode 参数。"""
-        r = _run_ggsc("check", "--help")
-        assert "mode" in r.stdout.lower()
-        assert "unchecked" in r.stdout
-        assert "stale" in r.stdout
+    def test_search_accepts_num_arg(self):
+        """search 子命令支持 --num 参数。"""
+        r = _run_ggsc("search", "--help")
+        assert "--num" in r.stdout
 
     def test_start_accepts_port_arg(self):
         """start 子命令支持 --port 参数。"""
@@ -82,33 +77,25 @@ class TestCLIBasicCommands:
 
 
 # ═══════════════════════════════════════════════════════════════
-# CLI 实际操作测试（需要 MongoDB）
+# CLI 实际操作测试（需要代理端口）
 # ═══════════════════════════════════════════════════════════════
 
 
 @pytest.mark.integration
 class TestCLIOperations:
-    """测试 CLI 实际操作。"""
-
-    def test_stats_returns_data(self):
-        """stats 命令返回数据库统计。"""
-        r = _run_ggsc("stats", timeout=15)
-        assert r.returncode == 0
-        combined = r.stdout + r.stderr
-        assert "total" in combined.lower() or "Stats" in combined
+    """测试 CLI 实际操作（需要代理端口活跃）。"""
 
     def test_status_works(self):
         """status 命令正常工作。"""
         r = _run_ggsc("status", timeout=10)
         assert r.returncode == 0
 
-    def test_check_level1_small(self):
-        """快速 Level-1 检测小批量。"""
-        r = _run_ggsc("check", "--level", "1", "--limit", "5", timeout=120)
+    def test_proxy_status(self):
+        """proxy-status 命令正常工作。"""
+        r = _run_ggsc("proxy-status", timeout=30)
         assert r.returncode == 0
         combined = r.stdout + r.stderr
-        # 应该有检测输出
-        assert "Level-1" in combined or "check" in combined.lower()
+        assert "proxy" in combined.lower() or "socks" in combined.lower() or "http" in combined.lower()
 
 
 # ═══════════════════════════════════════════════════════════════

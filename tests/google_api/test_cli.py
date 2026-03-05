@@ -17,8 +17,6 @@ from webu.google_api.cli import (
     _remove_pid,
     _is_process_running,
     cmd_status,
-    cmd_collect,
-    cmd_stats,
     DATA_DIR,
     PID_FILE,
     LOG_FILE,
@@ -99,25 +97,6 @@ class TestCLICommands:
             # PID 文件应被清理
             assert not pid_file.exists()
 
-    def test_collect_command(self):
-        """测试 collect 命令调用 — mock DB 依赖。"""
-        args = MagicMock()
-        args.source = None
-        # cmd_collect 内部做 from .pool import GoogleSearchPool 的本地导入
-        # 我们 patch pool 模块中的 GoogleSearchPool 类
-        mock_pool_instance = MagicMock()
-        mock_pool_instance.collect.return_value = {
-            "total_fetched": 100, "inserted": 50, "updated": 50, "total": 100
-        }
-        with patch("webu.google_api.pool.GoogleSearchPool", return_value=mock_pool_instance):
-            cmd_collect(args)
-
-    def test_stats_command(self):
-        """测试 stats 命令。"""
-        args = MagicMock()
-        # Verify it doesn't crash structurally
-        # (actual MongoDB connection is needed for full test)
-
 
 # ═══════════════════════════════════════════════════════════════
 # CLI 入口测试
@@ -142,7 +121,11 @@ class TestCLIEntry:
 
     def test_subcommand_help(self):
         """测试子命令 --help 输出。"""
-        for cmd in ["start", "stop", "restart", "status", "logs", "collect", "check", "stats", "refresh", "diag"]:
+        new_commands = [
+            "start", "stop", "restart", "status", "logs",
+            "search", "search-test", "proxy-status", "proxy-check",
+        ]
+        for cmd in new_commands:
             result = subprocess.run(
                 [sys.executable, "-m", "webu.google_api", cmd, "--help"],
                 capture_output=True,
@@ -161,13 +144,23 @@ class TestCLIEntry:
         )
         assert result.returncode == 0
 
-    def test_check_level_arg(self):
-        """测试 check 子命令的 --level 参数。"""
+    def test_search_help_has_proxy_arg(self):
+        """测试 search 子命令有 --proxy 参数。"""
         result = subprocess.run(
-            [sys.executable, "-m", "webu.google_api", "check", "--help"],
+            [sys.executable, "-m", "webu.google_api", "search", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
         )
         assert result.returncode == 0
-        assert "level" in result.stdout.lower()
+        assert "--proxy" in result.stdout
+
+    def test_proxy_status_help(self):
+        """测试 proxy-status 子命令帮助。"""
+        result = subprocess.run(
+            [sys.executable, "-m", "webu.google_api", "proxy-status", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
