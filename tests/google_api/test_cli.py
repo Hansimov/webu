@@ -115,15 +115,26 @@ class TestCLIEntry:
             timeout=10,
         )
         assert result.returncode == 0
-        assert "ggsc" in result.stdout.lower() or "googlesearch" in result.stdout.lower() or "GooGle-SearCh" in result.stdout
+        assert (
+            "ggsc" in result.stdout.lower()
+            or "googlesearch" in result.stdout.lower()
+            or "GooGle-SearCh" in result.stdout
+        )
         assert "start" in result.stdout
         assert "stop" in result.stdout
 
     def test_subcommand_help(self):
         """测试子命令 --help 输出。"""
         new_commands = [
-            "start", "stop", "restart", "status", "logs",
-            "search", "search-test", "proxy-status", "proxy-check",
+            "start",
+            "stop",
+            "restart",
+            "status",
+            "logs",
+            "search",
+            "search-test",
+            "proxy-status",
+            "proxy-check",
         ]
         for cmd in new_commands:
             result = subprocess.run(

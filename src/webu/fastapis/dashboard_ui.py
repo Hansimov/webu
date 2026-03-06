@@ -123,7 +123,15 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
     return app
 
 
-def page_shell(*, title: str, subtitle: str = "", badge: str = "", badge_tone: str = "accent", body: Iterable, chips: Iterable = ()):
+def page_shell(
+    *,
+    title: str,
+    subtitle: str = "",
+    badge: str = "",
+    badge_tone: str = "accent",
+    body: Iterable,
+    chips: Iterable = (),
+):
     tone_map = {
         "accent": (THEME["accent"], THEME["accent_soft"]),
         "warn": (THEME["warn"], THEME["warn_soft"]),
@@ -133,7 +141,11 @@ def page_shell(*, title: str, subtitle: str = "", badge: str = "", badge_tone: s
     ink, bg = tone_map.get(badge_tone, tone_map["accent"])
     title_children = [html.H1(title, className="dash-title")]
     if badge:
-        title_children.append(html.Span(badge, className="dash-badge", style={"background": bg, "color": ink}))
+        title_children.append(
+            html.Span(
+                badge, className="dash-badge", style={"background": bg, "color": ink}
+            )
+        )
     header_children = [html.Div(title_children, className="dash-title-row")]
     if subtitle:
         header_children.append(html.Div(subtitle, className="dash-subtitle"))
@@ -175,13 +187,19 @@ def graph_card(title: str, figure: go.Figure):
     return html.Div(
         [
             html.Div(title, className="dash-card-label"),
-            dcc.Graph(figure=figure, config={"displayModeBar": False}, style={"height": "200px", "marginTop": "8px"}),
+            dcc.Graph(
+                figure=figure,
+                config={"displayModeBar": False},
+                style={"height": "200px", "marginTop": "8px"},
+            ),
         ],
         className="dash-card",
     )
 
 
-def instance_card(*, name: str, caption: str, healthy: bool, stats: list[tuple[str, str]]):
+def instance_card(
+    *, name: str, caption: str, healthy: bool, stats: list[tuple[str, str]]
+):
     tag_style = {
         "background": THEME["accent_soft"] if healthy else THEME["danger_soft"],
         "color": THEME["accent"] if healthy else THEME["danger"],
@@ -201,7 +219,11 @@ def instance_card(*, name: str, caption: str, healthy: bool, stats: list[tuple[s
             html.Div(
                 [
                     html.Div(name, className="dash-inst-name"),
-                    html.Span("healthy" if healthy else "unhealthy", className="dash-tag", style=tag_style),
+                    html.Span(
+                        "healthy" if healthy else "unhealthy",
+                        className="dash-tag",
+                        style=tag_style,
+                    ),
                 ],
                 className="dash-inst-hd",
             ),
@@ -214,7 +236,10 @@ def instance_card(*, name: str, caption: str, healthy: bool, stats: list[tuple[s
 
 def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
     if not records:
-        return html.Div(html.Div("No requests recorded yet", className="dash-empty"), className="dash-table-wrap")
+        return html.Div(
+            html.Div("No requests recorded yet", className="dash-empty"),
+            className="dash-table-wrap",
+        )
 
     headers = ["Time", "Query", "Status", "Latency"]
     if show_backend:
@@ -234,11 +259,22 @@ def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
         ]
         if show_backend:
             cells.append(html.Td(record.get("backend", "") or "\u2014"))
-        cells.extend([
-            html.Td(html.Span("OK" if success else "FAIL", className="dash-tag", style=tag_style)),
-            html.Td(format_ms(float(record.get("latency_ms", 0)))),
-            html.Td(record.get("error", "") or "\u2014", style={"color": THEME["muted"], "fontSize": "12px"}),
-        ])
+        cells.extend(
+            [
+                html.Td(
+                    html.Span(
+                        "OK" if success else "FAIL",
+                        className="dash-tag",
+                        style=tag_style,
+                    )
+                ),
+                html.Td(format_ms(float(record.get("latency_ms", 0)))),
+                html.Td(
+                    record.get("error", "") or "\u2014",
+                    style={"color": THEME["muted"], "fontSize": "12px"},
+                ),
+            ]
+        )
         rows.append(html.Tr(cells))
 
     return html.Div(
@@ -256,12 +292,17 @@ def base_figure() -> go.Figure:
         margin={"l": 12, "r": 12, "t": 12, "b": 12},
         paper_bgcolor=THEME["surface"],
         plot_bgcolor=THEME["surface_alt"],
-        font={"family": '"Inter", "SF Pro Display", -apple-system, "Segoe UI", sans-serif', "color": THEME["text"]},
+        font={
+            "family": '"Inter", "SF Pro Display", -apple-system, "Segoe UI", sans-serif',
+            "color": THEME["text"],
+        },
     )
     return figure
 
 
-def donut_figure(*, labels: list[str], values: list[float], colors: list[str]) -> go.Figure:
+def donut_figure(
+    *, labels: list[str], values: list[float], colors: list[str]
+) -> go.Figure:
     figure = base_figure()
     figure.add_trace(
         go.Pie(
@@ -277,7 +318,9 @@ def donut_figure(*, labels: list[str], values: list[float], colors: list[str]) -
     return figure
 
 
-def gauge_figure(*, value: float, maximum: float, color: str, suffix: str = "") -> go.Figure:
+def gauge_figure(
+    *, value: float, maximum: float, color: str, suffix: str = ""
+) -> go.Figure:
     figure = base_figure()
     figure.add_trace(
         go.Indicator(
@@ -285,21 +328,38 @@ def gauge_figure(*, value: float, maximum: float, color: str, suffix: str = "") 
             value=max(0.0, float(value)),
             number={"suffix": suffix},
             gauge={
-                "axis": {"range": [0, max(1.0, float(maximum))], "tickcolor": THEME["muted"]},
+                "axis": {
+                    "range": [0, max(1.0, float(maximum))],
+                    "tickcolor": THEME["muted"],
+                },
                 "bar": {"color": color},
                 "bgcolor": THEME["surface_alt"],
                 "borderwidth": 0,
-                "steps": [{"range": [0, max(1.0, float(maximum))], "color": THEME["surface_alt"]}],
+                "steps": [
+                    {
+                        "range": [0, max(1.0, float(maximum))],
+                        "color": THEME["surface_alt"],
+                    }
+                ],
             },
         )
     )
     return figure
 
 
-def bar_figure(*, labels: list[str], values: list[float], colors: list[str], horizontal: bool = False, axis_title: str = "") -> go.Figure:
+def bar_figure(
+    *,
+    labels: list[str],
+    values: list[float],
+    colors: list[str],
+    horizontal: bool = False,
+    axis_title: str = "",
+) -> go.Figure:
     figure = base_figure()
     if horizontal:
-        figure.add_trace(go.Bar(x=values, y=labels, orientation="h", marker={"color": colors}))
+        figure.add_trace(
+            go.Bar(x=values, y=labels, orientation="h", marker={"color": colors})
+        )
         figure.update_layout(xaxis_title=axis_title, yaxis_title="")
     else:
         figure.add_trace(go.Bar(x=labels, y=values, marker={"color": colors}))
@@ -307,7 +367,9 @@ def bar_figure(*, labels: list[str], values: list[float], colors: list[str], hor
     return figure
 
 
-def line_figure(*, labels: list[str], series: list[dict], axis_title: str = "") -> go.Figure:
+def line_figure(
+    *, labels: list[str], series: list[dict], axis_title: str = ""
+) -> go.Figure:
     figure = base_figure()
     for item in series:
         figure.add_trace(

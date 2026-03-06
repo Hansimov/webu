@@ -39,10 +39,7 @@ def save_debug_screenshot(
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
     safe_proxy = (
-        (proxy_url or "direct")
-        .replace("://", "_")
-        .replace(":", "_")
-        .replace("/", "")
+        (proxy_url or "direct").replace("://", "_").replace(":", "_").replace("/", "")
     )
     filename = f"{ts}_bypass_{stage}_{safe_proxy}.png"
     path = out_dir / filename
@@ -195,9 +192,7 @@ class CaptchaBypass:
                     f"  → Solve attempt {attempt + 1}/{self.max_solve_attempts}"
                 )
 
-            success = await self._solve_one_round(
-                page, solver, proxy_url, attempt
-            )
+            success = await self._solve_one_round(page, solver, proxy_url, attempt)
             if success:
                 return True
 
@@ -269,9 +264,7 @@ class CaptchaBypass:
                         return True
                 except Exception as e:
                     if self.verbose:
-                        logger.mesg(
-                            f"    Checkbox {selector} failed: {str(e)[:80]}"
-                        )
+                        logger.mesg(f"    Checkbox {selector} failed: {str(e)[:80]}")
                     continue
 
             if self.verbose:
@@ -352,9 +345,7 @@ class CaptchaBypass:
                     )
 
                 # 3) 提取题目文本（含动态错误提示）
-                task_text = await self._get_challenge_task_text(
-                    challenge_frame
-                )
+                task_text = await self._get_challenge_task_text(challenge_frame)
                 if self.verbose:
                     logger.mesg(f"    Task: {task_text or '(unknown)'}")
 
@@ -393,17 +384,11 @@ class CaptchaBypass:
                 # VLM 返回 [-1] 表示无匹配 → 点 Skip
                 if cell_indices == [-1]:
                     if self.verbose:
-                        logger.mesg(
-                            "    Solver: no matching cells → Skip"
-                        )
-                    action = await self._detect_and_click_action(
-                        page, challenge_frame
-                    )
+                        logger.mesg("    Solver: no matching cells → Skip")
+                    action = await self._detect_and_click_action(page, challenge_frame)
                     if action:
                         if self.verbose:
-                            logger.mesg(
-                                f"    → Clicked {action.capitalize()}"
-                            )
+                            logger.mesg(f"    → Clicked {action.capitalize()}")
                         prev_error_feedback = None
                         prev_selected_indices = None
                         await asyncio.sleep(random.uniform(1.0, 2.0))
@@ -437,33 +422,26 @@ class CaptchaBypass:
                     await self._human_like_click(page, int(cx), int(cy))
                     if self.verbose:
                         logger.mesg(
-                            f"    ✓ Clicked cell {idx} "
-                            f"at ({int(cx)}, {int(cy)})"
+                            f"    ✓ Clicked cell {idx} " f"at ({int(cx)}, {int(cy)})"
                         )
                     await asyncio.sleep(random.uniform(0.3, 0.7))
 
                 if self.save_screenshots:
                     try:
                         shot = await page.screenshot(full_page=False)
-                        self._screenshot(
-                            shot, f"cells_clicked_{rl}", proxy_url
-                        )
+                        self._screenshot(shot, f"cells_clicked_{rl}", proxy_url)
                     except Exception:
                         pass
 
                 # 7) 检测并点击动作按钮（Verify / Next / Skip）
                 await asyncio.sleep(random.uniform(0.5, 1.0))
-                action = await self._detect_and_click_action(
-                    page, challenge_frame
-                )
+                action = await self._detect_and_click_action(page, challenge_frame)
 
                 if self.save_screenshots:
                     try:
                         await asyncio.sleep(0.5)
                         shot = await page.screenshot(full_page=False)
-                        self._screenshot(
-                            shot, f"{action or 'btn'}_{rl}", proxy_url
-                        )
+                        self._screenshot(shot, f"{action or 'btn'}_{rl}", proxy_url)
                     except Exception:
                         pass
 
@@ -490,7 +468,9 @@ class CaptchaBypass:
                                     "    → 'Select more' error — "
                                     "VLM missed some cells, retrying with feedback ..."
                                 )
-                        elif err and ("incorrect" in err.lower() or "try again" in err.lower()):
+                        elif err and (
+                            "incorrect" in err.lower() or "try again" in err.lower()
+                        ):
                             prev_error_feedback = (
                                 "Your selection was INCORRECT. "
                                 "You may have selected wrong cells. "
@@ -514,9 +494,7 @@ class CaptchaBypass:
                                 )
                         continue
                     # 页面已离开 CAPTCHA，等待导航完成
-                    nav = await self._wait_for_navigation(
-                        page, proxy_url, timeout=8.0
-                    )
+                    nav = await self._wait_for_navigation(page, proxy_url, timeout=8.0)
                     return nav
 
                 elif action == "next":
@@ -548,18 +526,14 @@ class CaptchaBypass:
                 return False
 
         if self.verbose:
-            logger.mesg(
-                f"    × Max sub-rounds ({MAX_SUB_ROUNDS}) reached"
-            )
+            logger.mesg(f"    × Max sub-rounds ({MAX_SUB_ROUNDS}) reached")
         return False
 
     def _find_challenge_frame(self, page):
         """查找 challenge bframe 对应的 Frame 对象。"""
         for frame in page.frames:
             url = frame.url or ""
-            if "bframe" in url or (
-                "recaptcha" in url and "anchor" not in url
-            ):
+            if "bframe" in url or ("recaptcha" in url and "anchor" not in url):
                 return frame
         return None
 
@@ -576,7 +550,8 @@ class CaptchaBypass:
             错误消息文本，或 None（无错误）
         """
         try:
-            error_text = await challenge_frame.evaluate("""() => {
+            error_text = await challenge_frame.evaluate(
+                """() => {
                 // reCAPTCHA 错误提示元素
                 const selectors = [
                     '.rc-imageselect-error-select-more',
@@ -597,7 +572,8 @@ class CaptchaBypass:
                     }
                 }
                 return texts.length ? texts.join(' | ') : null;
-            }""")
+            }"""
+            )
             return error_text
         except Exception:
             return None
@@ -646,7 +622,8 @@ class CaptchaBypass:
     async def _get_challenge_task_text(self, challenge_frame) -> Optional[str]:
         """从 challenge frame 提取题目文本（含动态提示如 'Please also check the new images'）。"""
         try:
-            text = await challenge_frame.evaluate("""() => {
+            text = await challenge_frame.evaluate(
+                """() => {
                 let parts = [];
 
                 // 主要的指示文本
@@ -679,7 +656,8 @@ class CaptchaBypass:
                 }
 
                 return parts.length ? parts.join(' | ') : null;
-            }""")
+            }"""
+            )
             return text
         except Exception:
             return None
@@ -692,7 +670,8 @@ class CaptchaBypass:
             rect_dict: {x, y, width, height} — 网格在 viewport 中的绝对位置
         """
         try:
-            info = await challenge_frame.evaluate("""() => {
+            info = await challenge_frame.evaluate(
+                """() => {
                 // 检查 3x3
                 let table = document.querySelector('table.rc-imageselect-table-33');
                 if (table) {
@@ -723,7 +702,8 @@ class CaptchaBypass:
                     }
                 }
                 return null;
-            }""")
+            }"""
+            )
 
             if not info:
                 return None
@@ -733,12 +713,15 @@ class CaptchaBypass:
 
             # 从主页面获取 bframe iframe 的 viewport 位置偏移
             page = challenge_frame.page
-            bframe_pos = await page.evaluate("""(selector) => {
+            bframe_pos = await page.evaluate(
+                """(selector) => {
                 const iframe = document.querySelector(selector);
                 if (!iframe) return null;
                 const r = iframe.getBoundingClientRect();
                 return {x: r.x, y: r.y};
-            }""", self.BFRAME_SELECTOR)
+            }""",
+                self.BFRAME_SELECTOR,
+            )
 
             if bframe_pos:
                 grid_rect = {
@@ -763,7 +746,9 @@ class CaptchaBypass:
             return None
 
     async def _detect_and_click_action(
-        self, page, challenge_frame,
+        self,
+        page,
+        challenge_frame,
     ) -> str | None:
         """检测并点击 reCAPTCHA 动作按钮。
 
@@ -774,7 +759,8 @@ class CaptchaBypass:
             "verify" | "next" | "skip" | None
         """
         try:
-            btn_info = await challenge_frame.evaluate("""() => {
+            btn_info = await challenge_frame.evaluate(
+                """() => {
                 const btn = document.querySelector(
                     '#recaptcha-verify-button'
                 );
@@ -785,7 +771,8 @@ class CaptchaBypass:
                     width: r.width, height: r.height,
                     text: btn.innerText.trim().toLowerCase(),
                 };
-            }""")
+            }"""
+            )
 
             if btn_info:
                 text = btn_info.get("text", "")
@@ -797,24 +784,19 @@ class CaptchaBypass:
                     action = "verify"
 
                 # 转换到 viewport 坐标
-                bframe_pos = await page.evaluate("""(selector) => {
+                bframe_pos = await page.evaluate(
+                    """(selector) => {
                     const iframe = document.querySelector(selector);
                     if (!iframe) return null;
                     const r = iframe.getBoundingClientRect();
                     return {x: r.x, y: r.y};
-                }""", self.BFRAME_SELECTOR)
+                }""",
+                    self.BFRAME_SELECTOR,
+                )
 
                 if bframe_pos:
-                    cx = (
-                        bframe_pos["x"]
-                        + btn_info["x"]
-                        + btn_info["width"] / 2
-                    )
-                    cy = (
-                        bframe_pos["y"]
-                        + btn_info["y"]
-                        + btn_info["height"] / 2
-                    )
+                    cx = bframe_pos["x"] + btn_info["x"] + btn_info["width"] / 2
+                    cy = bframe_pos["y"] + btn_info["y"] + btn_info["height"] / 2
                 else:
                     cx = btn_info["x"] + btn_info["width"] / 2
                     cy = btn_info["y"] + btn_info["height"] / 2
@@ -822,10 +804,7 @@ class CaptchaBypass:
                 await self._human_like_click(page, int(cx), int(cy))
                 if self.verbose:
                     label = action.capitalize()
-                    logger.mesg(
-                        f"    ✓ Clicked {label} "
-                        f"at ({int(cx)}, {int(cy)})"
-                    )
+                    logger.mesg(f"    ✓ Clicked {label} " f"at ({int(cx)}, {int(cy)})")
                 return action
 
             # 回退：frame_locator 方式
@@ -841,9 +820,7 @@ class CaptchaBypass:
                     action = "verify"
                 await btn.click(delay=random.randint(50, 150))
                 if self.verbose:
-                    logger.mesg(
-                        f"    ✓ Clicked {action} (frame_locator)"
-                    )
+                    logger.mesg(f"    ✓ Clicked {action} (frame_locator)")
                 return action
 
             return None
@@ -907,9 +884,7 @@ class CaptchaBypass:
                 if self.verbose:
                     logger.okay(f"    ✓ Navigated to: {logstr.file(url[:80])}")
                 try:
-                    await page.wait_for_selector(
-                        "#search, #rso, div.g", timeout=10000
-                    )
+                    await page.wait_for_selector("#search, #rso, div.g", timeout=10000)
                 except Exception:
                     pass
                 return True

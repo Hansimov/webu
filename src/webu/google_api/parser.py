@@ -111,9 +111,7 @@ def _dedup_key(url: str) -> str:
 
             params = parse_qs(parsed.query, keep_blank_values=True)
             tracking_keys = {"ved", "sa", "usg", "ei", "source", "opi", "gs_lcrp"}
-            clean_params = {
-                k: v for k, v in params.items() if k not in tracking_keys
-            }
+            clean_params = {k: v for k, v in params.items() if k not in tracking_keys}
             clean_query = urlencode(clean_params, doseq=True)
             return f"{parsed.scheme}://{parsed.hostname}{parsed.path}" + (
                 f"?{clean_query}" if clean_query else ""
@@ -300,11 +298,7 @@ class GoogleResultParser:
             response.total_results_text = result_stats.get_text(strip=True)
 
         # 确定搜索范围（优先 #search，再 #rso，最后整个页面）
-        scope = (
-            soup.find("div", id="search")
-            or soup.find("div", id="rso")
-            or soup
-        )
+        scope = soup.find("div", id="search") or soup.find("div", id="rso") or soup
 
         # ── 策略 1：h3 锚点法（最稳健）──────────────
         results, seen_urls = self._parse_by_h3_anchors(scope)
@@ -606,21 +600,15 @@ class GoogleResultParser:
             return ""
 
         # 1) 去除 "Translate this page" 及变体
-        snippet = re.sub(
-            r"Translate this page\.?\s*", "", snippet
-        ).strip()
-        snippet = re.sub(
-            r"翻译此页\.?\s*", "", snippet
-        ).strip()
+        snippet = re.sub(r"Translate this page\.?\s*", "", snippet).strip()
+        snippet = re.sub(r"翻译此页\.?\s*", "", snippet).strip()
 
         # 2) 去除标题前缀（snippet 以 title 开头时）
         if title and snippet.startswith(title):
-            snippet = snippet[len(title):].lstrip(" \t\n·—-–:：.。")
+            snippet = snippet[len(title) :].lstrip(" \t\n·—-–:：.。")
 
         # 3) 去除开头的 URL 残留（如 "https://example.com › ..."）
-        snippet = re.sub(
-            r"^https?://\S+\s*›?\s*", "", snippet
-        ).strip()
+        snippet = re.sub(r"^https?://\S+\s*›?\s*", "", snippet).strip()
 
         # 4) 去除显示 URL（cite）残留
         if container:
@@ -628,20 +616,14 @@ class GoogleResultParser:
             if cite:
                 cite_text = cite.get_text(strip=True)
                 if cite_text and snippet.startswith(cite_text):
-                    snippet = snippet[len(cite_text):].lstrip(
-                        " \t\n·—-–:：.。"
-                    )
+                    snippet = snippet[len(cite_text) :].lstrip(" \t\n·—-–:：.。")
 
         # 5) 去除日期前缀（如 "Jan 1, 2025 — "、"2025年1月1日 — "）
-        snippet = re.sub(
-            r"^\d{1,2}\s+\w{3,9}\s+\d{4}\s*[—–-]\s*", "", snippet
-        ).strip()
+        snippet = re.sub(r"^\d{1,2}\s+\w{3,9}\s+\d{4}\s*[—–-]\s*", "", snippet).strip()
         snippet = re.sub(
             r"^\w{3,9}\s+\d{1,2},?\s+\d{4}\s*[—–-]\s*", "", snippet
         ).strip()
-        snippet = re.sub(
-            r"^\d{4}年\d{1,2}月\d{1,2}日\s*[—–-]?\s*", "", snippet
-        ).strip()
+        snippet = re.sub(r"^\d{4}年\d{1,2}月\d{1,2}日\s*[—–-]?\s*", "", snippet).strip()
 
         return snippet
 
@@ -658,24 +640,21 @@ class GoogleResultParser:
 
         # 去除 "YouTube" + 后面的元数据（中间可能是 ·、空格、|）
         # 如 "标题YouTube·Wanderbots·3 hours ago" → "标题"
-        title = re.sub(
-            r"YouTube[·|\s].*$", "", title
-        ).strip()
-        title = re.sub(
-            r"Bilibili[·|\s].*$", "", title
-        ).strip()
-        title = re.sub(
-            r"Vimeo[·|\s].*$", "", title
-        ).strip()
+        title = re.sub(r"YouTube[·|\s].*$", "", title).strip()
+        title = re.sub(r"Bilibili[·|\s].*$", "", title).strip()
+        title = re.sub(r"Vimeo[·|\s].*$", "", title).strip()
 
         # 去除末尾的时间信息（如 "3 hours ago"、"2天前"）
         title = re.sub(
             r"\s*·?\s*\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago\s*$",
-            "", title, flags=re.IGNORECASE,
+            "",
+            title,
+            flags=re.IGNORECASE,
         ).strip()
         title = re.sub(
             r"\s*·?\s*\d+\s*(?:秒|分钟|小时|天|周|个月|年)前\s*$",
-            "", title,
+            "",
+            title,
         ).strip()
 
         return title

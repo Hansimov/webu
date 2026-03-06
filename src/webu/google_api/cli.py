@@ -101,10 +101,14 @@ def cmd_start(args):
     _ensure_data_dir()
 
     cmd = [
-        sys.executable, "-m", "uvicorn",
+        sys.executable,
+        "-m",
+        "uvicorn",
         "webu.google_api.server:app_instance",
-        "--host", host,
-        "--port", str(port),
+        "--host",
+        host,
+        "--port",
+        str(port),
         "--factory",
     ]
 
@@ -329,8 +333,7 @@ def cmd_search(args):
                 return
 
             logger.okay(
-                f"  ✓ {len(result.results)} results"
-                f" ({result.total_results_text})"
+                f"  ✓ {len(result.results)} results" f" ({result.total_results_text})"
             )
             for i, r in enumerate(result.results):
                 logger.mesg(f"\n  [{i+1}] {r.title}")
@@ -436,11 +439,13 @@ def _parse_proxy_list(proxies_str: str) -> list[dict]:
         url = url.strip()
         if not url:
             continue
-        proxy_list.append({
-            "url": url,
-            "role": "primary" if i == 0 else "backup",
-            "name": url,
-        })
+        proxy_list.append(
+            {
+                "url": url,
+                "role": "primary" if i == 0 else "backup",
+                "name": url,
+            }
+        )
     return proxy_list
 
 
@@ -499,9 +504,7 @@ def main():
     sp_search.set_defaults(func=cmd_search)
 
     # search-test
-    sp_stest = subparsers.add_parser(
-        "search-test", help="用多个代理测试搜索"
-    )
+    sp_stest = subparsers.add_parser("search-test", help="用多个代理测试搜索")
     sp_stest.add_argument("--query", default="test", help="搜索查询词")
     sp_stest.add_argument(
         "--proxies",
@@ -510,9 +513,7 @@ def main():
     sp_stest.set_defaults(func=cmd_search_test)
 
     # proxy-status
-    sp_pstatus = subparsers.add_parser(
-        "proxy-status", help="查看代理健康状态"
-    )
+    sp_pstatus = subparsers.add_parser("proxy-status", help="查看代理健康状态")
     sp_pstatus.add_argument(
         "--proxies",
         help="逗号分隔的代理列表（默认使用配置代理）",
@@ -520,9 +521,7 @@ def main():
     sp_pstatus.set_defaults(func=cmd_proxy_status)
 
     # proxy-check
-    sp_pcheck = subparsers.add_parser(
-        "proxy-check", help="立即执行代理健康检查"
-    )
+    sp_pcheck = subparsers.add_parser("proxy-check", help="立即执行代理健康检查")
     sp_pcheck.add_argument(
         "--proxies",
         help="逗号分隔的代理列表（默认使用配置代理）",

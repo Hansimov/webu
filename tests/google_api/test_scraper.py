@@ -211,7 +211,9 @@ class TestPerfTimer:
 
     def test_init_params(self):
         """测试 GoogleScraper 新增参数。"""
-        scraper = GoogleScraper(headless=True, verbose=False, proxy_url="http://127.0.0.1:11119")
+        scraper = GoogleScraper(
+            headless=True, verbose=False, proxy_url="http://127.0.0.1:11119"
+        )
         assert scraper._fixed_proxy == "http://127.0.0.1:11119"
         assert scraper._profile_dir is not None
         assert scraper._cookie_file is not None

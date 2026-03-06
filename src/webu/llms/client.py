@@ -150,7 +150,10 @@ class LLMClient:
             # (connect_timeout, read_timeout) — generous read timeout for thinking models
             req_kwargs["timeout"] = (min(timeout, 30), timeout)
         response = requests.post(
-            self.endpoint, headers=headers, json=payload, stream=stream,
+            self.endpoint,
+            headers=headers,
+            json=payload,
+            stream=stream,
             **req_kwargs,
         )
         return response

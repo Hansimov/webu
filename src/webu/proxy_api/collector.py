@@ -64,7 +64,11 @@ class ProxyCollector:
             logger.mesg(f"  URL: {url}")
 
         try:
-            proxies = {"http": self.fetch_proxy, "https": self.fetch_proxy} if self.fetch_proxy else None
+            proxies = (
+                {"http": self.fetch_proxy, "https": self.fetch_proxy}
+                if self.fetch_proxy
+                else None
+            )
             resp = requests.get(url, timeout=self.timeout, proxies=proxies)
             resp.raise_for_status()
             text = resp.text
@@ -101,7 +105,8 @@ class ProxyCollector:
         if abandoned_set:
             before_count = len(all_ips)
             all_ips = [
-                ip for ip in all_ips
+                ip
+                for ip in all_ips
                 if (ip["ip"], ip["port"], ip["protocol"]) not in abandoned_set
             ]
             skipped = before_count - len(all_ips)

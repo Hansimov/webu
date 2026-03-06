@@ -138,8 +138,12 @@ class TestWarpIntegration:
         """通过 SOCKS5 代理检测出口 IP。"""
         result = subprocess.run(
             [
-                "curl", "-s", "--max-time", "15",
-                "--socks5-hostname", f"127.0.0.1:{WARP_PROXY_PORT}",
+                "curl",
+                "-s",
+                "--max-time",
+                "15",
+                "--socks5-hostname",
+                f"127.0.0.1:{WARP_PROXY_PORT}",
                 "https://api.ipify.org",
             ],
             capture_output=True,
@@ -153,19 +157,25 @@ class TestWarpIntegration:
         # 确认不是直连 IP
         direct = subprocess.run(
             ["curl", "-4", "-s", "--max-time", "10", "https://api.ipify.org"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         direct_ip = direct.stdout.strip()
-        assert exit_ip != direct_ip, (
-            f"Proxy exit IP ({exit_ip}) should differ from direct IP ({direct_ip})"
-        )
+        assert (
+            exit_ip != direct_ip
+        ), f"Proxy exit IP ({exit_ip}) should differ from direct IP ({direct_ip})"
 
     def test_proxy_http_forward_ip_check(self):
         """通过 HTTP Forward Proxy 检测出口 IP (curl --proxy http://...)。"""
         result = subprocess.run(
             [
-                "curl", "-s", "--max-time", "15",
-                "--proxy", f"http://127.0.0.1:{WARP_PROXY_PORT}",
+                "curl",
+                "-s",
+                "--max-time",
+                "15",
+                "--proxy",
+                f"http://127.0.0.1:{WARP_PROXY_PORT}",
                 "http://ifconfig.me/ip",
             ],
             capture_output=True,
@@ -179,17 +189,25 @@ class TestWarpIntegration:
         # 确认不是直连 IP
         direct = subprocess.run(
             ["curl", "-4", "-s", "--max-time", "10", "http://ifconfig.me/ip"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         direct_ip = direct.stdout.strip()
-        assert exit_ip != direct_ip, (
-            f"HTTP forward proxy exit IP ({exit_ip}) should differ from direct IP ({direct_ip})"
-        )
+        assert (
+            exit_ip != direct_ip
+        ), f"HTTP forward proxy exit IP ({exit_ip}) should differ from direct IP ({direct_ip})"
 
     def test_api_health(self):
         """验证管理 API 健康检查。"""
         result = subprocess.run(
-            ["curl", "-s", "--max-time", "5", f"http://{WARP_API_HOST}:{WARP_API_PORT}/health"],
+            [
+                "curl",
+                "-s",
+                "--max-time",
+                "5",
+                f"http://{WARP_API_HOST}:{WARP_API_PORT}/health",
+            ],
             capture_output=True,
             text=True,
             timeout=10,
@@ -197,5 +215,6 @@ class TestWarpIntegration:
         if result.returncode != 0:
             pytest.skip("API not running")
         import json
+
         data = json.loads(result.stdout)
         assert data["status"] == "ok"

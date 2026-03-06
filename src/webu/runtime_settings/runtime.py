@@ -94,7 +94,9 @@ def resolve_proxy_catalog(runtime_env: str | None = None) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def resolve_local_google_proxies(runtime_env: str | None = None) -> list[dict[str, str]]:
+def resolve_local_google_proxies(
+    runtime_env: str | None = None,
+) -> list[dict[str, str]]:
     catalog = resolve_proxy_catalog(runtime_env=runtime_env)
     section = catalog.get("google_api", {})
     if isinstance(section, dict):
@@ -191,7 +193,9 @@ def resolve_google_api_service_profile(
     config = load_json_config("google_api") or {}
 
     resolved_type = _normalize_service_type(
-        os.getenv("WEBU_GOOGLE_SERVICE_TYPE") or service_type or config.get("service_type", ""),
+        os.getenv("WEBU_GOOGLE_SERVICE_TYPE")
+        or service_type
+        or config.get("service_type", ""),
         env,
     )
     env_url = str(os.getenv("WEBU_GOOGLE_SERVICE_URL", "")).strip()
@@ -206,8 +210,15 @@ def resolve_google_api_service_profile(
             selected = item
             break
 
-    resolved_host = str(host or os.getenv("WEBU_GOOGLE_HOST", config.get("host", "0.0.0.0")))
-    resolved_port = int(port or _env_int("WEBU_GOOGLE_PORT", int(config.get("port", DEFAULT_GOOGLE_API_PORT))))
+    resolved_host = str(
+        host or os.getenv("WEBU_GOOGLE_HOST", config.get("host", "0.0.0.0"))
+    )
+    resolved_port = int(
+        port
+        or _env_int(
+            "WEBU_GOOGLE_PORT", int(config.get("port", DEFAULT_GOOGLE_API_PORT))
+        )
+    )
     default_url = f"http://127.0.0.1:{resolved_port}"
     selected_url = str(selected.get("url", "")).strip()
     derived_url = ""
@@ -219,7 +230,11 @@ def resolve_google_api_service_profile(
     return {
         "url": env_url or selected_url or derived_url or default_url,
         "type": resolved_type,
-        "api_token": env_token if env_token is not None else str(selected.get("api_token", "")).strip(),
+        "api_token": (
+            env_token
+            if env_token is not None
+            else str(selected.get("api_token", "")).strip()
+        ),
     }
 
 
@@ -259,7 +274,9 @@ def _load_json_file(path: Path) -> Any:
 def load_json_config(name: str) -> Any:
     paths = get_workspace_paths()
     env_key = f"WEBU_{name.upper()}_CONFIG_PATH"
-    config_path = Path(os.getenv(env_key, paths.config_dir / f"{name}.json")).expanduser()
+    config_path = Path(
+        os.getenv(env_key, paths.config_dir / f"{name}.json")
+    ).expanduser()
     payload = _load_json_file(config_path)
 
     validation_env = os.getenv("WEBU_VALIDATE_CONFIGS", "true").strip().lower()
@@ -294,7 +311,9 @@ def _env_json(name: str) -> Any:
     return json.loads(value)
 
 
-def _merge_mapping(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
+def _merge_mapping(
+    base: dict[str, Any], override: dict[str, Any] | None
+) -> dict[str, Any]:
     merged = dict(base)
     if not override:
         return merged
@@ -350,7 +369,9 @@ def resolve_captcha_vlm_settings() -> CaptchaVlmSettings:
     endpoint = os.getenv("WEBU_CAPTCHA_VLM_ENDPOINT", merged.get("endpoint", ""))
     api_key = os.getenv("WEBU_CAPTCHA_VLM_API_KEY", merged.get("api_key", ""))
     model = os.getenv("WEBU_CAPTCHA_VLM_MODEL", merged.get("model", ""))
-    api_format = os.getenv("WEBU_CAPTCHA_VLM_API_FORMAT", merged.get("api_format", "openai"))
+    api_format = os.getenv(
+        "WEBU_CAPTCHA_VLM_API_FORMAT", merged.get("api_format", "openai")
+    )
 
     return CaptchaVlmSettings(
         endpoint=str(endpoint).rstrip("/"),
@@ -374,7 +395,11 @@ def resolve_google_api_settings(
     runtime_env = runtime_env or detect_runtime_environment()
     config = load_json_config("google_api") or {}
 
-    proxy_mode = os.getenv("WEBU_GOOGLE_PROXY_MODE", config.get("proxy_mode", "auto")).strip().lower()
+    proxy_mode = (
+        os.getenv("WEBU_GOOGLE_PROXY_MODE", config.get("proxy_mode", "auto"))
+        .strip()
+        .lower()
+    )
     proxies = _env_json("WEBU_GOOGLE_PROXIES")
     if proxies is None:
         proxies = resolve_local_google_proxies(runtime_env=runtime_env)
@@ -405,7 +430,9 @@ def resolve_google_api_settings(
         )
 
     resolved_host = host or os.getenv("WEBU_GOOGLE_HOST", config.get("host", "0.0.0.0"))
-    resolved_port = port or _env_int("WEBU_GOOGLE_PORT", int(config.get("port", DEFAULT_GOOGLE_API_PORT)))
+    resolved_port = port or _env_int(
+        "WEBU_GOOGLE_PORT", int(config.get("port", DEFAULT_GOOGLE_API_PORT))
+    )
 
     profile_dir = Path(
         os.getenv(
@@ -453,18 +480,28 @@ def resolve_google_docker_settings() -> GoogleDockerSettings:
     runtime_env = detect_runtime_environment()
     config = load_json_config("google_docker") or {}
     host = os.getenv("WEBU_DOCKER_HOST", config.get("host", "0.0.0.0"))
-    port = _env_int("WEBU_DOCKER_PORT", int(config.get("port", DEFAULT_GOOGLE_API_PORT)))
+    port = _env_int(
+        "WEBU_DOCKER_PORT", int(config.get("port", DEFAULT_GOOGLE_API_PORT))
+    )
     app_port = _env_int("WEBU_DOCKER_APP_PORT", int(config.get("app_port", port)))
-    image_name = os.getenv("WEBU_DOCKER_IMAGE", config.get("image_name", "webu/google-api:dev"))
-    container_name = os.getenv("WEBU_DOCKER_CONTAINER", config.get("container_name", "webu-google-api"))
+    image_name = os.getenv(
+        "WEBU_DOCKER_IMAGE", config.get("image_name", "webu/google-api:dev")
+    )
+    container_name = os.getenv(
+        "WEBU_DOCKER_CONTAINER", config.get("container_name", "webu-google-api")
+    )
     admin_token = os.getenv("WEBU_ADMIN_TOKEN", config.get("admin_token", ""))
     service_log_path = Path(
         os.getenv(
             "WEBU_SERVICE_LOG",
-            config.get("service_log_path", paths.data_dir / "google_docker" / "service.log"),
+            config.get(
+                "service_log_path", paths.data_dir / "google_docker" / "service.log"
+            ),
         )
     ).expanduser()
-    config_dir = Path(os.getenv("WEBU_CONTAINER_CONFIG_DIR", paths.config_dir)).expanduser()
+    config_dir = Path(
+        os.getenv("WEBU_CONTAINER_CONFIG_DIR", paths.config_dir)
+    ).expanduser()
 
     return GoogleDockerSettings(
         host=str(host),
@@ -488,7 +525,11 @@ def resolve_hf_space_settings(space_name: str) -> HfSpaceSettings:
             matched = entry
             break
     matched = matched or {}
-    hf_token = os.getenv("WEBU_HF_TOKEN") or os.getenv("HF_TOKEN") or matched.get("hf_token", "")
+    hf_token = (
+        os.getenv("WEBU_HF_TOKEN")
+        or os.getenv("HF_TOKEN")
+        or matched.get("hf_token", "")
+    )
     return HfSpaceSettings(
         repo_id=space_name,
         hf_token=str(hf_token),

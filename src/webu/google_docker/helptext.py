@@ -6,9 +6,15 @@ from webu.runtime_settings import DEFAULT_GOOGLE_API_PORT, DEFAULT_GOOGLE_HUB_PO
 from webu.runtime_settings.sensitive import assert_public_text_safe
 
 
-USAGE_DOC_PATH = Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "USAGE.md"
-SETUP_DOC_PATH = Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "SETUP.md"
-HINTS_DOC_PATH = Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "HINTS.md"
+USAGE_DOC_PATH = (
+    Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "USAGE.md"
+)
+SETUP_DOC_PATH = (
+    Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "SETUP.md"
+)
+HINTS_DOC_PATH = (
+    Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "HINTS.md"
+)
 
 OVERVIEW_SECTIONS = [
     (
@@ -27,7 +33,7 @@ OVERVIEW_SECTIONS = [
             "ggdk hub-docker-up --mount-configs --replace",
             "ggdk hub-check",
             "ggdk hf-sync-all",
-            "ggdk hub-search \"OpenAI news\"",
+            'ggdk hub-search "OpenAI news"',
         ],
     ),
 ]
@@ -38,11 +44,15 @@ COMMAND_HELP = {
     },
     "serve": {
         "summary": "以前台方式直接启动 google_docker 服务。",
-        "examples": [f"python -m webu.google_docker serve --host 0.0.0.0 --port {DEFAULT_GOOGLE_API_PORT}"],
+        "examples": [
+            f"python -m webu.google_docker serve --host 0.0.0.0 --port {DEFAULT_GOOGLE_API_PORT}"
+        ],
     },
     "hub-serve": {
         "summary": "以前台方式直接启动中心化 google_hub 服务。",
-        "examples": [f"python -m webu.google_docker hub-serve --host 0.0.0.0 --port {DEFAULT_GOOGLE_HUB_PORT}"],
+        "examples": [
+            f"python -m webu.google_docker hub-serve --host 0.0.0.0 --port {DEFAULT_GOOGLE_HUB_PORT}"
+        ],
     },
     "docker-build": {
         "summary": "构建本地 Docker 镜像。",
@@ -65,7 +75,10 @@ COMMAND_HELP = {
     },
     "docker-check": {
         "summary": "检查本地容器状态、服务健康和同端口冲突提示。",
-        "examples": ["ggdk docker-check", f"ggdk docker-check --port {DEFAULT_GOOGLE_API_PORT}"],
+        "examples": [
+            "ggdk docker-check",
+            f"ggdk docker-check --port {DEFAULT_GOOGLE_API_PORT}",
+        ],
     },
     "docker-logs": {
         "summary": "查看本地 Docker 日志。",
@@ -92,7 +105,10 @@ COMMAND_HELP = {
     },
     "hub-check": {
         "summary": "检查本地 hub 服务和所有后端状态。",
-        "examples": ["ggdk hub-check", f"ggdk hub-check --port {DEFAULT_GOOGLE_HUB_PORT}"],
+        "examples": [
+            "ggdk hub-check",
+            f"ggdk hub-check --port {DEFAULT_GOOGLE_HUB_PORT}",
+        ],
     },
     "hub-backends": {
         "summary": "列出 hub 当前维护的后端状态和指标。",
@@ -123,7 +139,11 @@ COMMAND_HELP = {
     },
     "hf-sync-all": {
         "summary": "并行把当前代码同步到所有启用的 HF Spaces。",
-        "examples": ["ggdk hf-sync-all", "ggdk hf-sync-all --restart", "ggdk hf-sync-all --max-workers 4"],
+        "examples": [
+            "ggdk hf-sync-all",
+            "ggdk hf-sync-all --restart",
+            "ggdk hf-sync-all --max-workers 4",
+        ],
     },
     "hf-status": {
         "summary": "查看 HF Space 运行状态。",
@@ -307,7 +327,9 @@ def render_usage_markdown() -> str:
     lines.append("2. 临时覆盖管理 token：加 `--admin-token ...`。")
     lines.append("3. 临时覆盖搜索 token：加 `--api-token ...`。")
     lines.append("4. 验证匿名行为：对 `hf-search` 使用 `--no-auth`。")
-    lines.append("5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。")
+    lines.append(
+        "5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。"
+    )
     lines.append("6. 配置有疑问时，先运行 `ggdk config-check`。")
     lines.append("7. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。")
     lines.append("")

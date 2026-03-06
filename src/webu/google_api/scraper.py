@@ -34,7 +34,10 @@ from .constants import (
     LOCALES,
 )
 from .parser import GoogleResultParser, GoogleSearchResponse
-from .profile_assets import resolve_bootstrap_secret, resolve_default_bootstrap_archive_path
+from .profile_assets import (
+    resolve_bootstrap_secret,
+    resolve_default_bootstrap_archive_path,
+)
 from .profile_bootstrap import restore_encrypted_profile_archive
 from .proxy_manager import ProxyManager
 from webu.captcha import CaptchaBypass
@@ -123,7 +126,9 @@ def _save_screenshot_and_html(
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
     safe_query = query[:30].replace(" ", "_").replace("/", "_")
-    safe_proxy = (proxy_url or "direct").replace("://", "_").replace(":", "_").replace("/", "")
+    safe_proxy = (
+        (proxy_url or "direct").replace("://", "_").replace(":", "_").replace("/", "")
+    )
     base_name = f"{ts}_{reason}_{safe_query}_{safe_proxy}"
 
     if screenshot_bytes:
@@ -171,7 +176,9 @@ class GoogleScraper:
         self._fixed_proxy = proxy_url
         # 持久化目录（Cookie / Chrome Profile）
         self._profile_dir = Path(profile_dir) if profile_dir else DEFAULT_PROFILE_DIR
-        self._screenshot_dir = Path(screenshot_dir) if screenshot_dir else SCREENSHOT_DIR
+        self._screenshot_dir = (
+            Path(screenshot_dir) if screenshot_dir else SCREENSHOT_DIR
+        )
         # Cookie 持久化文件
         self._cookie_file = self._profile_dir / "google_cookies.json"
 
@@ -224,15 +231,21 @@ class GoogleScraper:
 
     def _bootstrap_profile_dir(self):
         bootstrap_archive = resolve_default_bootstrap_archive_path().expanduser()
-        bootstrap_dir = Path(os.getenv("WEBU_GOOGLE_PROFILE_BOOTSTRAP_DIR", "")).expanduser()
+        bootstrap_dir = Path(
+            os.getenv("WEBU_GOOGLE_PROFILE_BOOTSTRAP_DIR", "")
+        ).expanduser()
         if self._profile_dir.exists() and any(self._profile_dir.iterdir()):
             return
 
         if str(bootstrap_archive) and bootstrap_archive.exists():
             bootstrap_token = resolve_bootstrap_secret()
-            restore_encrypted_profile_archive(bootstrap_archive, self._profile_dir, bootstrap_token)
+            restore_encrypted_profile_archive(
+                bootstrap_archive, self._profile_dir, bootstrap_token
+            )
             if self.verbose:
-                logger.mesg(f"  Bootstrapped profile dir: {logstr.file(self._profile_dir)}")
+                logger.mesg(
+                    f"  Bootstrapped profile dir: {logstr.file(self._profile_dir)}"
+                )
             return
 
         if not str(bootstrap_dir) or not bootstrap_dir.exists():
@@ -267,16 +280,11 @@ class GoogleScraper:
 
     async def _ensure_browser(self):
         """确保浏览器可用，必要时重启。"""
-        if (
-            self._browser
-            and self._search_count < self._max_searches_before_restart
-        ):
+        if self._browser and self._search_count < self._max_searches_before_restart:
             return
 
         if self._browser:
-            logger.note(
-                f"> Restarting browser after {self._search_count} searches ..."
-            )
+            logger.note(f"> Restarting browser after {self._search_count} searches ...")
             await self.stop()
 
         await self.start()
@@ -364,8 +372,7 @@ class GoogleScraper:
                     # ProxyManager 会提供下一个代理
                     requested_proxy = None
                     logger.warn(
-                        f"  × CAPTCHA (attempt {attempt + 1}), "
-                        f"switching proxy ..."
+                        f"  × CAPTCHA (attempt {attempt + 1}), " f"switching proxy ..."
                     )
                 else:
                     # 无 ProxyManager：保持使用原始代理重试
@@ -378,9 +385,7 @@ class GoogleScraper:
             if not result.results and attempt < retry_count:
                 # Google 明确表示无结果 → 不必重试
                 if result.error and "did not match" in result.error:
-                    logger.mesg(
-                        f"  ℹ Google returned no results for this query"
-                    )
+                    logger.mesg(f"  ℹ Google returned no results for this query")
                     break
 
                 # 无结果（超时等） — 报告代理失败，切换代理重试
@@ -394,8 +399,7 @@ class GoogleScraper:
                     )
                 else:
                     logger.warn(
-                        f"  × No results (attempt {attempt + 1}), "
-                        f"retrying ..."
+                        f"  × No results (attempt {attempt + 1}), " f"retrying ..."
                     )
                 await asyncio.sleep(random.uniform(1, 3))
                 continue
@@ -444,11 +448,14 @@ class GoogleScraper:
             page = await context.new_page()
             if self.verbose:
                 proxy_display = proxy_url or "direct"
-                logger.mesg(f"  ◆ Context created (proxy: {logstr.file(proxy_display)})")
+                logger.mesg(
+                    f"  ◆ Context created (proxy: {logstr.file(proxy_display)})"
+                )
             search_perf.stop()
 
             # 注入额外的反检测脚本
-            await page.add_init_script("""
+            await page.add_init_script(
+                """
                 // 隐藏 webdriver 属性
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined,
@@ -465,7 +472,8 @@ class GoogleScraper:
                 window.chrome = {
                     runtime: {},
                 };
-            """)
+            """
+            )
 
             # 构建搜索 URL
             params = {"q": query, "num": num, "hl": lang}
@@ -507,9 +515,7 @@ class GoogleScraper:
                 # 已确认无结果，跳过 selector 等待
                 if self.verbose:
                     elapsed_ms = int((time.time() - start_time) * 1000)
-                    logger.mesg(
-                        f"  ⏳ Google returned no results ({elapsed_ms}ms)"
-                    )
+                    logger.mesg(f"  ⏳ Google returned no results ({elapsed_ms}ms)")
             else:
                 selector_timeout = min(self.timeout, 8)
                 try:
@@ -600,9 +606,7 @@ class GoogleScraper:
                                 f"Got {len(response.results)} results"
                             )
                         else:
-                            logger.warn(
-                                "  ⚠ CAPTCHA bypassed but no results parsed"
-                            )
+                            logger.warn("  ⚠ CAPTCHA bypassed but no results parsed")
                     # 保存绕过后的页面截图
                     try:
                         shot = await page.screenshot(full_page=True)
@@ -675,7 +679,8 @@ class GoogleScraper:
             cookies = await context.cookies()
             # 只保存 Google 域名的 Cookie
             google_cookies = [
-                c for c in cookies
+                c
+                for c in cookies
                 if c.get("domain", "").endswith(".google.com")
                 or c.get("domain", "").endswith("google.com")
             ]
@@ -737,8 +742,7 @@ class GoogleScraper:
                 # 等待弹窗关闭和页面重新渲染
                 try:
                     await page.wait_for_selector(
-                        "#search, #rso, div.g",
-                        state="visible", timeout=8000
+                        "#search, #rso, div.g", state="visible", timeout=8000
                     )
                 except Exception:
                     pass
@@ -758,8 +762,7 @@ class GoogleScraper:
                     logger.mesg("  ✓ Clicked 'Accept all'")
                 try:
                     await page.wait_for_selector(
-                        "#search, #rso, div.g",
-                        state="visible", timeout=8000
+                        "#search, #rso, div.g", state="visible", timeout=8000
                     )
                 except Exception:
                     pass
@@ -784,11 +787,13 @@ class GoogleScraper:
         使用 page.evaluate 快速检测页面文本，避免 selector 超时。
         """
         try:
-            return await page.evaluate("""() => {
+            return await page.evaluate(
+                """() => {
                 const text = document.body ? document.body.innerText : '';
                 return text.includes('did not match any documents')
                     || text.includes('No results containing all your search terms');
-            }""")
+            }"""
+            )
         except Exception:
             return False
 
@@ -817,8 +822,6 @@ class GoogleScraper:
                 await asyncio.sleep(delay)
 
         success_count = sum(1 for r in results if r.results)
-        logger.okay(
-            f"  ✓ Batch done: {logstr.mesg(success_count)}/{total} successful"
-        )
+        logger.okay(f"  ✓ Batch done: {logstr.mesg(success_count)}/{total} successful")
 
         return results

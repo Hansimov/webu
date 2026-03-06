@@ -123,7 +123,11 @@ class WarpClient:
         for url in IP_CHECK_URLS:
             try:
                 host = url.split("//")[1].split("/")[0]
-                path = "/" + "/".join(url.split("//")[1].split("/")[1:]) if "/" in url.split("//")[1] else "/"
+                path = (
+                    "/" + "/".join(url.split("//")[1].split("/")[1:])
+                    if "/" in url.split("//")[1]
+                    else "/"
+                )
 
                 if use_warp:
                     # 使用 SO_BINDTODEVICE 绑定到 WARP 设备
@@ -167,7 +171,9 @@ class WarpClient:
                             break
                         data += chunk
                     ssock.close()
-                    body = data.decode(errors="replace").split("\r\n\r\n", 1)[-1].strip()
+                    body = (
+                        data.decode(errors="replace").split("\r\n\r\n", 1)[-1].strip()
+                    )
                 else:
                     # 直连也强制 IPv4 以便与 WARP 出口 IP 对比
                     infos = socket.getaddrinfo(host, 443, socket.AF_INET)
@@ -194,7 +200,9 @@ class WarpClient:
                             break
                         data += chunk
                     ssock.close()
-                    body = data.decode(errors="replace").split("\r\n\r\n", 1)[-1].strip()
+                    body = (
+                        data.decode(errors="replace").split("\r\n\r\n", 1)[-1].strip()
+                    )
 
                 # 验证返回值是有效 IP（而非 HTML 或其他内容）
                 ip = body.split("\n")[0].strip()

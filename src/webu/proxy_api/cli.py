@@ -93,10 +93,14 @@ def cmd_start(args):
     _ensure_data_dir()
 
     cmd = [
-        sys.executable, "-m", "uvicorn",
+        sys.executable,
+        "-m",
+        "uvicorn",
         "webu.proxy_api.server:app_instance",
-        "--host", host,
-        "--port", str(port),
+        "--host",
+        host,
+        "--port",
+        str(port),
         "--factory",
     ]
 
@@ -306,7 +310,9 @@ def main():
     sp_check = subparsers.add_parser("check", help="检测代理连通性 (Level-1)")
     sp_check.add_argument("--limit", type=int, default=200, help="最大检测数量")
     sp_check.add_argument(
-        "--mode", choices=["unchecked", "stale", "all"], default="unchecked",
+        "--mode",
+        choices=["unchecked", "stale", "all"],
+        default="unchecked",
         help="检测模式",
     )
     sp_check.set_defaults(func=cmd_check)

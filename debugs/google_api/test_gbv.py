@@ -41,9 +41,13 @@ URL_VARIANTS = [
 ]
 
 
-async def fetch_with_proxy(proxy_info: dict, url: str, timeout_s: int = 20) -> str | None:
+async def fetch_with_proxy(
+    proxy_info: dict, url: str, timeout_s: int = 20
+) -> str | None:
     """通过代理获取 URL 内容。"""
-    proxy_url = _build_proxy_url(proxy_info["ip"], proxy_info["port"], proxy_info["protocol"])
+    proxy_url = _build_proxy_url(
+        proxy_info["ip"], proxy_info["port"], proxy_info["protocol"]
+    )
     headers = {**_LEVEL2_HEADERS, "User-Agent": _random_ua()}
     timeout = aiohttp.ClientTimeout(total=timeout_s)
 
@@ -51,7 +55,9 @@ async def fetch_with_proxy(proxy_info: dict, url: str, timeout_s: int = 20) -> s
         is_socks = proxy_info["protocol"] in ("socks4", "socks5")
         if is_socks:
             connector = ProxyConnector.from_url(proxy_url)
-            session = aiohttp.ClientSession(connector=connector, headers=headers, timeout=timeout)
+            session = aiohttp.ClientSession(
+                connector=connector, headers=headers, timeout=timeout
+            )
         else:
             session = aiohttp.ClientSession(headers=headers, timeout=timeout)
 

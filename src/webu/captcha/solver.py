@@ -95,7 +95,11 @@ class GridAnnotator:
 
         # 计算每个格子的矩形区域（仅 grid 区域内）
         cell_rects = self._compute_cell_rects(
-            img, rows, cols, grid_top, grid_bottom,
+            img,
+            rows,
+            cols,
+            grid_top,
+            grid_bottom,
         )
 
         # 在图片上标注编号
@@ -142,7 +146,9 @@ class GridAnnotator:
         raise TypeError(f"Unsupported image type: {type(image_input)}")
 
     def _detect_grid_region(
-        self, img: np.ndarray, tolerance: float = 0.15,
+        self,
+        img: np.ndarray,
+        tolerance: float = 0.15,
     ) -> tuple[int, int, int]:
         """检测网格区域的上下边界和行列数。
 
@@ -169,7 +175,9 @@ class GridAnnotator:
         filtered = [y for y in clusters if h * 0.03 < y < h * 0.97]
 
         if self.verbose:
-            logger.mesg(f"  H-line clusters: {len(clusters)} raw, {len(filtered)} filtered")
+            logger.mesg(
+                f"  H-line clusters: {len(clusters)} raw, {len(filtered)} filtered"
+            )
 
         # 2. 对 3×3 和 4×4 尝试匹配
         best_score = float("inf")
@@ -190,8 +198,7 @@ class GridAnnotator:
 
                 if len(matched) == n + 1:
                     spacings = [
-                        matched[k + 1] - matched[k]
-                        for k in range(len(matched) - 1)
+                        matched[k + 1] - matched[k] for k in range(len(matched) - 1)
                     ]
                     avg_sp = sum(spacings) / len(spacings)
                     # 分数 = 间距偏差 + cell 宽高比偏差
@@ -222,7 +229,9 @@ class GridAnnotator:
         return grid_top, h, 3
 
     def _find_horizontal_line_clusters(
-        self, img: np.ndarray, merge_gap: int = 15,
+        self,
+        img: np.ndarray,
+        merge_gap: int = 15,
     ) -> list[int]:
         """检测强水平线并聚类，返回 y 坐标列表。"""
         h, w = img.shape[:2]
@@ -470,7 +479,9 @@ class CaptchaSolver:
             需要点击的格子编号列表（1-based），空列表表示失败
         """
         if not self.endpoint:
-            logger.warn("  × VLM endpoint not configured (captcha config or WEBU_CAPTCHA_VLM_ENDPOINT)")
+            logger.warn(
+                "  × VLM endpoint not configured (captcha config or WEBU_CAPTCHA_VLM_ENDPOINT)"
+            )
             return []
 
         # 1) 标注网格
@@ -608,7 +619,9 @@ class CaptchaSolver:
 
             if attempt < self.max_retries:
                 if self.verbose:
-                    logger.warn(f"    VLM retry {attempt}/{self.max_retries}: {str(last_error)[:160]}")
+                    logger.warn(
+                        f"    VLM retry {attempt}/{self.max_retries}: {str(last_error)[:160]}"
+                    )
                 await asyncio.sleep(min(1.5 * attempt, 4.0))
 
         if last_error:
@@ -632,13 +645,19 @@ class CaptchaSolver:
                     continue
                 if not isinstance(item, dict):
                     continue
-                text = item.get("text") or item.get("content") or item.get("reasoning_content")
+                text = (
+                    item.get("text")
+                    or item.get("content")
+                    or item.get("reasoning_content")
+                )
                 if isinstance(text, str) and text.strip():
                     text_parts.append(text)
             if text_parts:
                 return "\n".join(text_parts)
 
-        reasoning = message.get("reasoning_content") or choices[0].get("reasoning_content")
+        reasoning = message.get("reasoning_content") or choices[0].get(
+            "reasoning_content"
+        )
         if isinstance(reasoning, str) and reasoning.strip():
             return reasoning
         return ""

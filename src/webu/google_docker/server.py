@@ -78,7 +78,9 @@ def create_google_docker_server(
         host=resolved_docker.host,
         port=resolved_docker.port,
     )
-    resolved_admin_token = admin_token if admin_token is not None else resolved_docker.admin_token
+    resolved_admin_token = (
+        admin_token if admin_token is not None else resolved_docker.admin_token
+    )
     home_mode = "panel" if resolved_docker.runtime_env == "hf-space" else "swagger"
 
     app = create_google_search_server(settings=resolved_google, home_mode=home_mode)
@@ -152,7 +154,11 @@ def app_instance():
 def main():
     parser = argparse.ArgumentParser(description="Run google_docker service")
     parser.add_argument("--host", default=os.getenv("WEBU_DOCKER_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_DOCKER_PORT", str(DEFAULT_GOOGLE_API_PORT))))
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("WEBU_DOCKER_PORT", str(DEFAULT_GOOGLE_API_PORT))),
+    )
     args = parser.parse_args()
     uvicorn.run(
         "webu.google_docker.server:app_instance",

@@ -9,7 +9,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from webu.fastapis.request_metrics import format_dashboard_timestamp, resolve_server_identity
+from webu.fastapis.request_metrics import (
+    format_dashboard_timestamp,
+    resolve_server_identity,
+)
 from webu.fastapis.styles import setup_root_redirect_page
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_HUB_PORT
 
@@ -65,7 +68,10 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
     app.state.google_hub_manager = manager
 
     def require_admin(x_admin_token: str | None = Header(default=None)):
-        if resolved_settings.admin_token and x_admin_token != resolved_settings.admin_token:
+        if (
+            resolved_settings.admin_token
+            and x_admin_token != resolved_settings.admin_token
+        ):
             raise HTTPException(status_code=401, detail="Invalid admin token")
 
     @app.get("/health", response_model=HubHealthResponse, tags=["系统"])
@@ -103,7 +109,9 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         return {
             "updated_at_human": format_dashboard_timestamp(),
             "strategy": metrics.get("strategy", "least-inflight"),
-            "node": resolve_server_identity(os.getenv("WEBU_RUNTIME_ENV", "local").strip().lower() or "local"),
+            "node": resolve_server_identity(
+                os.getenv("WEBU_RUNTIME_ENV", "local").strip().lower() or "local"
+            ),
             "health": {
                 "backend_count": len(metrics.get("backends", [])),
                 "healthy_backends": metrics.get("healthy_backends", 0),
@@ -112,7 +120,9 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
             "backends": metrics.get("backends", []),
         }
 
-    mount_google_hub_panel(app, lambda: build_snapshot_payload(asyncio.run(manager.metrics())))
+    mount_google_hub_panel(
+        app, lambda: build_snapshot_payload(asyncio.run(manager.metrics()))
+    )
 
     return app
 
@@ -124,7 +134,11 @@ def app_instance():
 def main():
     parser = argparse.ArgumentParser(description="Run google_hub service")
     parser.add_argument("--host", default=os.getenv("WEBU_HUB_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_HUB_PORT", str(DEFAULT_GOOGLE_HUB_PORT))))
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("WEBU_HUB_PORT", str(DEFAULT_GOOGLE_HUB_PORT))),
+    )
     args = parser.parse_args()
     uvicorn.run(
         "webu.google_hub.server:app_instance",

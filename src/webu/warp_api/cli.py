@@ -125,12 +125,17 @@ def cmd_start(args):
     # 后台启动 — 需要 root 权限以使用 SO_BINDTODEVICE
     python_exe = sys.executable
     serve_args = [
-        "-m", "webu.warp_api",
+        "-m",
+        "webu.warp_api",
         "_serve",
-        "--proxy-host", proxy_host,
-        "--proxy-port", str(proxy_port),
-        "--api-host", api_host,
-        "--api-port", str(api_port),
+        "--proxy-host",
+        proxy_host,
+        "--proxy-port",
+        str(proxy_port),
+        "--api-host",
+        api_host,
+        "--api-port",
+        str(api_port),
     ]
 
     if os.geteuid() == 0:
@@ -140,7 +145,10 @@ def cmd_start(args):
         if sudopass:
             # 使用 SUDOPASS 环境变量通过 sudo -S 提权
             cmd = [
-                "sudo", "-S", "env", f"PATH={os.environ.get('PATH', '')}",
+                "sudo",
+                "-S",
+                "env",
+                f"PATH={os.environ.get('PATH', '')}",
                 python_exe,
             ] + serve_args
         else:
@@ -307,7 +315,9 @@ def cmd_ip(args):
     result = warp.check_ip()
     logger.mesg(f"  Direct exit IP:    {logstr.mesg(result['direct_ip'] or 'N/A')}")
     logger.mesg(f"  WARP exit IP:      {logstr.mesg(result['warp_exit_ip'] or 'N/A')}")
-    logger.mesg(f"  WARP interface IP: {logstr.mesg(result['warp_interface_ip'] or 'N/A')}")
+    logger.mesg(
+        f"  WARP interface IP: {logstr.mesg(result['warp_interface_ip'] or 'N/A')}"
+    )
 
     if result["warp_active"]:
         logger.okay(f"  ✓ WARP is masking your IP")
@@ -449,9 +459,13 @@ def main():
     # start
     sp_start = subparsers.add_parser("start", help="启动 WARP 代理（后台）")
     sp_start.add_argument("--proxy-host", default=WARP_PROXY_HOST, help="代理绑定地址")
-    sp_start.add_argument("--proxy-port", type=int, default=WARP_PROXY_PORT, help="代理端口")
+    sp_start.add_argument(
+        "--proxy-port", type=int, default=WARP_PROXY_PORT, help="代理端口"
+    )
     sp_start.add_argument("--api-host", default=WARP_API_HOST, help="API 绑定地址")
-    sp_start.add_argument("--api-port", type=int, default=WARP_API_PORT, help="API 端口")
+    sp_start.add_argument(
+        "--api-port", type=int, default=WARP_API_PORT, help="API 端口"
+    )
     sp_start.set_defaults(func=cmd_start)
 
     # stop
@@ -460,10 +474,16 @@ def main():
 
     # restart
     sp_restart = subparsers.add_parser("restart", help="重启服务")
-    sp_restart.add_argument("--proxy-host", default=WARP_PROXY_HOST, help="代理绑定地址")
-    sp_restart.add_argument("--proxy-port", type=int, default=WARP_PROXY_PORT, help="代理端口")
+    sp_restart.add_argument(
+        "--proxy-host", default=WARP_PROXY_HOST, help="代理绑定地址"
+    )
+    sp_restart.add_argument(
+        "--proxy-port", type=int, default=WARP_PROXY_PORT, help="代理端口"
+    )
     sp_restart.add_argument("--api-host", default=WARP_API_HOST, help="API 绑定地址")
-    sp_restart.add_argument("--api-port", type=int, default=WARP_API_PORT, help="API 端口")
+    sp_restart.add_argument(
+        "--api-port", type=int, default=WARP_API_PORT, help="API 端口"
+    )
     sp_restart.set_defaults(func=cmd_restart)
 
     # status

@@ -109,7 +109,11 @@ async def _check_level1_single(
             body = await resp.text()
 
             if resp.status != expect_status:
-                return False, elapsed_ms, f"status={resp.status} (expected {expect_status})"
+                return (
+                    False,
+                    elapsed_ms,
+                    f"status={resp.status} (expected {expect_status})",
+                )
 
             if expect_body and expect_body not in body:
                 return False, elapsed_ms, f"body mismatch for {endpoint['name']}"
@@ -224,7 +228,9 @@ async def check_level1_batch(
                     "ip": item["ip"],
                     "port": item["port"],
                     "protocol": item["protocol"],
-                    "proxy_url": build_proxy_url(item["ip"], item["port"], item["protocol"]),
+                    "proxy_url": build_proxy_url(
+                        item["ip"], item["port"], item["protocol"]
+                    ),
                     "source": item.get("source", ""),
                     "is_valid": False,
                     "latency_ms": 0,

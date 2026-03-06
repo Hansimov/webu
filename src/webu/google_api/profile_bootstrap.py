@@ -129,22 +129,34 @@ def _should_skip_path(relative_path: Path, is_dir: bool) -> bool:
         return True
     if is_dir:
         return not _can_contain_allowed_descendants(relative_path)
-    return relative_path not in _ALLOWED_EXACT_PATHS and not _matches_allowed_prefix(relative_path)
+    return relative_path not in _ALLOWED_EXACT_PATHS and not _matches_allowed_prefix(
+        relative_path
+    )
 
 
 def _iter_profile_files(source_dir: Path):
     for root, dirnames, filenames in os.walk(source_dir):
         root_path = Path(root)
         relative_root = root_path.relative_to(source_dir)
-        dirnames[:] = [name for name in dirnames if not _should_skip_path(relative_root / name, is_dir=True)]
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not _should_skip_path(relative_root / name, is_dir=True)
+        ]
         for filename in filenames:
-            relative_path = relative_root / filename if str(relative_root) != "." else Path(filename)
+            relative_path = (
+                relative_root / filename
+                if str(relative_root) != "."
+                else Path(filename)
+            )
             if _should_skip_path(relative_path, is_dir=False):
                 continue
             yield root_path / filename, relative_path
 
 
-def create_encrypted_profile_archive(source_dir: str | Path, output_path: str | Path, secret: str) -> bool:
+def create_encrypted_profile_archive(
+    source_dir: str | Path, output_path: str | Path, secret: str
+) -> bool:
     source_dir = Path(source_dir).expanduser()
     output_path = Path(output_path).expanduser()
     if not secret.strip():
@@ -158,7 +170,9 @@ def create_encrypted_profile_archive(source_dir: str | Path, output_path: str | 
     try:
         with tarfile.open(temp_path, mode="w:gz") as archive:
             for file_path, relative_path in _iter_profile_files(source_dir):
-                archive.add(file_path, arcname=relative_path.as_posix(), recursive=False)
+                archive.add(
+                    file_path, arcname=relative_path.as_posix(), recursive=False
+                )
 
         plaintext = temp_path.read_bytes()
         output_path.write_bytes(_encrypt_bytes(plaintext, secret))
@@ -174,7 +188,9 @@ def _validate_archive_member(member_name: str, target_dir: Path):
         raise ValueError(f"Bootstrap archive contains unsafe path: {member_name}")
 
 
-def restore_encrypted_profile_archive(archive_path: str | Path, target_dir: str | Path, secret: str) -> None:
+def restore_encrypted_profile_archive(
+    archive_path: str | Path, target_dir: str | Path, secret: str
+) -> None:
     archive_path = Path(archive_path).expanduser()
     target_dir = Path(target_dir).expanduser()
     if not secret.strip():
@@ -198,5 +214,9 @@ def rewrite_encrypted_profile_archive(
 ) -> bool:
     with tempfile.TemporaryDirectory(prefix="webu-profile-rewrite-") as tempdir:
         restored_dir = Path(tempdir) / "profile"
-        restore_encrypted_profile_archive(source_archive_path, restored_dir, source_secret)
-        return create_encrypted_profile_archive(restored_dir, target_archive_path, target_secret)
+        restore_encrypted_profile_archive(
+            source_archive_path, restored_dir, source_secret
+        )
+        return create_encrypted_profile_archive(
+            restored_dir, target_archive_path, target_secret
+        )

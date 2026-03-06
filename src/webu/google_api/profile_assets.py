@@ -8,7 +8,9 @@ from .profile_bootstrap import DEFAULT_BOOTSTRAP_ARCHIVE_NAME
 
 
 DEFAULT_SHARED_PROFILE_SECRET = "webu"
-TRACKED_PROFILE_ARCHIVE_PATH = Path(__file__).resolve().parent / "assets" / DEFAULT_BOOTSTRAP_ARCHIVE_NAME
+TRACKED_PROFILE_ARCHIVE_PATH = (
+    Path(__file__).resolve().parent / "assets" / DEFAULT_BOOTSTRAP_ARCHIVE_NAME
+)
 
 
 def resolve_bootstrap_secret() -> str:

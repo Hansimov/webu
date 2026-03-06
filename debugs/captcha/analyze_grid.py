@@ -84,7 +84,9 @@ def analyze_one(name: str, path: Path) -> dict:
     # 标题区域颜色均匀（低方差），网格区域图片丰富（高方差）
     # 用滑窗平滑
     kernel_size = 11
-    row_var_smooth = np.convolve(row_var_norm, np.ones(kernel_size)/kernel_size, mode='same')
+    row_var_smooth = np.convolve(
+        row_var_norm, np.ones(kernel_size) / kernel_size, mode="same"
+    )
 
     # 在 search 范围内找到方差阶跃
     search_var = row_var_smooth[search_start:search_end]
@@ -103,7 +105,7 @@ def analyze_one(name: str, path: Path) -> dict:
     lines = cv2.HoughLinesP(
         line_edges,
         rho=1,
-        theta=np.pi/180,
+        theta=np.pi / 180,
         threshold=int(w * 0.6),  # 至少 60% 宽度
         minLineLength=int(w * 0.5),
         maxLineGap=10,
@@ -141,8 +143,15 @@ def analyze_one(name: str, path: Path) -> dict:
 
     # 画分界线（红色粗线）
     cv2.line(vis, (0, best_grid_top), (w, best_grid_top), (0, 0, 255), 3)
-    cv2.putText(vis, f"grid top: y={best_grid_top}", (10, best_grid_top - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    cv2.putText(
+        vis,
+        f"grid top: y={best_grid_top}",
+        (10, best_grid_top - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 0, 255),
+        2,
+    )
 
     # 画所有检测到的水平线（绿色细线）
     for yl in h_lines_found:
@@ -150,7 +159,7 @@ def analyze_one(name: str, path: Path) -> dict:
 
     # 画 "方法1" 分界线（蓝色虚线）
     for x in range(0, w, 10):
-        cv2.line(vis, (x, grid_top_simple), (x+5, grid_top_simple), (255, 0, 0), 2)
+        cv2.line(vis, (x, grid_top_simple), (x + 5, grid_top_simple), (255, 0, 0), 2)
 
     # 假设 3x3 网格（先通用分析）
     for grid_n in [3, 4]:
@@ -177,9 +186,23 @@ def analyze_one(name: str, path: Path) -> dict:
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
                 lx = x2 - tw - 8
                 ly = y2 - 8
-                cv2.rectangle(vis_grid, (lx-4, ly-th-4), (lx+tw+4, ly+4), (255,255,255), cv2.FILLED)
-                cv2.putText(vis_grid, label, (lx, ly),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2, cv2.LINE_AA)
+                cv2.rectangle(
+                    vis_grid,
+                    (lx - 4, ly - th - 4),
+                    (lx + tw + 4, ly + 4),
+                    (255, 255, 255),
+                    cv2.FILLED,
+                )
+                cv2.putText(
+                    vis_grid,
+                    label,
+                    (lx, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
                 cell_idx += 1
 
         out_path = OUTPUT_DIR / f"grid_analysis_{name}_{grid_n}x{grid_n}.png"
@@ -246,9 +269,11 @@ def main():
         if info:
             w, h = info["size"]
             gt = info["grid_top"]
-            print(f"  {name}: {w}×{h}, grid_top={gt}, "
-                  f"header={gt}px ({gt/h*100:.1f}%), "
-                  f"grid={h-gt}px ({(h-gt)/h*100:.1f}%)")
+            print(
+                f"  {name}: {w}×{h}, grid_top={gt}, "
+                f"header={gt}px ({gt/h*100:.1f}%), "
+                f"grid={h-gt}px ({(h-gt)/h*100:.1f}%)"
+            )
 
 
 if __name__ == "__main__":

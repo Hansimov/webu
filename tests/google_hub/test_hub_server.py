@@ -34,9 +34,20 @@ def _write_base_configs(config_dir):
         ),
         encoding="utf-8",
     )
-    (config_dir / "google_docker.json").write_text(json.dumps({"admin_token": "hub-secret"}), encoding="utf-8")
+    (config_dir / "google_docker.json").write_text(
+        json.dumps({"admin_token": "hub-secret"}), encoding="utf-8"
+    )
     (config_dir / "hf_spaces.json").write_text(
-        json.dumps([{"space": "owner/space1", "hf_token": "hf_demo", "enabled": True, "weight": 1}]),
+        json.dumps(
+            [
+                {
+                    "space": "owner/space1",
+                    "hf_token": "hf_demo",
+                    "enabled": True,
+                    "weight": 1,
+                }
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -50,7 +61,11 @@ def test_hub_admin_backends_requires_token(monkeypatch, tmp_path):
             {
                 "admin_token": "hub-secret",
                 "backends": [
-                    {"name": "local-google-api", "kind": "local-google-api", "base_url": "http://127.0.0.1:18200"}
+                    {
+                        "name": "local-google-api",
+                        "kind": "local-google-api",
+                        "base_url": "http://127.0.0.1:18200",
+                    }
                 ],
             }
         ),
@@ -81,8 +96,18 @@ def test_hub_search_routes_to_best_backend(monkeypatch, tmp_path):
         json.dumps(
             {
                 "backends": [
-                    {"name": "local-google-api", "kind": "local-google-api", "base_url": "http://127.0.0.1:18200", "weight": 2},
-                    {"name": "space1", "kind": "hf-space", "space": "owner/space1", "weight": 1},
+                    {
+                        "name": "local-google-api",
+                        "kind": "local-google-api",
+                        "base_url": "http://127.0.0.1:18200",
+                        "weight": 2,
+                    },
+                    {
+                        "name": "space1",
+                        "kind": "hf-space",
+                        "space": "owner/space1",
+                        "weight": 1,
+                    },
                 ]
             }
         ),
@@ -115,7 +140,9 @@ def test_hub_search_routes_to_best_backend(monkeypatch, tmp_path):
 
     app = create_google_hub_server()
     with TestClient(app) as client:
-        resp = client.get("/search", params={"q": "OpenAI news", "num": 5, "lang": "en"})
+        resp = client.get(
+            "/search", params={"q": "OpenAI news", "num": 5, "lang": "en"}
+        )
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["backend"] == "local-google-api"
@@ -133,8 +160,18 @@ def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
         json.dumps(
             {
                 "backends": [
-                    {"name": "local-google-api", "kind": "local-google-api", "base_url": "http://127.0.0.1:18200", "weight": 2},
-                    {"name": "space1", "kind": "hf-space", "space": "owner/space1", "weight": 1},
+                    {
+                        "name": "local-google-api",
+                        "kind": "local-google-api",
+                        "base_url": "http://127.0.0.1:18200",
+                        "weight": 2,
+                    },
+                    {
+                        "name": "space1",
+                        "kind": "hf-space",
+                        "space": "owner/space1",
+                        "weight": 1,
+                    },
                 ]
             }
         ),
@@ -168,7 +205,9 @@ def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
     monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
 
     with TestClient(create_google_hub_server()) as client:
-        resp = client.get("/search", params={"q": "OpenAI news", "num": 5, "lang": "en"})
+        resp = client.get(
+            "/search", params={"q": "OpenAI news", "num": 5, "lang": "en"}
+        )
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["backend"] == "space1"
@@ -183,7 +222,12 @@ def test_hub_panel_root_redirect_and_page(monkeypatch, tmp_path):
         json.dumps(
             {
                 "backends": [
-                    {"name": "local-google-api", "kind": "local-google-api", "base_url": "http://127.0.0.1:18200", "weight": 2}
+                    {
+                        "name": "local-google-api",
+                        "kind": "local-google-api",
+                        "base_url": "http://127.0.0.1:18200",
+                        "weight": 2,
+                    }
                 ]
             }
         ),

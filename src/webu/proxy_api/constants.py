@@ -74,7 +74,6 @@ PROXY_SOURCES: list[ProxySourceType] = [
         "protocol": "socks5",
         "source": "zloi-user",
     },
-
     # ── Tier 2: 每日更新，量大 ──────────────────────────────
     # TheSpeedX — 每日多次更新，量最大
     {
@@ -131,7 +130,6 @@ PROXY_SOURCES: list[ProxySourceType] = [
         "protocol": "http",
         "source": "sunny9577",
     },
-
     # ── Tier 3: API 接口源 ──────────────────────────────────
     # proxyscrape — 实时 API
     {

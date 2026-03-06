@@ -98,8 +98,14 @@ class RequestMetrics:
         accepted_requests = self._accepted_requests
         successful_requests = self._successful_requests
         failed_requests = self._failed_requests
-        avg_latency_ms = self._total_latency_ms / accepted_requests if accepted_requests else 0.0
-        success_rate = (successful_requests / accepted_requests * 100.0) if accepted_requests else 0.0
+        avg_latency_ms = (
+            self._total_latency_ms / accepted_requests if accepted_requests else 0.0
+        )
+        success_rate = (
+            (successful_requests / accepted_requests * 100.0)
+            if accepted_requests
+            else 0.0
+        )
         self._history.append(
             {
                 "ts": sample_ts,
@@ -113,7 +119,15 @@ class RequestMetrics:
             }
         )
 
-    def record(self, duration_ms: float, success: bool, *, query: str = "", backend: str = "", error: str = ""):
+    def record(
+        self,
+        duration_ms: float,
+        success: bool,
+        *,
+        query: str = "",
+        backend: str = "",
+        error: str = "",
+    ):
         latency_ms = max(0.0, float(duration_ms))
         now = datetime.now(tz=SHANGHAI_TZ)
         with self._lock:
@@ -130,23 +144,31 @@ class RequestMetrics:
                 self._min_latency_ms = min(self._min_latency_ms, latency_ms)
             self._max_latency_ms = max(self._max_latency_ms, latency_ms)
             self._append_history_locked()
-            self._request_log.append(RequestRecord(
-                ts=now.timestamp(),
-                ts_label=now.strftime("%H:%M:%S"),
-                success=success,
-                latency_ms=latency_ms,
-                query=query,
-                backend=backend,
-                error=error,
-            ))
+            self._request_log.append(
+                RequestRecord(
+                    ts=now.timestamp(),
+                    ts_label=now.strftime("%H:%M:%S"),
+                    success=success,
+                    latency_ms=latency_ms,
+                    query=query,
+                    backend=backend,
+                    error=error,
+                )
+            )
 
     def snapshot(self) -> RequestMetricsSnapshot:
         with self._lock:
             accepted_requests = self._accepted_requests
             successful_requests = self._successful_requests
             failed_requests = self._failed_requests
-            avg_latency_ms = self._total_latency_ms / accepted_requests if accepted_requests else 0.0
-            success_rate = (successful_requests / accepted_requests * 100.0) if accepted_requests else 0.0
+            avg_latency_ms = (
+                self._total_latency_ms / accepted_requests if accepted_requests else 0.0
+            )
+            success_rate = (
+                (successful_requests / accepted_requests * 100.0)
+                if accepted_requests
+                else 0.0
+            )
             return RequestMetricsSnapshot(
                 accepted_requests=accepted_requests,
                 successful_requests=successful_requests,
@@ -171,7 +193,9 @@ def resolve_server_identity(runtime_env: str) -> dict[str, str]:
 
     addresses: set[str] = set()
     try:
-        for info in socket.getaddrinfo(hostname, None, family=socket.AF_INET, type=socket.SOCK_STREAM):
+        for info in socket.getaddrinfo(
+            hostname, None, family=socket.AF_INET, type=socket.SOCK_STREAM
+        ):
             address = str(info[4][0]).strip()
             if address and not address.startswith("127."):
                 addresses.add(address)

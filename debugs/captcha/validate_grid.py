@@ -22,9 +22,9 @@ OUTPUT_DIR = Path("debugs/captcha")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SAMPLES = [
-    ("boats",          SAMPLES_DIR / "boats.jpg",           3),
-    ("crosswalks",     SAMPLES_DIR / "crosswalks.jpeg",     3),
-    ("traffic-lights", SAMPLES_DIR / "traffic-lights.jpg",  4),
+    ("boats", SAMPLES_DIR / "boats.jpg", 3),
+    ("crosswalks", SAMPLES_DIR / "crosswalks.jpeg", 3),
+    ("traffic-lights", SAMPLES_DIR / "traffic-lights.jpg", 4),
 ]
 
 
@@ -100,7 +100,9 @@ def detect_grid_region(
                         break
 
             if len(matched) == n + 1:
-                spacings = [matched[k + 1] - matched[k] for k in range(len(matched) - 1)]
+                spacings = [
+                    matched[k + 1] - matched[k] for k in range(len(matched) - 1)
+                ]
                 avg_sp = sum(spacings) / len(spacings)
                 # 分数 = 间距偏差 + cell 宽高比偏差
                 spacing_score = sum(abs(s - avg_sp) for s in spacings)
@@ -112,12 +114,20 @@ def detect_grid_region(
 
                 if total_score < best_score:
                     best_score = total_score
-                    best_result = (matched[0], matched[-1], n, matched, spacings,
-                                   total_score)
+                    best_result = (
+                        matched[0],
+                        matched[-1],
+                        n,
+                        matched,
+                        spacings,
+                        total_score,
+                    )
 
     if best_result:
         top, bottom, n, matched, spacings, score = best_result
-        print(f"    Best: {n}×{n}, lines={matched}, spacings={spacings}, score={score:.1f}")
+        print(
+            f"    Best: {n}×{n}, lines={matched}, spacings={spacings}, score={score:.1f}"
+        )
         return top, bottom, n
 
     # 回退：假设网格在底部正方形区域
@@ -154,18 +164,25 @@ def draw_grid(
 
             # 编号
             label = str(cell_idx)
-            (tw, th), _ = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2
-            )
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
             lx = x2 - tw - 8
             ly = y2 - 8
             cv2.rectangle(
-                vis, (lx - 4, ly - th - 4), (lx + tw + 4, ly + 4),
-                (255, 255, 255), cv2.FILLED,
+                vis,
+                (lx - 4, ly - th - 4),
+                (lx + tw + 4, ly + 4),
+                (255, 255, 255),
+                cv2.FILLED,
             )
             cv2.putText(
-                vis, label, (lx, ly),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2, cv2.LINE_AA,
+                vis,
+                label,
+                (lx, ly),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
             )
             cell_idx += 1
 

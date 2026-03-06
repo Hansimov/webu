@@ -137,12 +137,14 @@ class TestAntiDetection:
             page = await context.new_page()
 
             # 注入反检测脚本
-            await page.add_init_script("""
+            await page.add_init_script(
+                """
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined,
                 });
                 window.chrome = { runtime: {} };
-            """)
+            """
+            )
 
             await page.goto("about:blank")
             webdriver_val = await page.evaluate("navigator.webdriver")

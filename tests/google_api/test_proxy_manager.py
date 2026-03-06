@@ -39,8 +39,10 @@ class TestProxyState:
 
     def test_success_rate(self):
         state = ProxyState(
-            url="http://x", name="x",
-            total_successes=7, total_failures=3,
+            url="http://x",
+            name="x",
+            total_successes=7,
+            total_failures=3,
         )
         assert abs(state.success_rate - 0.7) < 0.01
 

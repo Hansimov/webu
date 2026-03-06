@@ -44,7 +44,10 @@ from webu.google_api.profile_bootstrap import (
     create_encrypted_profile_archive,
     rewrite_encrypted_profile_archive,
 )
-from webu.google_api.profile_assets import DEFAULT_SHARED_PROFILE_SECRET, TRACKED_PROFILE_ARCHIVE_PATH
+from webu.google_api.profile_assets import (
+    DEFAULT_SHARED_PROFILE_SECRET,
+    TRACKED_PROFILE_ARCHIVE_PATH,
+)
 from webu.runtime_settings import (
     DEFAULT_GOOGLE_API_PORT,
     DEFAULT_GOOGLE_HUB_PORT,
@@ -158,7 +161,11 @@ def _read_project_data(source_root: Path) -> dict:
 
 def _write_dependency_requirements(source_root: Path, bundle_root: Path):
     project_data = _read_project_data(source_root)
-    dependencies = [str(value).strip() for value in project_data.get("dependencies", []) if str(value).strip()]
+    dependencies = [
+        str(value).strip()
+        for value in project_data.get("dependencies", [])
+        if str(value).strip()
+    ]
     content = "\n".join(dependencies) + ("\n" if dependencies else "")
     (bundle_root / "requirements.txt").write_text(content, encoding="utf-8")
 
@@ -169,13 +176,28 @@ def _write_sanitized_pyproject(source_root: Path, bundle_root: Path):
         return
     lines = ["[project]"]
 
-    for key in ["name", "version", "description", "readme", "license", "requires-python"]:
+    for key in [
+        "name",
+        "version",
+        "description",
+        "readme",
+        "license",
+        "requires-python",
+    ]:
         value = project_data.get(key)
         if value:
             lines.append(f"{key} = {_format_toml_string(value)}")
 
-    lines.extend(_render_toml_string_list("classifiers", list(project_data.get("classifiers", []))))
-    lines.extend(_render_toml_string_list("dependencies", list(project_data.get("dependencies", []))))
+    lines.extend(
+        _render_toml_string_list(
+            "classifiers", list(project_data.get("classifiers", []))
+        )
+    )
+    lines.extend(
+        _render_toml_string_list(
+            "dependencies", list(project_data.get("dependencies", []))
+        )
+    )
 
     scripts = project_data.get("scripts", {})
     if scripts:
@@ -184,7 +206,9 @@ def _write_sanitized_pyproject(source_root: Path, bundle_root: Path):
         for key, value in scripts.items():
             lines.append(f"{key} = {_format_toml_string(value)}")
 
-    (bundle_root / "pyproject.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (bundle_root / "pyproject.toml").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
 
 def _create_google_profile_bootstrap_archive(bundle_root: Path):
@@ -192,11 +216,17 @@ def _create_google_profile_bootstrap_archive(bundle_root: Path):
     bootstrap_root.mkdir(parents=True, exist_ok=True)
     target_archive_path = bundle_root / SPACE_BOOTSTRAP_ARCHIVE
 
-    source_profile_dir = resolve_google_api_settings(runtime_env="local", service_type="local").profile_dir
-    google_service = resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
+    source_profile_dir = resolve_google_api_settings(
+        runtime_env="local", service_type="local"
+    ).profile_dir
+    google_service = resolve_google_api_service_profile(
+        runtime_env="hf-space", service_type="hf-space"
+    )
     api_token = str(google_service.get("api_token", "")).strip()
     if not api_token:
-        raise ValueError("google_api hf-space api_token is required to encrypt the bootstrap profile")
+        raise ValueError(
+            "google_api hf-space api_token is required to encrypt the bootstrap profile"
+        )
 
     if source_profile_dir.exists() and any(source_profile_dir.iterdir()):
         create_encrypted_profile_archive(
@@ -220,7 +250,9 @@ def _create_local_google_profile_bootstrap_archive(bundle_root: Path):
     bootstrap_root.mkdir(parents=True, exist_ok=True)
     target_archive_path = bundle_root / SPACE_BOOTSTRAP_ARCHIVE
 
-    source_profile_dir = resolve_google_api_settings(runtime_env="local", service_type="local").profile_dir
+    source_profile_dir = resolve_google_api_settings(
+        runtime_env="local", service_type="local"
+    ).profile_dir
     if source_profile_dir.exists() and any(source_profile_dir.iterdir()):
         create_encrypted_profile_archive(
             source_profile_dir,
@@ -260,14 +292,22 @@ def _profile_asset_path() -> Path:
     return TRACKED_PROFILE_ARCHIVE_PATH
 
 
-def _build_profile_export_candidates(preferred_spaces: list[str] | None = None) -> list[dict[str, str]]:
-    preferred_order = {space_name: index for index, space_name in enumerate(preferred_spaces or [])}
+def _build_profile_export_candidates(
+    preferred_spaces: list[str] | None = None,
+) -> list[dict[str, str]]:
+    preferred_order = {
+        space_name: index for index, space_name in enumerate(preferred_spaces or [])
+    }
     google_config = load_json_config("google_api") or {}
     default_admin_token = _resolve_admin_token()
-    default_hf_profile = resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
+    default_hf_profile = resolve_google_api_service_profile(
+        runtime_env="hf-space", service_type="hf-space"
+    )
     candidates: dict[str, dict[str, str]] = {}
 
-    local_profile = resolve_google_api_service_profile(runtime_env="local", service_type="local")
+    local_profile = resolve_google_api_service_profile(
+        runtime_env="local", service_type="local"
+    )
     local_url = str(local_profile.get("url", "")).strip().rstrip("/")
     if local_url:
         candidates[local_url] = {
@@ -278,7 +318,9 @@ def _build_profile_export_candidates(preferred_spaces: list[str] | None = None) 
             "admin_token": default_admin_token,
         }
 
-    for service in google_config.get("services", []) if isinstance(google_config, dict) else []:
+    for service in (
+        google_config.get("services", []) if isinstance(google_config, dict) else []
+    ):
         if not isinstance(service, dict):
             continue
         service_type = str(service.get("type", "")).strip().lower()
@@ -288,7 +330,8 @@ def _build_profile_export_candidates(preferred_spaces: list[str] | None = None) 
         if not base_url:
             continue
         candidates[base_url] = {
-            "name": str(service.get("name", "remote-server")).strip() or "remote-server",
+            "name": str(service.get("name", "remote-server")).strip()
+            or "remote-server",
             "space": "",
             "base_url": base_url,
             "search_api_token": str(service.get("api_token", "")).strip(),
@@ -321,7 +364,9 @@ def _build_profile_export_candidates(preferred_spaces: list[str] | None = None) 
     return ordered
 
 
-def _instance_looks_real_user_ready(candidate: dict[str, str], timeout: int = 60) -> tuple[bool, str]:
+def _instance_looks_real_user_ready(
+    candidate: dict[str, str], timeout: int = 60
+) -> tuple[bool, str]:
     try:
         response = requests.get(f"{candidate['base_url']}/health", timeout=timeout)
         response.raise_for_status()
@@ -343,7 +388,9 @@ def _instance_looks_real_user_ready(candidate: dict[str, str], timeout: int = 60
         return False, str(exc)
 
 
-def _fetch_profile_status(candidate: dict[str, str], timeout: int = 30) -> dict[str, object] | None:
+def _fetch_profile_status(
+    candidate: dict[str, str], timeout: int = 30
+) -> dict[str, object] | None:
     if not candidate["admin_token"]:
         return None
     response = requests.get(
@@ -355,7 +402,9 @@ def _fetch_profile_status(candidate: dict[str, str], timeout: int = 30) -> dict[
     return response.json()
 
 
-def _refresh_tracked_profile_asset(preferred_spaces: list[str] | None = None) -> dict[str, object]:
+def _refresh_tracked_profile_asset(
+    preferred_spaces: list[str] | None = None,
+) -> dict[str, object]:
     candidates = _build_profile_export_candidates(preferred_spaces=preferred_spaces)
     for candidate in candidates:
         if candidate["space"] and candidate["space"] in set(preferred_spaces or []):
@@ -375,7 +424,9 @@ def _refresh_tracked_profile_asset(preferred_spaces: list[str] | None = None) ->
             continue
         if not status or not status.get("archive_available"):
             continue
-        if best_status is None or float(status.get("last_modified_ts", 0.0)) > float(best_status.get("last_modified_ts", 0.0)):
+        if best_status is None or float(status.get("last_modified_ts", 0.0)) > float(
+            best_status.get("last_modified_ts", 0.0)
+        ):
             best_candidate = candidate
             best_status = status
 
@@ -396,11 +447,15 @@ def _refresh_tracked_profile_asset(preferred_spaces: list[str] | None = None) ->
         "action": "updated",
         "source": best_candidate["name"],
         "path": str(asset_path),
-        "last_modified_ts": float(best_status.get("last_modified_ts", 0.0)) if best_status else 0.0,
+        "last_modified_ts": (
+            float(best_status.get("last_modified_ts", 0.0)) if best_status else 0.0
+        ),
     }
 
 
-def prepare_space_bundle(source_root: Path, output_root: Path, app_port: int, repo_id: str) -> Path:
+def prepare_space_bundle(
+    source_root: Path, output_root: Path, app_port: int, repo_id: str
+) -> Path:
     bundle_root = output_root / "bundle"
     bundle_root.mkdir(parents=True, exist_ok=True)
 
@@ -412,7 +467,9 @@ def prepare_space_bundle(source_root: Path, output_root: Path, app_port: int, re
         shutil.copy2(license_path, bundle_root / "LICENSE")
 
     shutil.copy2(DOCKERFILE_PATH, bundle_root / "Dockerfile")
-    (bundle_root / "README.md").write_text(_space_readme(repo_id, app_port), encoding="utf-8")
+    (bundle_root / "README.md").write_text(
+        _space_readme(repo_id, app_port), encoding="utf-8"
+    )
     _create_google_profile_bootstrap_archive(bundle_root)
 
     src_root = source_root / "src"
@@ -454,11 +511,15 @@ def _resolve_default_space_name(explicit_space: str | None = None) -> str:
         if candidate:
             return candidate
 
-    raise ValueError("HF space not configured; pass --space or add configs/hf_spaces.json")
+    raise ValueError(
+        "HF space not configured; pass --space or add configs/hf_spaces.json"
+    )
 
 
 def _resolve_hf_service_profile(space_name: str | None = None) -> dict[str, str]:
-    profile = resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
+    profile = resolve_google_api_service_profile(
+        runtime_env="hf-space", service_type="hf-space"
+    )
     if space_name:
         profile = dict(profile)
         profile["url"] = resolve_hf_space_settings(space_name).space_host.rstrip("/")
@@ -466,14 +527,20 @@ def _resolve_hf_service_profile(space_name: str | None = None) -> dict[str, str]
 
 
 def _resolve_hf_service_url(space_name: str | None = None) -> str:
-    service_url = str(_resolve_hf_service_profile(space_name).get("url", "")).strip().rstrip("/")
+    service_url = (
+        str(_resolve_hf_service_profile(space_name).get("url", "")).strip().rstrip("/")
+    )
     if not service_url:
         raise ValueError("hf-space service URL is not configured")
     return service_url
 
 
-def _resolve_hf_search_token(explicit_token: str | None = None, space_name: str | None = None) -> str:
-    token = str(explicit_token or _resolve_hf_service_profile(space_name).get("api_token", "")).strip()
+def _resolve_hf_search_token(
+    explicit_token: str | None = None, space_name: str | None = None
+) -> str:
+    token = str(
+        explicit_token or _resolve_hf_service_profile(space_name).get("api_token", "")
+    ).strip()
     return token
 
 
@@ -504,7 +571,11 @@ def _read_config_payload(name: str):
     config_path = get_workspace_paths().config_dir / f"{name}.json"
     if not config_path.exists():
         return None, str(config_path), "missing"
-    return json.loads(config_path.read_text(encoding="utf-8")), str(config_path), "present"
+    return (
+        json.loads(config_path.read_text(encoding="utf-8")),
+        str(config_path),
+        "present",
+    )
 
 
 def _container_running(container_name: str) -> bool:
@@ -570,9 +641,13 @@ def _super_squash_space_history(api: HfApi, repo_id: str, branch: str = "main"):
     api.super_squash_history(repo_id=repo_id, repo_type="space", branch=branch)
 
 
-def _restart_space_request(space_name: str, hf_token: str, factory_reboot: bool = False):
+def _restart_space_request(
+    space_name: str, hf_token: str, factory_reboot: bool = False
+):
     control_endpoints = []
-    preferred = os.getenv("WEBU_HF_CONTROL_ENDPOINT", "https://huggingface.co").rstrip("/")
+    preferred = os.getenv("WEBU_HF_CONTROL_ENDPOINT", "https://huggingface.co").rstrip(
+        "/"
+    )
     control_endpoints.append(preferred)
     mirror_endpoint = os.getenv("HF_ENDPOINT", "").strip().rstrip("/")
     if mirror_endpoint and mirror_endpoint not in control_endpoints:
@@ -595,7 +670,9 @@ def _restart_space_request(space_name: str, hf_token: str, factory_reboot: bool 
         except Exception as exc:
             last_error = exc
 
-    raise RuntimeError(f"Failed to restart Space via all control endpoints: {last_error}")
+    raise RuntimeError(
+        f"Failed to restart Space via all control endpoints: {last_error}"
+    )
 
 
 def _is_public_http_endpoint(endpoint: str) -> bool:
@@ -617,7 +694,9 @@ def _is_public_http_endpoint(endpoint: str) -> bool:
 
 def _sync_space_runtime_config(api: HfApi, space_name: str, admin_token: str | None):
     captcha = resolve_captcha_vlm_settings()
-    google_service = resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
+    google_service = resolve_google_api_service_profile(
+        runtime_env="hf-space", service_type="hf-space"
+    )
     llm_catalog = load_json_config("llms") or {}
     hf_profile_name = os.getenv("WEBU_HF_CAPTCHA_VLM_PROFILE", "sf_qwen3_vl_8b").strip()
     hf_profile = llm_catalog.get(hf_profile_name, {}) if hf_profile_name else {}
@@ -648,17 +727,27 @@ def _sync_space_runtime_config(api: HfApi, space_name: str, admin_token: str | N
             "> Skip propagating local/private captcha endpoint to HF Space; set WEBU_HF_CAPTCHA_VLM_ENDPOINT if remote captcha solving is required"
         )
 
-    selected_model = hf_captcha_model or str(hf_profile.get("model", "")).strip() or captcha.model
+    selected_model = (
+        hf_captcha_model or str(hf_profile.get("model", "")).strip() or captcha.model
+    )
     if selected_model:
         variable_map["WEBU_CAPTCHA_VLM_MODEL"] = selected_model
-    selected_api_format = hf_captcha_api_format or str(hf_profile.get("api_format", "")).strip() or captcha.api_format
+    selected_api_format = (
+        hf_captcha_api_format
+        or str(hf_profile.get("api_format", "")).strip()
+        or captcha.api_format
+    )
     if selected_api_format:
         variable_map["WEBU_CAPTCHA_VLM_API_FORMAT"] = selected_api_format
 
     for key, value in variable_map.items():
         api.add_space_variable(repo_id=space_name, key=key, value=value)
 
-    selected_api_key = hf_captcha_api_key or str(hf_profile.get("api_key", "")).strip() or captcha.api_key
+    selected_api_key = (
+        hf_captcha_api_key
+        or str(hf_profile.get("api_key", "")).strip()
+        or captcha.api_key
+    )
     if selected_api_key:
         api.add_space_secret(
             repo_id=space_name,
@@ -734,8 +823,12 @@ def cmd_docker_build(args):
     image_name = args.image or docker_settings.image_name
     paths = get_workspace_paths()
     apt_mirror = os.getenv("WEBU_APT_MIRROR", "https://mirrors.ustc.edu.cn/debian")
-    apt_security_mirror = os.getenv("WEBU_APT_SECURITY_MIRROR", "https://mirrors.ustc.edu.cn/debian-security")
-    pip_index_url = os.getenv("PIP_INDEX_URL", "https://mirrors.ustc.edu.cn/pypi/simple")
+    apt_security_mirror = os.getenv(
+        "WEBU_APT_SECURITY_MIRROR", "https://mirrors.ustc.edu.cn/debian-security"
+    )
+    pip_index_url = os.getenv(
+        "PIP_INDEX_URL", "https://mirrors.ustc.edu.cn/pypi/simple"
+    )
     pip_trusted_host = os.getenv("PIP_TRUSTED_HOST", "mirrors.ustc.edu.cn")
     with tempfile.TemporaryDirectory(prefix="webu-docker-build-") as tempdir:
         build_context = prepare_local_docker_build_context(paths.root, Path(tempdir))
@@ -770,7 +863,9 @@ def cmd_docker_run(args):
     image_name = args.image or docker_settings.image_name
     container_name = args.name or docker_settings.container_name
     admin_token = args.admin_token or docker_settings.admin_token
-    use_host_network = sys.platform.startswith("linux") and args.proxy_mode != "disabled"
+    use_host_network = (
+        sys.platform.startswith("linux") and args.proxy_mode != "disabled"
+    )
 
     env_map = {
         "WEBU_RUNTIME_ENV": "docker",
@@ -802,12 +897,14 @@ def cmd_docker_run(args):
         )
         command.extend(["--network", "host"])
     else:
-        command.extend([
-            "--add-host",
-            "host.docker.internal:host-gateway",
-            "-p",
-            f"{args.port}:{args.port}",
-        ])
+        command.extend(
+            [
+                "--add-host",
+                "host.docker.internal:host-gateway",
+                "-p",
+                f"{args.port}:{args.port}",
+            ]
+        )
 
     if args.replace:
         subprocess.run(["docker", "rm", "-f", container_name], check=False)
@@ -861,7 +958,9 @@ def cmd_docker_up(args):
     if not args.skip_build:
         cmd_docker_build(build_args)
     cmd_docker_run(run_args)
-    logger.okay(f"  ✓ Docker service is up: {args.name or docker_settings.container_name}")
+    logger.okay(
+        f"  ✓ Docker service is up: {args.name or docker_settings.container_name}"
+    )
 
 
 def cmd_docker_down(args):
@@ -978,7 +1077,9 @@ def cmd_hub_docker_up(args):
     command.extend(_docker_env_args(env_map))
     command.append(image_name)
     _run_command(command)
-    logger.okay(f"  ✓ Hub docker service is up: {container_name} on {args.port} (config port {hub_settings.port})")
+    logger.okay(
+        f"  ✓ Hub docker service is up: {container_name} on {args.port} (config port {hub_settings.port})"
+    )
 
 
 def cmd_hub_docker_down(args):
@@ -1003,7 +1104,9 @@ def cmd_hub_check(args):
 
     try:
         headers = {"X-Admin-Token": admin_token} if admin_token else None
-        response = requests.get(f"{local_url}/admin/backends", headers=headers, timeout=args.timeout)
+        response = requests.get(
+            f"{local_url}/admin/backends", headers=headers, timeout=args.timeout
+        )
         response.raise_for_status()
         backends = response.json()
     except Exception as exc:
@@ -1051,7 +1154,9 @@ def cmd_hf_sync(args):
     docker_settings = resolve_google_docker_settings()
     repo_id = args.repo_id or space_name
 
-    api.create_repo(repo_id=repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
+    api.create_repo(
+        repo_id=repo_id, repo_type="space", space_sdk="docker", exist_ok=True
+    )
 
     with tempfile.TemporaryDirectory(prefix="webu-hf-space-") as tmpdir:
         bundle_root = prepare_space_bundle(
@@ -1068,10 +1173,14 @@ def cmd_hf_sync(args):
             delete_patterns="*",
         )
 
-    _sync_space_runtime_config(api, repo_id, args.admin_token or docker_settings.admin_token)
+    _sync_space_runtime_config(
+        api, repo_id, args.admin_token or docker_settings.admin_token
+    )
     if args.restart:
         try:
-            used_endpoint = _restart_space_request(repo_id, hf_settings.hf_token, factory_reboot=args.factory)
+            used_endpoint = _restart_space_request(
+                repo_id, hf_settings.hf_token, factory_reboot=args.factory
+            )
             logger.okay(f"  ✓ Restart requested via: {used_endpoint}")
         except Exception as exc:
             logger.warn(f"> HF restart request failed after sync: {exc}")
@@ -1080,7 +1189,9 @@ def cmd_hf_sync(args):
         try:
             refresh_result = _refresh_tracked_profile_asset(preferred_spaces=[repo_id])
             if refresh_result.get("action") == "updated":
-                logger.okay(f"  ✓ Refreshed tracked profile asset from: {refresh_result.get('source', '')}")
+                logger.okay(
+                    f"  ✓ Refreshed tracked profile asset from: {refresh_result.get('source', '')}"
+                )
         except Exception as exc:
             logger.warn(f"> Profile asset refresh skipped after sync: {exc}")
 
@@ -1117,11 +1228,17 @@ def cmd_hf_create_space(args):
                 token = str(entry.get("hf_token", "")).strip()
                 break
     if not token:
-        raise ValueError("HF token not found; pass --hf-token or configure configs/hf_spaces.json")
+        raise ValueError(
+            "HF token not found; pass --hf-token or configure configs/hf_spaces.json"
+        )
 
     api = HfApi(token=token)
-    api.create_repo(repo_id=repo_id, repo_type="space", space_sdk="docker", exist_ok=args.exist_ok)
-    print(json.dumps({"repo_id": repo_id, "created": True}, indent=2, ensure_ascii=False))
+    api.create_repo(
+        repo_id=repo_id, repo_type="space", space_sdk="docker", exist_ok=args.exist_ok
+    )
+    print(
+        json.dumps({"repo_id": repo_id, "created": True}, indent=2, ensure_ascii=False)
+    )
 
 
 def cmd_hf_sync_all(args):
@@ -1134,7 +1251,9 @@ def cmd_hf_sync_all(args):
         if space_name and bool(entry.get("enabled", True)):
             space_names.append(space_name)
 
-    max_workers = max(1, min(args.max_workers or len(space_names) or 1, len(space_names) or 1))
+    max_workers = max(
+        1, min(args.max_workers or len(space_names) or 1, len(space_names) or 1)
+    )
 
     def _sync_job(space_name: str):
         try:
@@ -1156,7 +1275,10 @@ def cmd_hf_sync_all(args):
 
     results_by_space: dict[str, dict[str, object]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {executor.submit(_sync_job, space_name): space_name for space_name in space_names}
+        future_map = {
+            executor.submit(_sync_job, space_name): space_name
+            for space_name in space_names
+        }
         for future in concurrent.futures.as_completed(future_map):
             space_name = future_map[future]
             results_by_space[space_name] = future.result()
@@ -1176,7 +1298,9 @@ def cmd_hf_sync_all(args):
 def cmd_hf_restart(args):
     space_name = _resolve_default_space_name(args.space)
     _, hf_settings = _resolve_hf_api(space_name)
-    used_endpoint = _restart_space_request(space_name, hf_settings.hf_token, factory_reboot=args.factory)
+    used_endpoint = _restart_space_request(
+        space_name, hf_settings.hf_token, factory_reboot=args.factory
+    )
     logger.okay(f"  ✓ Restart requested for: {space_name} via {used_endpoint}")
 
 
@@ -1213,7 +1337,9 @@ def cmd_hf_url(args):
 
 def cmd_hf_health(args):
     space_name = _resolve_default_space_name(getattr(args, "space", ""))
-    response = _request_hf_service("/health", space_name=space_name, timeout=args.timeout)
+    response = _request_hf_service(
+        "/health", space_name=space_name, timeout=args.timeout
+    )
     _print_http_response(response)
 
 
@@ -1227,7 +1353,9 @@ def cmd_hf_runtime(args):
     space_name = _resolve_default_space_name(getattr(args, "space", ""))
     admin_token = _resolve_admin_token(args.admin_token)
     if not admin_token:
-        raise ValueError("Admin token not configured; set configs/google_docker.json or pass --admin-token")
+        raise ValueError(
+            "Admin token not configured; set configs/google_docker.json or pass --admin-token"
+        )
     response = _request_hf_service(
         "/admin/runtime",
         space_name=space_name,
@@ -1270,7 +1398,9 @@ def cmd_hf_commit_count(args):
     print(len(api.list_repo_commits(space_name, repo_type="space")))
 
 
-def _collect_hf_check_report(args, *, include_diagnostics: bool = False) -> dict[str, object]:
+def _collect_hf_check_report(
+    args, *, include_diagnostics: bool = False
+) -> dict[str, object]:
     space_name = _resolve_default_space_name(args.space)
     api, hf_settings = _resolve_hf_api(space_name)
     runtime = api.get_space_runtime(repo_id=space_name)
@@ -1319,7 +1449,9 @@ def _collect_hf_check_report(args, *, include_diagnostics: bool = False) -> dict
             )
             search_auth_status = response.status_code
             if response.status_code != 401:
-                search_auth_error = f"expected 401 for anonymous search, got {response.status_code}"
+                search_auth_error = (
+                    f"expected 401 for anonymous search, got {response.status_code}"
+                )
         except Exception as exc:
             search_auth_error = str(exc)
 
@@ -1344,7 +1476,9 @@ def _collect_hf_check_report(args, *, include_diagnostics: bool = False) -> dict
 
         try:
             bootstrap_files = sorted(
-                path for path in api.list_repo_files(space_name, repo_type="space") if path.startswith("bootstrap/")
+                path
+                for path in api.list_repo_files(space_name, repo_type="space")
+                if path.startswith("bootstrap/")
             )
         except Exception as exc:
             bootstrap_error = str(exc)
@@ -1388,7 +1522,13 @@ def cmd_hf_check(args):
 
 
 def cmd_hf_doctor(args):
-    print(json.dumps(_collect_hf_check_report(args, include_diagnostics=True), indent=2, ensure_ascii=False))
+    print(
+        json.dumps(
+            _collect_hf_check_report(args, include_diagnostics=True),
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
 
 
 def cmd_config_check(args):
@@ -1459,50 +1599,72 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    print_config = _add_command_parser(subparsers, "print-config", "Render resolved runtime config")
+    print_config = _add_command_parser(
+        subparsers, "print-config", "Render resolved runtime config"
+    )
     print_config.set_defaults(func=cmd_print_config)
 
-    serve = _add_command_parser(subparsers, "serve", "Run google_docker service in foreground")
+    serve = _add_command_parser(
+        subparsers, "serve", "Run google_docker service in foreground"
+    )
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     serve.set_defaults(func=cmd_serve)
 
-    hub_serve = _add_command_parser(subparsers, "hub-serve", "Run the centralized google_hub service in foreground")
+    hub_serve = _add_command_parser(
+        subparsers, "hub-serve", "Run the centralized google_hub service in foreground"
+    )
     hub_serve.add_argument("--host", default="0.0.0.0")
     hub_serve.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_serve.set_defaults(func=cmd_hub_serve)
 
-    docker_build = _add_command_parser(subparsers, "docker-build", "Build local docker image")
+    docker_build = _add_command_parser(
+        subparsers, "docker-build", "Build local docker image"
+    )
     docker_build.add_argument("--image", default="")
     docker_build.add_argument("--no-cache", action="store_true")
     docker_build.set_defaults(func=cmd_docker_build)
 
-    docker_run = _add_command_parser(subparsers, "docker-run", "Run local docker container")
+    docker_run = _add_command_parser(
+        subparsers, "docker-run", "Run local docker container"
+    )
     docker_run.add_argument("--image", default="")
     docker_run.add_argument("--name", default="")
     docker_run.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
-    docker_run.add_argument("--proxy-mode", choices=["auto", "enabled", "disabled"], default="auto")
+    docker_run.add_argument(
+        "--proxy-mode", choices=["auto", "enabled", "disabled"], default="auto"
+    )
     docker_run.add_argument("--bind-source", action="store_true")
     docker_run.add_argument("--mount-configs", action="store_true")
     docker_run.add_argument("--replace", action="store_true")
     docker_run.add_argument("--admin-token", default="")
     docker_run.set_defaults(func=cmd_docker_run)
 
-    docker_stop = _add_command_parser(subparsers, "docker-stop", "Stop local docker container")
+    docker_stop = _add_command_parser(
+        subparsers, "docker-stop", "Stop local docker container"
+    )
     docker_stop.add_argument("--name", default="")
     docker_stop.set_defaults(func=cmd_docker_stop)
 
-    docker_logs = _add_command_parser(subparsers, "docker-logs", "Tail local docker logs")
+    docker_logs = _add_command_parser(
+        subparsers, "docker-logs", "Tail local docker logs"
+    )
     docker_logs.add_argument("--name", default="")
     docker_logs.add_argument("--lines", type=int, default=200)
     docker_logs.add_argument("--follow", action="store_true")
     docker_logs.set_defaults(func=cmd_docker_logs)
 
-    docker_up = _add_command_parser(subparsers, "docker-up", "Build and run the local docker service with practical defaults")
+    docker_up = _add_command_parser(
+        subparsers,
+        "docker-up",
+        "Build and run the local docker service with practical defaults",
+    )
     docker_up.add_argument("--image", default="")
     docker_up.add_argument("--name", default="")
     docker_up.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
-    docker_up.add_argument("--proxy-mode", choices=["auto", "enabled", "disabled"], default="auto")
+    docker_up.add_argument(
+        "--proxy-mode", choices=["auto", "enabled", "disabled"], default="auto"
+    )
     docker_up.add_argument("--skip-build", action="store_true")
     docker_up.add_argument("--no-cache", action="store_true")
     docker_up.add_argument("--no-bind-source", action="store_true")
@@ -1510,18 +1672,26 @@ def build_parser() -> argparse.ArgumentParser:
     docker_up.add_argument("--admin-token", default="")
     docker_up.set_defaults(func=cmd_docker_up)
 
-    docker_down = _add_command_parser(subparsers, "docker-down", "Stop and remove the local docker service")
+    docker_down = _add_command_parser(
+        subparsers, "docker-down", "Stop and remove the local docker service"
+    )
     docker_down.add_argument("--name", default="")
     docker_down.set_defaults(func=cmd_docker_down)
 
-    docker_check = _add_command_parser(subparsers, "docker-check", "Check local docker container and service health")
+    docker_check = _add_command_parser(
+        subparsers, "docker-check", "Check local docker container and service health"
+    )
     docker_check.add_argument("--name", default="")
     docker_check.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     docker_check.add_argument("--admin-token", default="")
     docker_check.add_argument("--timeout", type=int, default=15)
     docker_check.set_defaults(func=cmd_docker_check)
 
-    hub_docker_up = _add_command_parser(subparsers, "hub-docker-up", "Build and run the centralized hub service in local docker")
+    hub_docker_up = _add_command_parser(
+        subparsers,
+        "hub-docker-up",
+        "Build and run the centralized hub service in local docker",
+    )
     hub_docker_up.add_argument("--image", default="")
     hub_docker_up.add_argument("--name", default="")
     hub_docker_up.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
@@ -1533,23 +1703,33 @@ def build_parser() -> argparse.ArgumentParser:
     hub_docker_up.add_argument("--admin-token", default="")
     hub_docker_up.set_defaults(func=cmd_hub_docker_up)
 
-    hub_docker_down = _add_command_parser(subparsers, "hub-docker-down", "Stop and remove the local hub docker service")
+    hub_docker_down = _add_command_parser(
+        subparsers, "hub-docker-down", "Stop and remove the local hub docker service"
+    )
     hub_docker_down.add_argument("--name", default="")
     hub_docker_down.set_defaults(func=cmd_hub_docker_down)
 
-    hub_check = _add_command_parser(subparsers, "hub-check", "Check the local centralized hub service and backend status")
+    hub_check = _add_command_parser(
+        subparsers,
+        "hub-check",
+        "Check the local centralized hub service and backend status",
+    )
     hub_check.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_check.add_argument("--admin-token", default="")
     hub_check.add_argument("--timeout", type=int, default=15)
     hub_check.set_defaults(func=cmd_hub_check)
 
-    hub_backends = _add_command_parser(subparsers, "hub-backends", "List the hub-managed backend states")
+    hub_backends = _add_command_parser(
+        subparsers, "hub-backends", "List the hub-managed backend states"
+    )
     hub_backends.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_backends.add_argument("--admin-token", default="")
     hub_backends.add_argument("--timeout", type=int, default=30)
     hub_backends.set_defaults(func=cmd_hub_backends)
 
-    hub_search = _add_command_parser(subparsers, "hub-search", "Route a search request through the centralized hub")
+    hub_search = _add_command_parser(
+        subparsers, "hub-search", "Route a search request through the centralized hub"
+    )
     hub_search.add_argument("query")
     hub_search.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_search.add_argument("--num", type=int, default=10)
@@ -1557,7 +1737,9 @@ def build_parser() -> argparse.ArgumentParser:
     hub_search.add_argument("--timeout", type=int, default=90)
     hub_search.set_defaults(func=cmd_hub_search)
 
-    hf_sync = _add_command_parser(subparsers, "hf-sync", "Upload current workspace to a Docker Space")
+    hf_sync = _add_command_parser(
+        subparsers, "hf-sync", "Upload current workspace to a Docker Space"
+    )
     hf_sync.add_argument("--space", default="")
     hf_sync.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     hf_sync.add_argument("--message", default="")
@@ -1566,7 +1748,11 @@ def build_parser() -> argparse.ArgumentParser:
     hf_sync.add_argument("--admin-token", default="")
     hf_sync.set_defaults(func=cmd_hf_sync)
 
-    hf_sync_all = _add_command_parser(subparsers, "hf-sync-all", "Upload current workspace to all enabled configured HF Spaces")
+    hf_sync_all = _add_command_parser(
+        subparsers,
+        "hf-sync-all",
+        "Upload current workspace to all enabled configured HF Spaces",
+    )
     hf_sync_all.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     hf_sync_all.add_argument("--message", default="")
     hf_sync_all.add_argument("--restart", action="store_true")
@@ -1575,11 +1761,15 @@ def build_parser() -> argparse.ArgumentParser:
     hf_sync_all.add_argument("--max-workers", type=int, default=0)
     hf_sync_all.set_defaults(func=cmd_hf_sync_all)
 
-    hf_status = _add_command_parser(subparsers, "hf-status", "Get HF Space runtime status")
+    hf_status = _add_command_parser(
+        subparsers, "hf-status", "Get HF Space runtime status"
+    )
     hf_status.add_argument("--space", default="")
     hf_status.set_defaults(func=cmd_hf_status)
 
-    hf_create_space = _add_command_parser(subparsers, "hf-create-space", "Create a new HF Docker Space")
+    hf_create_space = _add_command_parser(
+        subparsers, "hf-create-space", "Create a new HF Docker Space"
+    )
     hf_create_space.add_argument("--space", required=True)
     hf_create_space.add_argument("--hf-token", default="")
     hf_create_space.add_argument("--exist-ok", action="store_true")
@@ -1590,18 +1780,24 @@ def build_parser() -> argparse.ArgumentParser:
     hf_restart.add_argument("--factory", action="store_true")
     hf_restart.set_defaults(func=cmd_hf_restart)
 
-    hf_super_squash = _add_command_parser(subparsers, "hf-super-squash", "Super-squash HF Space commit history")
+    hf_super_squash = _add_command_parser(
+        subparsers, "hf-super-squash", "Super-squash HF Space commit history"
+    )
     hf_super_squash.add_argument("--space", default="")
     hf_super_squash.add_argument("--branch", default="main")
     hf_super_squash.set_defaults(func=cmd_hf_super_squash)
 
-    hf_logs = _add_command_parser(subparsers, "hf-logs", "Read remote service logs from HF Space")
+    hf_logs = _add_command_parser(
+        subparsers, "hf-logs", "Read remote service logs from HF Space"
+    )
     hf_logs.add_argument("--space", default="")
     hf_logs.add_argument("--lines", type=int, default=200)
     hf_logs.add_argument("--admin-token", default="")
     hf_logs.set_defaults(func=cmd_hf_logs)
 
-    hf_url = _add_command_parser(subparsers, "hf-url", "Print the resolved HF service URL")
+    hf_url = _add_command_parser(
+        subparsers, "hf-url", "Print the resolved HF service URL"
+    )
     hf_url.add_argument("--space", default="")
     hf_url.set_defaults(func=cmd_hf_url)
 
@@ -1615,7 +1811,9 @@ def build_parser() -> argparse.ArgumentParser:
     hf_home.add_argument("--timeout", type=int, default=30)
     hf_home.set_defaults(func=cmd_hf_home)
 
-    hf_runtime = _add_command_parser(subparsers, "hf-runtime", "Call remote /admin/runtime")
+    hf_runtime = _add_command_parser(
+        subparsers, "hf-runtime", "Call remote /admin/runtime"
+    )
     hf_runtime.add_argument("--space", default="")
     hf_runtime.add_argument("--admin-token", default="")
     hf_runtime.add_argument("--timeout", type=int, default=30)
@@ -1631,16 +1829,22 @@ def build_parser() -> argparse.ArgumentParser:
     hf_search.add_argument("--timeout", type=int, default=60)
     hf_search.set_defaults(func=cmd_hf_search)
 
-    hf_files = _add_command_parser(subparsers, "hf-files", "List remote Space repository files")
+    hf_files = _add_command_parser(
+        subparsers, "hf-files", "List remote Space repository files"
+    )
     hf_files.add_argument("--space", default="")
     hf_files.add_argument("--prefix", default="")
     hf_files.set_defaults(func=cmd_hf_files)
 
-    hf_commit_count = _add_command_parser(subparsers, "hf-commit-count", "Print remote Space commit count")
+    hf_commit_count = _add_command_parser(
+        subparsers, "hf-commit-count", "Print remote Space commit count"
+    )
     hf_commit_count.add_argument("--space", default="")
     hf_commit_count.set_defaults(func=cmd_hf_commit_count)
 
-    hf_check = _add_command_parser(subparsers, "hf-check", "Run a compact remote health and auth check")
+    hf_check = _add_command_parser(
+        subparsers, "hf-check", "Run a compact remote health and auth check"
+    )
     hf_check.add_argument("--space", default="")
     hf_check.add_argument("--admin-token", default="")
     hf_check.add_argument("--timeout", type=int, default=30)
@@ -1648,7 +1852,11 @@ def build_parser() -> argparse.ArgumentParser:
     hf_check.add_argument("--check-auth", action="store_true")
     hf_check.set_defaults(func=cmd_hf_check)
 
-    hf_doctor = _add_command_parser(subparsers, "hf-doctor", "Run a broader remote diagnosis with repo and log details")
+    hf_doctor = _add_command_parser(
+        subparsers,
+        "hf-doctor",
+        "Run a broader remote diagnosis with repo and log details",
+    )
     hf_doctor.add_argument("--space", default="")
     hf_doctor.add_argument("--admin-token", default="")
     hf_doctor.add_argument("--timeout", type=int, default=30)
@@ -1657,20 +1865,30 @@ def build_parser() -> argparse.ArgumentParser:
     hf_doctor.add_argument("--lines", type=int, default=80)
     hf_doctor.set_defaults(func=cmd_hf_doctor)
 
-    config_check = _add_command_parser(subparsers, "config-check", "Validate local configs against shared schema")
+    config_check = _add_command_parser(
+        subparsers, "config-check", "Validate local configs against shared schema"
+    )
     config_check.add_argument("--name", choices=available_config_names(), default="")
     config_check.set_defaults(func=cmd_config_check)
 
-    config_init = _add_command_parser(subparsers, "config-init", "Write minimal local config templates from shared schema")
+    config_init = _add_command_parser(
+        subparsers,
+        "config-init",
+        "Write minimal local config templates from shared schema",
+    )
     config_init.add_argument("--name", choices=available_config_names(), default="")
     config_init.add_argument("--force", action="store_true")
     config_init.set_defaults(func=cmd_config_init)
 
-    config_schema = _add_command_parser(subparsers, "config-schema", "Print shared schema for one config file")
+    config_schema = _add_command_parser(
+        subparsers, "config-schema", "Print shared schema for one config file"
+    )
     config_schema.add_argument("name", choices=available_config_names())
     config_schema.set_defaults(func=cmd_config_schema)
 
-    docs_sync = _add_command_parser(subparsers, "docs-sync", "Regenerate shared docs/google-docker markdown files")
+    docs_sync = _add_command_parser(
+        subparsers, "docs-sync", "Regenerate shared docs/google-docker markdown files"
+    )
     docs_sync.set_defaults(func=cmd_docs_sync)
 
     return parser

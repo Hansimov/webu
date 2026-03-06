@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from webu.runtime_settings import collect_sensitive_local_values, find_sensitive_text_leaks
+from webu.runtime_settings import (
+    collect_sensitive_local_values,
+    find_sensitive_text_leaks,
+)
 
 
 def test_public_docs_and_test_sources_do_not_leak_local_sensitive_values():

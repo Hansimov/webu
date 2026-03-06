@@ -31,7 +31,9 @@ def _find_project_root() -> Path:
 
 
 def _default_config_dir() -> Path:
-    return Path(os.getenv("WEBU_CONFIG_DIR", _find_project_root() / "configs")).expanduser()
+    return Path(
+        os.getenv("WEBU_CONFIG_DIR", _find_project_root() / "configs")
+    ).expanduser()
 
 
 def _add_space_value(values: set[str], raw_value: Any):
@@ -90,13 +92,19 @@ def collect_sensitive_local_values(config_dir: Path | None = None) -> list[str]:
     return sorted(value for value in values if value)
 
 
-def find_sensitive_text_leaks(text: str, sensitive_values: list[str] | None = None) -> list[str]:
+def find_sensitive_text_leaks(
+    text: str, sensitive_values: list[str] | None = None
+) -> list[str]:
     values = sensitive_values or collect_sensitive_local_values()
     return [value for value in values if value and value in text]
 
 
-def assert_public_text_safe(text: str, sensitive_values: list[str] | None = None) -> str:
+def assert_public_text_safe(
+    text: str, sensitive_values: list[str] | None = None
+) -> str:
     leaks = find_sensitive_text_leaks(text, sensitive_values=sensitive_values)
     if leaks:
-        raise ValueError(f"public docs/help leaked sensitive local config values: {', '.join(leaks[:5])}")
+        raise ValueError(
+            f"public docs/help leaked sensitive local config values: {', '.join(leaks[:5])}"
+        )
     return text

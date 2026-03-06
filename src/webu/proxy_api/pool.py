@@ -66,8 +66,11 @@ class ProxyPool:
             logger.mesg("  No unchecked IPs found")
             return []
         return await check_level1_batch(
-            ip_list, timeout_s=10, concurrency=100,
-            verbose=self.verbose, store=self.store,
+            ip_list,
+            timeout_s=10,
+            concurrency=100,
+            verbose=self.verbose,
+            store=self.store,
         )
 
     async def check_stale(self, limit: int = 200) -> list[dict]:
@@ -77,8 +80,11 @@ class ProxyPool:
             logger.mesg("  No stale IPs found")
             return []
         return await check_level1_batch(
-            ip_list, timeout_s=10, concurrency=100,
-            verbose=self.verbose, store=self.store,
+            ip_list,
+            timeout_s=10,
+            concurrency=100,
+            verbose=self.verbose,
+            store=self.store,
         )
 
     async def check_all(self, limit: int = 0) -> list[dict]:
@@ -88,8 +94,11 @@ class ProxyPool:
             logger.mesg("  No IPs found in database")
             return []
         return await check_level1_batch(
-            ip_list, timeout_s=10, concurrency=100,
-            verbose=self.verbose, store=self.store,
+            ip_list,
+            timeout_s=10,
+            concurrency=100,
+            verbose=self.verbose,
+            store=self.store,
         )
 
     # ── 废弃管理 ──────────────────────────────────────────────
@@ -113,7 +122,9 @@ class ProxyPool:
         proxies = self.store.get_valid_proxies(
             limit=50,
             max_latency_ms=max_latency_ms,
-            exclude_ips=self._recent_ips[-self._recent_max :] if self._recent_ips else None,
+            exclude_ips=(
+                self._recent_ips[-self._recent_max :] if self._recent_ips else None
+            ),
         )
 
         if not proxies:

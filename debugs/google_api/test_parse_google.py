@@ -36,12 +36,15 @@ async def main():
             if is_socks:
                 connector = ProxyConnector.from_url(proxy_url)
                 session = aiohttp.ClientSession(
-                    connector=connector, headers=headers, timeout=timeout,
+                    connector=connector,
+                    headers=headers,
+                    timeout=timeout,
                 )
                 kwargs = {"ssl": False}
             else:
                 session = aiohttp.ClientSession(
-                    headers=headers, timeout=timeout,
+                    headers=headers,
+                    timeout=timeout,
                 )
                 kwargs = {"ssl": False, "proxy": proxy_url}
 
@@ -76,6 +79,7 @@ async def main():
                             print("  → Parser found no results in valid HTML!")
                             # Dump a snippet for debugging
                             from bs4 import BeautifulSoup
+
                             soup = BeautifulSoup(body, "html.parser")
                             divg = soup.select("div.g")
                             print(f"  div.g count: {len(divg)}")
@@ -86,8 +90,10 @@ async def main():
                             # Check links
                             links = soup.find_all("a", href=True)
                             external = [
-                                a for a in links
-                                if a["href"].startswith("http") and "google" not in a["href"]
+                                a
+                                for a in links
+                                if a["href"].startswith("http")
+                                and "google" not in a["href"]
                             ]
                             print(f"  External links: {len(external)}")
                             for a in external[:5]:

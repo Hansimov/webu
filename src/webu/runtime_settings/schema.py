@@ -11,7 +11,9 @@ from .defaults import DEFAULT_GOOGLE_API_PORT, DEFAULT_GOOGLE_HUB_PORT
 from .sensitive import assert_public_text_safe
 
 
-CONFIGS_DOC_PATH = Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "CONFIGS.md"
+CONFIGS_DOC_PATH = (
+    Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "CONFIGS.md"
+)
 
 
 def _find_project_root() -> Path:
@@ -44,7 +46,11 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "port": DEFAULT_GOOGLE_API_PORT,
             "proxy_mode": "auto",
             "services": [
-                {"url": f"http://127.0.0.1:{DEFAULT_GOOGLE_API_PORT}", "type": "local", "api_token": ""},
+                {
+                    "url": f"http://127.0.0.1:{DEFAULT_GOOGLE_API_PORT}",
+                    "type": "local",
+                    "api_token": "",
+                },
                 {"type": "hf-space", "api_token": "your-hf-search-token"},
             ],
         },
@@ -53,14 +59,20 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "properties": {
                 "host": {"type": "string"},
                 "port": {"type": "integer"},
-                "proxy_mode": {"type": "string", "enum": ["auto", "enabled", "disabled"]},
+                "proxy_mode": {
+                    "type": "string",
+                    "enum": ["auto", "enabled", "disabled"],
+                },
                 "services": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
                             "url": {"type": "string"},
-                            "type": {"type": "string", "enum": ["local", "remote-server", "hf-space"]},
+                            "type": {
+                                "type": "string",
+                                "enum": ["local", "remote-server", "hf-space"],
+                            },
                             "api_token": {"type": "string"},
                         },
                     },
@@ -146,7 +158,10 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                         "type": "object",
                         "properties": {
                             "name": {"type": "string"},
-                            "kind": {"type": "string", "enum": ["local-google-api", "google-api", "hf-space"]},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["local-google-api", "google-api", "hf-space"],
+                            },
                             "base_url": {"type": "string"},
                             "space": {"type": "string"},
                             "enabled": {"type": "boolean"},
@@ -271,8 +286,20 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置。",
         ],
         "sample": [
-            {"space": "owner/space1", "hf_token": "your-hf-token", "enabled": True, "weight": 1, "tags": ["primary"]},
-            {"space": "owner/space2", "hf_token": "your-hf-token", "enabled": True, "weight": 1, "tags": ["secondary"]},
+            {
+                "space": "owner/space1",
+                "hf_token": "your-hf-token",
+                "enabled": True,
+                "weight": 1,
+                "tags": ["primary"],
+            },
+            {
+                "space": "owner/space2",
+                "hf_token": "your-hf-token",
+                "enabled": True,
+                "weight": 1,
+                "tags": ["secondary"],
+            },
         ],
         "schema": {
             "type": "array",
@@ -365,6 +392,8 @@ def _validate_schema(value: Any, schema: dict[str, Any], path: str) -> list[str]
 
 def validate_config_payload(name: str, payload: Any) -> list[str]:
     return _validate_schema(payload, config_schema_json(name), name)
+
+
 def render_configs_markdown() -> str:
     lines = [
         "# 配置模板",

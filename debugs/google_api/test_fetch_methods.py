@@ -84,16 +84,26 @@ TEST_VARIANTS = [
 ]
 
 
-async def fetch_with_proxy(proxy_info: dict, url: str, headers: dict, timeout_s: int = 25, allow_redirect: bool = True) -> tuple[str | None, str]:
+async def fetch_with_proxy(
+    proxy_info: dict,
+    url: str,
+    headers: dict,
+    timeout_s: int = 25,
+    allow_redirect: bool = True,
+) -> tuple[str | None, str]:
     """通过代理获取 URL 内容。返回 (html, final_url)。"""
-    proxy_url = _build_proxy_url(proxy_info["ip"], proxy_info["port"], proxy_info["protocol"])
+    proxy_url = _build_proxy_url(
+        proxy_info["ip"], proxy_info["port"], proxy_info["protocol"]
+    )
     timeout = aiohttp.ClientTimeout(total=timeout_s)
 
     try:
         is_socks = proxy_info["protocol"] in ("socks4", "socks5")
         if is_socks:
             connector = ProxyConnector.from_url(proxy_url)
-            session = aiohttp.ClientSession(connector=connector, headers=headers, timeout=timeout)
+            session = aiohttp.ClientSession(
+                connector=connector, headers=headers, timeout=timeout
+            )
         else:
             session = aiohttp.ClientSession(headers=headers, timeout=timeout)
 
@@ -105,7 +115,9 @@ async def fetch_with_proxy(proxy_info: dict, url: str, headers: dict, timeout_s:
             async with session.get(url, **kwargs) as resp:
                 body = await resp.text()
                 final_url = str(resp.url)
-                print(f"    status={resp.status} size={len(body)} final_url={final_url[:80]}")
+                print(
+                    f"    status={resp.status} size={len(body)} final_url={final_url[:80]}"
+                )
                 return body, final_url
     except Exception as e:
         print(f"    error: {e}")
@@ -122,10 +134,17 @@ def analyze_html(html: str, name: str):
     search = len(soup.find_all("div", id="search"))
     h3_count = len(soup.find_all("h3"))
     cite_count = len(soup.find_all("cite"))
-    a_ext = len([a for a in soup.find_all("a", href=True)
-                 if a["href"].startswith("http") and "google" not in a["href"]])
+    a_ext = len(
+        [
+            a
+            for a in soup.find_all("a", href=True)
+            if a["href"].startswith("http") and "google" not in a["href"]
+        ]
+    )
 
-    print(f"  结构: div.g={div_g} #rso={rso} #search={search} h3={h3_count} cite={cite_count} 外部链接={a_ext}")
+    print(
+        f"  结构: div.g={div_g} #rso={rso} #search={search} h3={h3_count} cite={cite_count} 外部链接={a_ext}"
+    )
 
     # h3 内容预览
     h3s = soup.find_all("h3")
@@ -137,13 +156,17 @@ def analyze_html(html: str, name: str):
     # script 占比
     scripts = soup.find_all("script")
     script_len = sum(len(str(s)) for s in scripts)
-    print(f"  Script: {len(scripts)} 个, {script_len}/{len(html)} bytes ({100*script_len//max(1,len(html))}%)")
+    print(
+        f"  Script: {len(scripts)} 个, {script_len}/{len(html)} bytes ({100*script_len//max(1,len(html))}%)"
+    )
 
     # Parser 测试
     parser = GoogleResultParser(verbose=False)
     response = parser.parse(html, query="python programming")
-    print(f"  Parser: {len(response.results)} results, captcha={response.has_captcha}, "
-          f"clean={response.clean_html_length}")
+    print(
+        f"  Parser: {len(response.results)} results, captcha={response.has_captcha}, "
+        f"clean={response.clean_html_length}"
+    )
 
     if response.results:
         for r in response.results[:3]:
@@ -173,7 +196,10 @@ async def main():
         html, _ = await fetch_with_proxy(
             proxy,
             "https://www.google.com/search?q=test&num=5&hl=en",
-            {**_LEVEL2_HEADERS, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            {
+                **_LEVEL2_HEADERS,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            },
         )
         if html and len(html) > 10000:
             working_proxy = proxy
@@ -187,7 +213,9 @@ async def main():
                     m = re.search(r'url=(/[^"]+)', content)
                     if m:
                         redirect_path = m.group(1)
-                        TEST_VARIANTS[-1]["url"] = f"https://www.google.com{redirect_path}"
+                        TEST_VARIANTS[-1][
+                            "url"
+                        ] = f"https://www.google.com{redirect_path}"
                         print(f"  提取到重定向 URL: {TEST_VARIANTS[-1]['url'][:80]}")
             break
 
@@ -195,7 +223,9 @@ async def main():
         print("没有找到能用的代理")
         return
 
-    proxy_url = _build_proxy_url(working_proxy["ip"], working_proxy["port"], working_proxy["protocol"])
+    proxy_url = _build_proxy_url(
+        working_proxy["ip"], working_proxy["port"], working_proxy["protocol"]
+    )
     print(f"\n使用代理: {proxy_url}")
 
     for variant in TEST_VARIANTS:
@@ -209,7 +239,9 @@ async def main():
         print(f"URL: {variant['url'][:80]}")
 
         html, final_url = await fetch_with_proxy(
-            working_proxy, variant["url"], variant["headers"],
+            working_proxy,
+            variant["url"],
+            variant["headers"],
         )
 
         if html:

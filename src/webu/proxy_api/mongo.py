@@ -92,10 +92,12 @@ class MongoProxyStore:
             coll = self.db[coll_name]
             for field in fields:
                 # 情况 1: 含 +00:00 后缀（旧 UTC 格式）
-                old_utc_docs = list(coll.find(
-                    {field: {"$regex": r"\+00:00$"}},
-                    {"_id": 1, field: 1},
-                ).limit(50000))
+                old_utc_docs = list(
+                    coll.find(
+                        {field: {"$regex": r"\+00:00$"}},
+                        {"_id": 1, field: 1},
+                    ).limit(50000)
+                )
 
                 if old_utc_docs:
                     operations = []
@@ -122,10 +124,12 @@ class MongoProxyStore:
                             )
 
                 # 情况 2: 含 T 分隔符（旧 ISO 格式）
-                old_t_docs = list(coll.find(
-                    {field: {"$regex": r"^\d{4}-\d{2}-\d{2}T"}},
-                    {"_id": 1, field: 1},
-                ).limit(50000))
+                old_t_docs = list(
+                    coll.find(
+                        {field: {"$regex": r"^\d{4}-\d{2}-\d{2}T"}},
+                        {"_id": 1, field: 1},
+                    ).limit(50000)
+                )
 
                 if old_t_docs:
                     operations = []
@@ -185,9 +189,7 @@ class MongoProxyStore:
                     "protocol": item["protocol"],
                 },
             }
-            operations.append(
-                pymongo.UpdateOne(filter_key, update_doc, upsert=True)
-            )
+            operations.append(pymongo.UpdateOne(filter_key, update_doc, upsert=True))
 
         if operations:
             result = collection.bulk_write(operations, ordered=False)
@@ -243,7 +245,8 @@ class MongoProxyStore:
             if abandoned_set:
                 before = len(result)
                 result = [
-                    r for r in result
+                    r
+                    for r in result
                     if (r["ip"], r["port"], r["protocol"]) not in abandoned_set
                 ]
                 skipped = before - len(result)
@@ -259,7 +262,10 @@ class MongoProxyStore:
     ) -> list[dict]:
         """获取检测结果已过期的 IP（排除废弃代理）。"""
         filter_doc = {
-            "$or": [{"is_abandoned": {"$ne": True}}, {"is_abandoned": {"$exists": False}}],
+            "$or": [
+                {"is_abandoned": {"$ne": True}},
+                {"is_abandoned": {"$exists": False}},
+            ],
         }
         cursor = (
             self.db[self.check_collection]
@@ -355,7 +361,10 @@ class MongoProxyStore:
         filter_dict = {
             "is_valid": True,
             "latency_ms": {"$gt": 0, "$lte": max_latency_ms},
-            "$or": [{"is_abandoned": {"$ne": True}}, {"is_abandoned": {"$exists": False}}],
+            "$or": [
+                {"is_abandoned": {"$ne": True}},
+                {"is_abandoned": {"$exists": False}},
+            ],
         }
         if exclude_ips:
             filter_dict["ip"] = {"$nin": exclude_ips}
@@ -400,7 +409,10 @@ class MongoProxyStore:
         ).strftime("%Y-%m-%d %H:%M:%S")
 
         filter_doc = {
-            "$or": [{"is_abandoned": {"$ne": True}}, {"is_abandoned": {"$exists": False}}],
+            "$or": [
+                {"is_abandoned": {"$ne": True}},
+                {"is_abandoned": {"$exists": False}},
+            ],
             "fail_count": {"$gte": ABANDONED_FAIL_THRESHOLD},
             "checked_at": {"$lte": cutoff},
             "is_valid": False,
@@ -455,17 +467,24 @@ class MongoProxyStore:
         total_checked = self.get_checked_count()
         total_valid = self.get_valid_count()
         total_abandoned = self.get_abandoned_count()
-        level1_passed = self.db[self.check_collection].count_documents({
-            "is_valid": True,
-            "$or": [{"is_abandoned": {"$ne": True}}, {"is_abandoned": {"$exists": False}}],
-        })
+        level1_passed = self.db[self.check_collection].count_documents(
+            {
+                "is_valid": True,
+                "$or": [
+                    {"is_abandoned": {"$ne": True}},
+                    {"is_abandoned": {"$exists": False}},
+                ],
+            }
+        )
         return {
             "total_ips": total_ips,
             "total_checked": total_checked,
             "level1_passed": level1_passed,
             "total_valid": total_valid,
             "total_abandoned": total_abandoned,
-            "valid_ratio": f"{total_valid / total_checked * 100:.1f}%"
-            if total_checked > 0
-            else "N/A",
+            "valid_ratio": (
+                f"{total_valid / total_checked * 100:.1f}%"
+                if total_checked > 0
+                else "N/A"
+            ),
         }

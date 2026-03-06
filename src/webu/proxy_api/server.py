@@ -83,6 +83,7 @@ def create_proxy_server(
 
     try:
         from ..fastapis.styles import setup_swagger_ui
+
         setup_swagger_ui(app)
     except ImportError:
         pass
@@ -128,7 +129,9 @@ def create_proxy_server(
 
         valid = sum(1 for r in results if r.get("is_valid"))
         return ProxyCheckResponse(
-            checked=len(results), valid=valid, invalid=len(results) - valid,
+            checked=len(results),
+            valid=valid,
+            invalid=len(results) - valid,
         )
 
     @app.post("/proxy/refresh", tags=["代理池"])
@@ -148,7 +151,9 @@ def create_proxy_server(
         proxies = pool.store.get_valid_proxies(
             limit=limit, max_latency_ms=max_latency_ms
         )
-        return [ProxyListItem(**{k: v for k, v in p.items() if k != "_id"}) for p in proxies]
+        return [
+            ProxyListItem(**{k: v for k, v in p.items() if k != "_id"}) for p in proxies
+        ]
 
     @app.get("/proxy/get", tags=["代理池"])
     async def proxy_get():

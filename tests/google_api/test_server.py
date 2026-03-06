@@ -9,7 +9,10 @@ from fastapi.testclient import TestClient
 
 from webu.google_api.server import create_google_search_server
 from webu.google_api.proxy_manager import DEFAULT_PROXIES
-from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, resolve_google_api_settings
+from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PANEL_PATH,
+    resolve_google_api_settings,
+)
 
 
 class _FakeProxyManager:
@@ -62,7 +65,9 @@ class _FakeSearchResult:
 
 
 class _FakeGoogleScraper:
-    def __init__(self, proxy_manager=None, headless=True, profile_dir=None, screenshot_dir=None):
+    def __init__(
+        self, proxy_manager=None, headless=True, profile_dir=None, screenshot_dir=None
+    ):
         self.proxy_manager = proxy_manager
 
     async def start(self):
@@ -130,7 +135,9 @@ class TestGoogleSearchServerUnit:
         monkeypatch.setenv("WEBU_RUNTIME_ENV", "local")
         with patch("webu.google_api.server.ProxyManager", _FakeProxyManager):
             with patch("webu.google_api.server.GoogleScraper", _FakeGoogleScraper):
-                app = create_google_search_server(settings=resolve_google_api_settings(headless=True))
+                app = create_google_search_server(
+                    settings=resolve_google_api_settings(headless=True)
+                )
                 with TestClient(app) as client:
                     resp = client.get("/search?q=test")
                     assert resp.status_code == 401
@@ -151,13 +158,13 @@ class TestGoogleSearchServerUnit:
         (profile_dir / "google_cookies.json").write_text("[]\n", encoding="utf-8")
         (config_dir / "google_api.json").write_text(
             (
-                '{'
+                "{"
                 '"host": "0.0.0.0", '
                 '"port": 18200, '
                 '"proxy_mode": "auto", '
                 f'"profile_dir": "{profile_dir}", '
                 '"services": [{"type": "local", "api_token": "local-search-token"}]'
-                '}'
+                "}"
             ),
             encoding="utf-8",
         )
@@ -168,10 +175,15 @@ class TestGoogleSearchServerUnit:
 
         with patch("webu.google_api.server.ProxyManager", _FakeProxyManager):
             with patch("webu.google_api.server.GoogleScraper", _FakeGoogleScraper):
-                app = create_google_search_server(settings=resolve_google_api_settings(headless=True))
+                app = create_google_search_server(
+                    settings=resolve_google_api_settings(headless=True)
+                )
                 with TestClient(app) as client:
                     assert client.get("/admin/profile/status").status_code == 401
-                    resp = client.get("/admin/profile/status", headers={"X-Admin-Token": "admin-secret"})
+                    resp = client.get(
+                        "/admin/profile/status",
+                        headers={"X-Admin-Token": "admin-secret"},
+                    )
                     assert resp.status_code == 200
                     assert resp.json()["archive_available"] is True
 
@@ -180,7 +192,10 @@ class TestGoogleSearchServerUnit:
                         headers={"X-Admin-Token": "admin-secret"},
                     )
                     assert archive_resp.status_code == 200
-                    assert archive_resp.headers["content-type"] == "application/octet-stream"
+                    assert (
+                        archive_resp.headers["content-type"]
+                        == "application/octet-stream"
+                    )
                     assert len(archive_resp.content) > 0
 
     def test_panel_home_redirect_and_page(self):
@@ -190,7 +205,9 @@ class TestGoogleSearchServerUnit:
                 with TestClient(app) as client:
                     root_resp = client.get("/", follow_redirects=False)
                     assert root_resp.status_code == 307
-                    assert root_resp.headers["location"] == DEFAULT_GOOGLE_API_PANEL_PATH
+                    assert (
+                        root_resp.headers["location"] == DEFAULT_GOOGLE_API_PANEL_PATH
+                    )
 
                     panel_resp = client.get(DEFAULT_GOOGLE_API_PANEL_PATH)
                     assert panel_resp.status_code == 200

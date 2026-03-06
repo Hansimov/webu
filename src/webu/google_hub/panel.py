@@ -18,7 +18,10 @@ from webu.fastapis.dashboard_ui import (
     request_table,
     section,
 )
-from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_API_PANEL_REFRESH_MS
+from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PANEL_PATH,
+    DEFAULT_GOOGLE_API_PANEL_REFRESH_MS,
+)
 
 
 SnapshotProvider = Callable[[], dict]
@@ -51,7 +54,11 @@ def _build_body(snapshot: dict):
     avg_latency = float(requests.get("avg_latency_ms", 0.0))
     history_labels = _history_labels(history)
 
-    badge_tone = "accent" if healthy_count == total_count and total_count > 0 else ("warn" if healthy_count > 0 else "danger")
+    badge_tone = (
+        "accent"
+        if healthy_count == total_count and total_count > 0
+        else ("warn" if healthy_count > 0 else "danger")
+    )
 
     subtitle_parts = [
         f"Updated {snapshot.get('updated_at_human', '')}",
@@ -60,10 +67,27 @@ def _build_body(snapshot: dict):
     ]
 
     cards = [
-        metric_card("Instances", f"{healthy_count}/{max(total_count, 1)}", f"Strategy {snapshot.get('strategy', 'least-inflight')}", badge_tone),
-        metric_card("Requests", str(accepted), f"{successful} success / {failed} failed", "info"),
-        metric_card("Success rate", format_rate(success_rate), f"of {accepted} total requests", "accent" if success_rate >= 90 else "warn"),
-        metric_card("Avg latency", format_ms(avg_latency), f"min {format_ms(float(requests.get('min_latency_ms', 0.0)))} · max {format_ms(float(requests.get('max_latency_ms', 0.0)))}", "warn"),
+        metric_card(
+            "Instances",
+            f"{healthy_count}/{max(total_count, 1)}",
+            f"Strategy {snapshot.get('strategy', 'least-inflight')}",
+            badge_tone,
+        ),
+        metric_card(
+            "Requests", str(accepted), f"{successful} success / {failed} failed", "info"
+        ),
+        metric_card(
+            "Success rate",
+            format_rate(success_rate),
+            f"of {accepted} total requests",
+            "accent" if success_rate >= 90 else "warn",
+        ),
+        metric_card(
+            "Avg latency",
+            format_ms(avg_latency),
+            f"min {format_ms(float(requests.get('min_latency_ms', 0.0)))} · max {format_ms(float(requests.get('max_latency_ms', 0.0)))}",
+            "warn",
+        ),
     ]
 
     charts = [
@@ -72,8 +96,16 @@ def _build_body(snapshot: dict):
             line_figure(
                 labels=history_labels,
                 series=[
-                    {"name": "Accepted", "values": _history_values(history, "accepted_requests"), "color": THEME["info"]},
-                    {"name": "Success", "values": _history_values(history, "successful_requests"), "color": THEME["accent"]},
+                    {
+                        "name": "Accepted",
+                        "values": _history_values(history, "accepted_requests"),
+                        "color": THEME["info"],
+                    },
+                    {
+                        "name": "Success",
+                        "values": _history_values(history, "successful_requests"),
+                        "color": THEME["accent"],
+                    },
                 ],
                 axis_title="Requests",
             ),
@@ -83,8 +115,16 @@ def _build_body(snapshot: dict):
             line_figure(
                 labels=history_labels,
                 series=[
-                    {"name": "Avg", "values": _history_values(history, "avg_latency_ms"), "color": THEME["warn"]},
-                    {"name": "Last", "values": _history_values(history, "last_latency_ms"), "color": THEME["info"]},
+                    {
+                        "name": "Avg",
+                        "values": _history_values(history, "avg_latency_ms"),
+                        "color": THEME["warn"],
+                    },
+                    {
+                        "name": "Last",
+                        "values": _history_values(history, "last_latency_ms"),
+                        "color": THEME["info"],
+                    },
                 ],
                 axis_title="ms",
             ),
@@ -114,21 +154,35 @@ def _build_body(snapshot: dict):
             section("Overview", cards, kind="metric"),
             section("Trends", charts, kind="chart"),
             section("Instances", inst_cards, kind="instance"),
-            section("Request history", [request_table(request_log, show_backend=True)], kind="chart"),
+            section(
+                "Request history",
+                [request_table(request_log, show_backend=True)],
+                kind="chart",
+            ),
         ],
     )
 
 
 def mount_google_hub_panel(app, snapshot_provider: SnapshotProvider):
-    dash_app = create_dash_app(name=__name__, title="Google Hub Panel", panel_path=DEFAULT_GOOGLE_API_PANEL_PATH)
+    dash_app = create_dash_app(
+        name=__name__,
+        title="Google Hub Panel",
+        panel_path=DEFAULT_GOOGLE_API_PANEL_PATH,
+    )
     dash_app.layout = html.Div(
         [
-            dcc.Interval(id="hub-panel-refresh", interval=DEFAULT_GOOGLE_API_PANEL_REFRESH_MS, n_intervals=0),
+            dcc.Interval(
+                id="hub-panel-refresh",
+                interval=DEFAULT_GOOGLE_API_PANEL_REFRESH_MS,
+                n_intervals=0,
+            ),
             html.Div(id="hub-panel-root"),
         ]
     )
 
-    @dash_app.callback(Output("hub-panel-root", "children"), Input("hub-panel-refresh", "n_intervals"))
+    @dash_app.callback(
+        Output("hub-panel-root", "children"), Input("hub-panel-refresh", "n_intervals")
+    )
     def refresh_panel(_n_intervals: int):
         return _build_body(snapshot_provider())
 

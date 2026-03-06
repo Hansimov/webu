@@ -14,9 +14,7 @@ import pytest
 def _run_ggsc(*args, timeout=60):
     """运行 ggsc 命令并返回结果。"""
     cmd = [sys.executable, "-m", "webu.google_api"] + list(args)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     return result
 
 
@@ -39,14 +37,32 @@ class TestCLIBasicCommands:
         """--help 列出所有新命令。"""
         r = _run_ggsc("--help")
         output = r.stdout
-        for cmd in ["start", "stop", "restart", "status", "logs",
-                     "search", "search-test", "proxy-status", "proxy-check"]:
+        for cmd in [
+            "start",
+            "stop",
+            "restart",
+            "status",
+            "logs",
+            "search",
+            "search-test",
+            "proxy-status",
+            "proxy-check",
+        ]:
             assert cmd in output, f"Command '{cmd}' missing from help output"
 
     def test_each_subcommand_help(self):
         """每个子命令都有 --help。"""
-        for cmd in ["start", "stop", "restart", "status", "logs",
-                     "search", "search-test", "proxy-status", "proxy-check"]:
+        for cmd in [
+            "start",
+            "stop",
+            "restart",
+            "status",
+            "logs",
+            "search",
+            "search-test",
+            "proxy-status",
+            "proxy-check",
+        ]:
             r = _run_ggsc(cmd, "--help")
             assert r.returncode == 0, f"{cmd} --help failed: {r.stderr}"
 
@@ -95,7 +111,11 @@ class TestCLIOperations:
         r = _run_ggsc("proxy-status", timeout=30)
         assert r.returncode == 0
         combined = r.stdout + r.stderr
-        assert "proxy" in combined.lower() or "socks" in combined.lower() or "http" in combined.lower()
+        assert (
+            "proxy" in combined.lower()
+            or "socks" in combined.lower()
+            or "http" in combined.lower()
+        )
 
 
 # ═══════════════════════════════════════════════════════════════

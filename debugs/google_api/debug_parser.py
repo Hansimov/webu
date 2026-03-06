@@ -29,7 +29,9 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "html_samples")
 
 async def fetch_google_html(proxy_info: dict, timeout_s: int = 20) -> str | None:
     """通过代理获取 Google 搜索 HTML。"""
-    proxy_url = _build_proxy_url(proxy_info["ip"], proxy_info["port"], proxy_info["protocol"])
+    proxy_url = _build_proxy_url(
+        proxy_info["ip"], proxy_info["port"], proxy_info["protocol"]
+    )
     headers = {**_LEVEL2_HEADERS, "User-Agent": _random_ua()}
     timeout = aiohttp.ClientTimeout(total=timeout_s)
 
@@ -37,7 +39,9 @@ async def fetch_google_html(proxy_info: dict, timeout_s: int = 20) -> str | None
         is_socks = proxy_info["protocol"] in ("socks4", "socks5")
         if is_socks:
             connector = ProxyConnector.from_url(proxy_url)
-            session = aiohttp.ClientSession(connector=connector, headers=headers, timeout=timeout)
+            session = aiohttp.ClientSession(
+                connector=connector, headers=headers, timeout=timeout
+            )
         else:
             session = aiohttp.ClientSession(headers=headers, timeout=timeout)
 
@@ -111,7 +115,9 @@ def analyze_html_structure(html: str):
         for i, child in enumerate(rso.children):
             if hasattr(child, "name") and child.name:
                 text_preview = child.get_text(strip=True)[:80]
-                print(f"  [{i}] <{child.name}> attrs={list(child.attrs.keys())[:5]} text='{text_preview}'")
+                print(
+                    f"  [{i}] <{child.name}> attrs={list(child.attrs.keys())[:5]} text='{text_preview}'"
+                )
     else:
         print("\n  ⚠ 没有找到 #rso 元素")
 
@@ -124,7 +130,9 @@ def analyze_html_structure(html: str):
             if hasattr(child, "name") and child.name:
                 text_preview = child.get_text(strip=True)[:80]
                 classes = child.get("class", [])
-                print(f"  [{i}] <{child.name}> class={classes} text='{text_preview[:60]}'")
+                print(
+                    f"  [{i}] <{child.name}> class={classes} text='{text_preview[:60]}'"
+                )
 
     # 检查是否有 CAPTCHA
     captcha_markers = ["captcha", "unusual traffic", "/sorry/", "recaptcha"]
@@ -151,7 +159,11 @@ def test_parser(html: str):
     for r in response.results[:10]:
         print(f"\n  [{r.position}] {r.title}")
         print(f"      url: {r.url}")
-        print(f"      snippet: {r.snippet[:100]}..." if r.snippet else "      snippet: (无)")
+        print(
+            f"      snippet: {r.snippet[:100]}..."
+            if r.snippet
+            else "      snippet: (无)"
+        )
 
 
 async def main():
@@ -170,7 +182,9 @@ async def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     html = None
     for i, proxy in enumerate(l2_proxies[:10]):
-        print(f"\n尝试代理 [{i+1}]: {proxy['protocol']}://{proxy['ip']}:{proxy['port']}")
+        print(
+            f"\n尝试代理 [{i+1}]: {proxy['protocol']}://{proxy['ip']}:{proxy['port']}"
+        )
         html = await fetch_google_html(proxy)
         if html:
             # 保存原始 HTML

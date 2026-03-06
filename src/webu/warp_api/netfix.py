@@ -120,12 +120,14 @@ def fix_tailscale_compat() -> dict:
         handle = _get_nft_handle("input", "100.96.0.0/12 drop")
         if handle:
             rc, _ = _nft_run(
-                f'insert rule {WARP_NFT_TABLE} input handle {handle} '
+                f"insert rule {WARP_NFT_TABLE} input handle {handle} "
                 f'iifname "{TAILSCALE_INTERFACE}" accept'
             )
             if rc == 0:
                 result["nft_input"] = True
-                logger.okay(f"  ✓ nft input: added Tailscale exception (before handle {handle})")
+                logger.okay(
+                    f"  ✓ nft input: added Tailscale exception (before handle {handle})"
+                )
             else:
                 logger.warn(f"  × nft input: failed to insert rule")
         else:
@@ -139,12 +141,14 @@ def fix_tailscale_compat() -> dict:
         handle = _get_nft_handle("output", "100.96.0.0/12 drop")
         if handle:
             rc, _ = _nft_run(
-                f'insert rule {WARP_NFT_TABLE} output handle {handle} '
+                f"insert rule {WARP_NFT_TABLE} output handle {handle} "
                 f'oifname "{TAILSCALE_INTERFACE}" accept'
             )
             if rc == 0:
                 result["nft_output"] = True
-                logger.okay(f"  ✓ nft output: added Tailscale exception (before handle {handle})")
+                logger.okay(
+                    f"  ✓ nft output: added Tailscale exception (before handle {handle})"
+                )
             else:
                 logger.warn(f"  × nft output: failed to insert rule")
         else:
@@ -152,11 +156,20 @@ def fix_tailscale_compat() -> dict:
 
     # ── 修复 ip rule 优先级 ──────────────────────────────────
     if _has_ip_rule(TAILSCALE_RULE_PRIORITY, TAILSCALE_TABLE):
-        logger.mesg(f"  ip rule: Tailscale priority {TAILSCALE_RULE_PRIORITY} already exists")
+        logger.mesg(
+            f"  ip rule: Tailscale priority {TAILSCALE_RULE_PRIORITY} already exists"
+        )
     else:
         rc, _ = _sudo_run(
-            ["ip", "rule", "add", "priority", str(TAILSCALE_RULE_PRIORITY),
-             "lookup", str(TAILSCALE_TABLE)]
+            [
+                "ip",
+                "rule",
+                "add",
+                "priority",
+                str(TAILSCALE_RULE_PRIORITY),
+                "lookup",
+                str(TAILSCALE_TABLE),
+            ]
         )
         if rc == 0:
             result["ip_rule"] = True
@@ -231,10 +244,16 @@ def fix_ipv6_routing() -> dict:
     else:
         rc, _ = _sudo_run(
             [
-                "ip", "-6", "rule", "add",
-                "priority", str(IPV6_PROTECT_PRIORITY),
-                "from", prefix_cidr,
-                "lookup", "main",
+                "ip",
+                "-6",
+                "rule",
+                "add",
+                "priority",
+                str(IPV6_PROTECT_PRIORITY),
+                "from",
+                prefix_cidr,
+                "lookup",
+                "main",
             ]
         )
         if rc == 0:

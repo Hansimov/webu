@@ -2,7 +2,11 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
-from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, resolve_google_api_settings, resolve_google_docker_settings
+from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PANEL_PATH,
+    resolve_google_api_settings,
+    resolve_google_docker_settings,
+)
 from webu.google_docker.server import create_google_docker_server
 
 

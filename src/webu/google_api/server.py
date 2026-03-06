@@ -17,15 +17,28 @@ from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
 
-from webu.fastapis.request_metrics import RequestMetrics, format_dashboard_timestamp, resolve_server_identity
-from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_API_PORT, GoogleApiSettings, resolve_google_api_settings
+from webu.fastapis.request_metrics import (
+    RequestMetrics,
+    format_dashboard_timestamp,
+    resolve_server_identity,
+)
+from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PANEL_PATH,
+    DEFAULT_GOOGLE_API_PORT,
+    GoogleApiSettings,
+    resolve_google_api_settings,
+)
 
 from .panel import mount_google_api_panel
 from .profile_assets import DEFAULT_SHARED_PROFILE_SECRET
 from .profile_bootstrap import create_encrypted_profile_archive
 from .proxy_manager import ProxyManager, DEFAULT_PROXIES
 from .scraper import GoogleScraper
-from ..fastapis.styles import setup_root_landing_page, setup_root_redirect_page, setup_swagger_ui
+from ..fastapis.styles import (
+    setup_root_landing_page,
+    setup_root_redirect_page,
+    setup_swagger_ui,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -115,10 +128,19 @@ def _require_admin(x_admin_token: str | None):
 def _profile_status(profile_dir) -> ProfileStatusResponse:
     profile_path = resolved = profile_dir.expanduser()
     if not profile_path.exists():
-        return ProfileStatusResponse(profile_dir=str(profile_path), exists=False, file_count=0, last_modified_ts=0.0, archive_available=False)
+        return ProfileStatusResponse(
+            profile_dir=str(profile_path),
+            exists=False,
+            file_count=0,
+            last_modified_ts=0.0,
+            archive_available=False,
+        )
 
     file_paths = [path for path in profile_path.rglob("*") if path.is_file()]
-    last_modified_ts = max((path.stat().st_mtime for path in file_paths), default=profile_path.stat().st_mtime)
+    last_modified_ts = max(
+        (path.stat().st_mtime for path in file_paths),
+        default=profile_path.stat().st_mtime,
+    )
     return ProfileStatusResponse(
         profile_dir=str(profile_path),
         exists=True,
@@ -295,7 +317,9 @@ def create_google_search_server(
         """健康检查。"""
         return HealthResponse()
 
-    @app.get("/admin/profile/status", response_model=ProfileStatusResponse, tags=["管理"])
+    @app.get(
+        "/admin/profile/status", response_model=ProfileStatusResponse, tags=["管理"]
+    )
     async def admin_profile_status(x_admin_token: str | None = Header(default=None)):
         _require_admin(x_admin_token)
         return _profile_status(resolved_settings.profile_dir)
@@ -308,9 +332,13 @@ def create_google_search_server(
         _require_admin(x_admin_token)
         with tempfile.TemporaryDirectory(prefix="webu-profile-export-") as tempdir:
             archive_path = Path(tempdir) / "google_api_profile.bin"
-            created = create_encrypted_profile_archive(resolved_settings.profile_dir, archive_path, secret)
+            created = create_encrypted_profile_archive(
+                resolved_settings.profile_dir, archive_path, secret
+            )
             if not created or not archive_path.exists():
-                raise HTTPException(status_code=404, detail="Profile archive is not available")
+                raise HTTPException(
+                    status_code=404, detail="Profile archive is not available"
+                )
             status = _profile_status(resolved_settings.profile_dir)
             return Response(
                 content=archive_path.read_bytes(),
@@ -399,7 +427,9 @@ def main():
 
     argparser = argparse.ArgumentParser(description="Google Search API Server")
     argparser.add_argument("--host", default="0.0.0.0", help="Bind host")
-    argparser.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT, help="Bind port")
+    argparser.add_argument(
+        "--port", type=int, default=DEFAULT_GOOGLE_API_PORT, help="Bind port"
+    )
     argparser.add_argument("--no-headless", action="store_true", help="Show browser")
     args = argparser.parse_args()
 

@@ -88,11 +88,11 @@ class ProxyState:
             "total_successes": self.total_successes,
             "total_failures": self.total_failures,
             "success_rate": f"{self.success_rate:.1%}",
-            "last_check": time.strftime(
-                "%H:%M:%S", time.localtime(self.last_check_time)
-            )
-            if self.last_check_time
-            else "never",
+            "last_check": (
+                time.strftime("%H:%M:%S", time.localtime(self.last_check_time))
+                if self.last_check_time
+                else "never"
+            ),
         }
 
 
@@ -135,12 +135,15 @@ async def check_proxy_health(
         if is_socks:
             connector = ProxyConnector.from_url(proxy_url)
             session = aiohttp.ClientSession(
-                connector=connector, headers=headers, timeout=timeout,
+                connector=connector,
+                headers=headers,
+                timeout=timeout,
             )
             kwargs = {"ssl": False}
         else:
             session = aiohttp.ClientSession(
-                headers=headers, timeout=timeout,
+                headers=headers,
+                timeout=timeout,
             )
             kwargs = {"proxy": proxy_url, "ssl": False}
 
@@ -307,10 +310,7 @@ class ProxyManager:
         state.total_failures += 1
         state.last_failure_time = time.time()
 
-        if (
-            state.healthy
-            and state.consecutive_failures >= self.failure_threshold
-        ):
+        if state.healthy and state.consecutive_failures >= self.failure_threshold:
             state.healthy = False
             if self.verbose:
                 logger.warn(
@@ -387,8 +387,7 @@ class ProxyManager:
                 # 有不健康代理时加速检查
                 any_unhealthy = any(not p.healthy for p in self._proxies)
                 interval = (
-                    self.recovery_interval if any_unhealthy
-                    else self.check_interval
+                    self.recovery_interval if any_unhealthy else self.check_interval
                 )
                 await asyncio.sleep(interval)
 

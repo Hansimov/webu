@@ -107,7 +107,15 @@ async def _socks5_handshake(reader: asyncio.StreamReader, writer: asyncio.Stream
     if cmd != SOCKS5_CMD_CONNECT:
         # 只支持 CONNECT
         writer.write(
-            struct.pack("!BBBBIH", SOCKS5_VER, SOCKS5_REP_GENERAL_FAILURE, 0, SOCKS5_ATYP_IPV4, 0, 0)
+            struct.pack(
+                "!BBBBIH",
+                SOCKS5_VER,
+                SOCKS5_REP_GENERAL_FAILURE,
+                0,
+                SOCKS5_ATYP_IPV4,
+                0,
+                0,
+            )
         )
         await writer.drain()
         raise ValueError(f"Unsupported SOCKS5 command: {cmd}")
@@ -124,7 +132,15 @@ async def _socks5_handshake(reader: asyncio.StreamReader, writer: asyncio.Stream
         target_host = socket.inet_ntop(socket.AF_INET6, raw_addr)
     else:
         writer.write(
-            struct.pack("!BBBBIH", SOCKS5_VER, SOCKS5_REP_ADDR_NOT_SUPPORTED, 0, SOCKS5_ATYP_IPV4, 0, 0)
+            struct.pack(
+                "!BBBBIH",
+                SOCKS5_VER,
+                SOCKS5_REP_ADDR_NOT_SUPPORTED,
+                0,
+                SOCKS5_ATYP_IPV4,
+                0,
+                0,
+            )
         )
         await writer.drain()
         raise ValueError(f"Unsupported address type: {atyp}")
@@ -138,7 +154,11 @@ async def _socks5_handshake(reader: asyncio.StreamReader, writer: asyncio.Stream
 def _socks5_reply(rep: int, bind_addr: str = "0.0.0.0", bind_port: int = 0) -> bytes:
     """构造 SOCKS5 回复报文。"""
     addr_bytes = socket.inet_aton(bind_addr)
-    return struct.pack("!BBBB", SOCKS5_VER, rep, 0, SOCKS5_ATYP_IPV4) + addr_bytes + struct.pack("!H", bind_port)
+    return (
+        struct.pack("!BBBB", SOCKS5_VER, rep, 0, SOCKS5_ATYP_IPV4)
+        + addr_bytes
+        + struct.pack("!H", bind_port)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -146,7 +166,9 @@ def _socks5_reply(rep: int, bind_addr: str = "0.0.0.0", bind_port: int = 0) -> b
 # ═══════════════════════════════════════════════════════════════
 
 
-async def _http_connect_handshake(first_line: bytes, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+async def _http_connect_handshake(
+    first_line: bytes, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+):
     """处理 HTTP CONNECT 请求，返回 (target_host, target_port)。"""
     # 读取剩余请求头
     while True:
@@ -283,7 +305,9 @@ class WarpSocksProxy:
 
         try:
             # 窥探第一个字节来区分 SOCKS5 和 HTTP
-            first_byte = await asyncio.wait_for(client_reader.readexactly(1), timeout=30)
+            first_byte = await asyncio.wait_for(
+                client_reader.readexactly(1), timeout=30
+            )
 
             if first_byte[0] == SOCKS5_VER:
                 protocol = "SOCKS5"
@@ -331,14 +355,18 @@ class WarpSocksProxy:
                         target_host, target_port
                     )
                 except Exception as e:
-                    logger.warn(f"  × SOCKS5 connect to {target_host}:{target_port} failed: {e}")
+                    logger.warn(
+                        f"  × SOCKS5 connect to {target_host}:{target_port} failed: {e}"
+                    )
                     client_writer.write(_socks5_reply(SOCKS5_REP_CONN_REFUSED))
                     await client_writer.drain()
                     return
 
                 # 成功回复
                 bind_addr = remote_writer.get_extra_info("sockname", ("0.0.0.0", 0))
-                client_writer.write(_socks5_reply(SOCKS5_REP_SUCCESS, bind_addr[0], bind_addr[1]))
+                client_writer.write(
+                    _socks5_reply(SOCKS5_REP_SUCCESS, bind_addr[0], bind_addr[1])
+                )
                 await client_writer.drain()
 
             else:
@@ -378,7 +406,9 @@ class WarpSocksProxy:
                             target_host, target_port
                         )
                     except Exception as e:
-                        logger.warn(f"  × HTTP CONNECT to {target_host}:{target_port} failed: {e}")
+                        logger.warn(
+                            f"  × HTTP CONNECT to {target_host}:{target_port} failed: {e}"
+                        )
                         client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                         await client_writer.drain()
                         return
@@ -395,7 +425,9 @@ class WarpSocksProxy:
                     line_str = first_line.decode("ascii", errors="replace").strip()
                     parts = line_str.split(None, 2)
                     if len(parts) < 3:
-                        logger.warn(f"  × Malformed HTTP request from {peer}: {line_str[:80]}")
+                        logger.warn(
+                            f"  × Malformed HTTP request from {peer}: {line_str[:80]}"
+                        )
                         return
 
                     method, url, version = parts
@@ -456,7 +488,9 @@ class WarpSocksProxy:
                             target_host, target_port
                         )
                     except Exception as e:
-                        logger.warn(f"  × HTTP FORWARD to {target_host}:{target_port} failed: {e}")
+                        logger.warn(
+                            f"  × HTTP FORWARD to {target_host}:{target_port} failed: {e}"
+                        )
                         client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                         await client_writer.drain()
                         return
@@ -486,8 +520,10 @@ class WarpSocksProxy:
 
             # 双向中继
             await _relay_bidirectional(
-                client_reader, client_writer,
-                remote_reader, remote_writer,
+                client_reader,
+                client_writer,
+                remote_reader,
+                remote_writer,
             )
 
         except asyncio.IncompleteReadError:

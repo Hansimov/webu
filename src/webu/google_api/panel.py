@@ -17,7 +17,10 @@ from webu.fastapis.dashboard_ui import (
     request_table,
     section,
 )
-from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_API_PANEL_REFRESH_MS
+from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PANEL_PATH,
+    DEFAULT_GOOGLE_API_PANEL_REFRESH_MS,
+)
 
 
 SnapshotProvider = Callable[[], dict]
@@ -57,10 +60,27 @@ def _build_body(snapshot: dict):
     ]
 
     cards = [
-        metric_card("Requests", str(accepted), f"{successful} success / {failed} failed", "info"),
-        metric_card("Success rate", format_rate(success_rate), f"of {accepted} total requests", "accent" if success_rate >= 90 else "warn"),
-        metric_card("Avg latency", format_ms(avg_latency), f"min {format_ms(float(requests.get('min_latency_ms', 0.0)))} · max {format_ms(float(requests.get('max_latency_ms', 0.0)))}", "warn"),
-        metric_card(node.get("label", "Node"), node.get("value", "unknown"), service.get("status_note", ""), "info"),
+        metric_card(
+            "Requests", str(accepted), f"{successful} success / {failed} failed", "info"
+        ),
+        metric_card(
+            "Success rate",
+            format_rate(success_rate),
+            f"of {accepted} total requests",
+            "accent" if success_rate >= 90 else "warn",
+        ),
+        metric_card(
+            "Avg latency",
+            format_ms(avg_latency),
+            f"min {format_ms(float(requests.get('min_latency_ms', 0.0)))} · max {format_ms(float(requests.get('max_latency_ms', 0.0)))}",
+            "warn",
+        ),
+        metric_card(
+            node.get("label", "Node"),
+            node.get("value", "unknown"),
+            service.get("status_note", ""),
+            "info",
+        ),
     ]
 
     charts = [
@@ -69,8 +89,16 @@ def _build_body(snapshot: dict):
             line_figure(
                 labels=history_labels,
                 series=[
-                    {"name": "Accepted", "values": _history_values(history, "accepted_requests"), "color": THEME["info"]},
-                    {"name": "Success", "values": _history_values(history, "successful_requests"), "color": THEME["accent"]},
+                    {
+                        "name": "Accepted",
+                        "values": _history_values(history, "accepted_requests"),
+                        "color": THEME["info"],
+                    },
+                    {
+                        "name": "Success",
+                        "values": _history_values(history, "successful_requests"),
+                        "color": THEME["accent"],
+                    },
                 ],
                 axis_title="Requests",
             ),
@@ -80,8 +108,16 @@ def _build_body(snapshot: dict):
             line_figure(
                 labels=history_labels,
                 series=[
-                    {"name": "Avg", "values": _history_values(history, "avg_latency_ms"), "color": THEME["warn"]},
-                    {"name": "Last", "values": _history_values(history, "last_latency_ms"), "color": THEME["info"]},
+                    {
+                        "name": "Avg",
+                        "values": _history_values(history, "avg_latency_ms"),
+                        "color": THEME["warn"],
+                    },
+                    {
+                        "name": "Last",
+                        "values": _history_values(history, "last_latency_ms"),
+                        "color": THEME["info"],
+                    },
                 ],
                 axis_title="ms",
             ),
@@ -102,15 +138,25 @@ def _build_body(snapshot: dict):
 
 
 def mount_google_api_panel(app, snapshot_provider: SnapshotProvider):
-    dash_app = create_dash_app(name=__name__, title="Google Instance Panel", panel_path=DEFAULT_GOOGLE_API_PANEL_PATH)
+    dash_app = create_dash_app(
+        name=__name__,
+        title="Google Instance Panel",
+        panel_path=DEFAULT_GOOGLE_API_PANEL_PATH,
+    )
     dash_app.layout = html.Div(
         [
-            dcc.Interval(id="panel-refresh", interval=DEFAULT_GOOGLE_API_PANEL_REFRESH_MS, n_intervals=0),
+            dcc.Interval(
+                id="panel-refresh",
+                interval=DEFAULT_GOOGLE_API_PANEL_REFRESH_MS,
+                n_intervals=0,
+            ),
             html.Div(id="panel-root"),
         ]
     )
 
-    @dash_app.callback(Output("panel-root", "children"), Input("panel-refresh", "n_intervals"))
+    @dash_app.callback(
+        Output("panel-root", "children"), Input("panel-refresh", "n_intervals")
+    )
     def refresh_panel(_n_intervals: int):
         return _build_body(snapshot_provider())
 
