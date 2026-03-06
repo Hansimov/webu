@@ -9,6 +9,7 @@ from fastapi import Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PORT,
     GoogleApiSettings,
     GoogleDockerSettings,
     resolve_google_api_settings,
@@ -21,8 +22,8 @@ class RuntimeInfoResponse(BaseModel):
     service: str = "google_docker"
     runtime_env: str = "local"
     host: str = "0.0.0.0"
-    port: int = 18200
-    app_port: int = 18200
+    port: int = DEFAULT_GOOGLE_API_PORT
+    app_port: int = DEFAULT_GOOGLE_API_PORT
     headless: bool = True
     proxy_mode: str = "auto"
     proxy_count: int = 0
@@ -44,7 +45,7 @@ class LogsResponse(BaseModel):
 class ConfigResponse(BaseModel):
     runtime_env: str = "local"
     host: str = "0.0.0.0"
-    port: int = 18200
+    port: int = DEFAULT_GOOGLE_API_PORT
     image_name: str = ""
     container_name: str = ""
     proxy_mode: str = "auto"
@@ -78,7 +79,7 @@ def create_google_docker_server(
         port=resolved_docker.port,
     )
     resolved_admin_token = admin_token if admin_token is not None else resolved_docker.admin_token
-    home_mode = "hidden" if resolved_docker.runtime_env == "hf-space" else "swagger"
+    home_mode = "panel" if resolved_docker.runtime_env == "hf-space" else "swagger"
 
     app = create_google_search_server(settings=resolved_google, home_mode=home_mode)
     app.state.google_docker_settings = resolved_docker
@@ -151,7 +152,7 @@ def app_instance():
 def main():
     parser = argparse.ArgumentParser(description="Run google_docker service")
     parser.add_argument("--host", default=os.getenv("WEBU_DOCKER_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_DOCKER_PORT", "18200")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_DOCKER_PORT", str(DEFAULT_GOOGLE_API_PORT))))
     args = parser.parse_args()
     uvicorn.run(
         "webu.google_docker.server:app_instance",

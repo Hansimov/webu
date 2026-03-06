@@ -46,6 +46,8 @@ from webu.google_api.profile_bootstrap import (
 )
 from webu.google_api.profile_assets import DEFAULT_SHARED_PROFILE_SECRET, TRACKED_PROFILE_ARCHIVE_PATH
 from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PORT,
+    DEFAULT_GOOGLE_HUB_PORT,
     get_workspace_paths,
     load_json_config,
     resolve_captcha_vlm_settings,
@@ -1448,12 +1450,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = _add_command_parser(subparsers, "serve", "Run google_docker service in foreground")
     serve.add_argument("--host", default="0.0.0.0")
-    serve.add_argument("--port", type=int, default=18200)
+    serve.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     serve.set_defaults(func=cmd_serve)
 
     hub_serve = _add_command_parser(subparsers, "hub-serve", "Run the centralized google_hub service in foreground")
     hub_serve.add_argument("--host", default="0.0.0.0")
-    hub_serve.add_argument("--port", type=int, default=18100)
+    hub_serve.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_serve.set_defaults(func=cmd_hub_serve)
 
     docker_build = _add_command_parser(subparsers, "docker-build", "Build local docker image")
@@ -1464,7 +1466,7 @@ def build_parser() -> argparse.ArgumentParser:
     docker_run = _add_command_parser(subparsers, "docker-run", "Run local docker container")
     docker_run.add_argument("--image", default="")
     docker_run.add_argument("--name", default="")
-    docker_run.add_argument("--port", type=int, default=18200)
+    docker_run.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     docker_run.add_argument("--proxy-mode", choices=["auto", "enabled", "disabled"], default="auto")
     docker_run.add_argument("--bind-source", action="store_true")
     docker_run.add_argument("--mount-configs", action="store_true")
@@ -1485,7 +1487,7 @@ def build_parser() -> argparse.ArgumentParser:
     docker_up = _add_command_parser(subparsers, "docker-up", "Build and run the local docker service with practical defaults")
     docker_up.add_argument("--image", default="")
     docker_up.add_argument("--name", default="")
-    docker_up.add_argument("--port", type=int, default=18200)
+    docker_up.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     docker_up.add_argument("--proxy-mode", choices=["auto", "enabled", "disabled"], default="auto")
     docker_up.add_argument("--skip-build", action="store_true")
     docker_up.add_argument("--no-cache", action="store_true")
@@ -1500,7 +1502,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     docker_check = _add_command_parser(subparsers, "docker-check", "Check local docker container and service health")
     docker_check.add_argument("--name", default="")
-    docker_check.add_argument("--port", type=int, default=18200)
+    docker_check.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     docker_check.add_argument("--admin-token", default="")
     docker_check.add_argument("--timeout", type=int, default=15)
     docker_check.set_defaults(func=cmd_docker_check)
@@ -1508,7 +1510,7 @@ def build_parser() -> argparse.ArgumentParser:
     hub_docker_up = _add_command_parser(subparsers, "hub-docker-up", "Build and run the centralized hub service in local docker")
     hub_docker_up.add_argument("--image", default="")
     hub_docker_up.add_argument("--name", default="")
-    hub_docker_up.add_argument("--port", type=int, default=18100)
+    hub_docker_up.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_docker_up.add_argument("--skip-build", action="store_true")
     hub_docker_up.add_argument("--no-cache", action="store_true")
     hub_docker_up.add_argument("--bind-source", action="store_true")
@@ -1522,20 +1524,20 @@ def build_parser() -> argparse.ArgumentParser:
     hub_docker_down.set_defaults(func=cmd_hub_docker_down)
 
     hub_check = _add_command_parser(subparsers, "hub-check", "Check the local centralized hub service and backend status")
-    hub_check.add_argument("--port", type=int, default=18100)
+    hub_check.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_check.add_argument("--admin-token", default="")
     hub_check.add_argument("--timeout", type=int, default=15)
     hub_check.set_defaults(func=cmd_hub_check)
 
     hub_backends = _add_command_parser(subparsers, "hub-backends", "List the hub-managed backend states")
-    hub_backends.add_argument("--port", type=int, default=18100)
+    hub_backends.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_backends.add_argument("--admin-token", default="")
     hub_backends.add_argument("--timeout", type=int, default=30)
     hub_backends.set_defaults(func=cmd_hub_backends)
 
     hub_search = _add_command_parser(subparsers, "hub-search", "Route a search request through the centralized hub")
     hub_search.add_argument("query")
-    hub_search.add_argument("--port", type=int, default=18100)
+    hub_search.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
     hub_search.add_argument("--num", type=int, default=10)
     hub_search.add_argument("--lang", default="en")
     hub_search.add_argument("--timeout", type=int, default=90)
@@ -1543,7 +1545,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     hf_sync = _add_command_parser(subparsers, "hf-sync", "Upload current workspace to a Docker Space")
     hf_sync.add_argument("--space", default="")
-    hf_sync.add_argument("--port", type=int, default=18200)
+    hf_sync.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     hf_sync.add_argument("--message", default="")
     hf_sync.add_argument("--restart", action="store_true")
     hf_sync.add_argument("--factory", action="store_true")
@@ -1551,7 +1553,7 @@ def build_parser() -> argparse.ArgumentParser:
     hf_sync.set_defaults(func=cmd_hf_sync)
 
     hf_sync_all = _add_command_parser(subparsers, "hf-sync-all", "Upload current workspace to all enabled configured HF Spaces")
-    hf_sync_all.add_argument("--port", type=int, default=18200)
+    hf_sync_all.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     hf_sync_all.add_argument("--message", default="")
     hf_sync_all.add_argument("--restart", action="store_true")
     hf_sync_all.add_argument("--factory", action="store_true")

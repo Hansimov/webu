@@ -19,6 +19,12 @@ from .runtime import (
     resolve_proxy_catalog,
     resolve_searches_chrome_proxy,
 )
+from .defaults import (
+    DEFAULT_GOOGLE_API_PANEL_PATH,
+    DEFAULT_GOOGLE_API_PANEL_REFRESH_MS,
+    DEFAULT_GOOGLE_API_PORT,
+    DEFAULT_GOOGLE_HUB_PORT,
+)
 from .schema import (
     CONFIGS_DOC_PATH,
     available_config_names,
@@ -38,6 +44,10 @@ __all__ = [
     "HfSpaceSettings",
     "WorkspacePaths",
     "CONFIGS_DOC_PATH",
+    "DEFAULT_GOOGLE_API_PANEL_PATH",
+    "DEFAULT_GOOGLE_API_PANEL_REFRESH_MS",
+    "DEFAULT_GOOGLE_API_PORT",
+    "DEFAULT_GOOGLE_HUB_PORT",
     "available_config_names",
     "assert_public_text_safe",
     "config_schema_json",

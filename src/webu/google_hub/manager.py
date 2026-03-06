@@ -10,6 +10,8 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 import requests
 
 from webu.runtime_settings import (
+    DEFAULT_GOOGLE_API_PORT,
+    DEFAULT_GOOGLE_HUB_PORT,
     detect_runtime_environment,
     get_workspace_paths,
     load_json_config,
@@ -175,7 +177,7 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
             GoogleHubBackend(
                 name="local-google-api",
                 kind="google-api",
-                base_url=_normalize_backend_base_url(str(default_google.get("url", "http://127.0.0.1:18200")), runtime_env),
+                base_url=_normalize_backend_base_url(str(default_google.get("url", f"http://127.0.0.1:{DEFAULT_GOOGLE_API_PORT}")), runtime_env),
                 enabled=True,
                 weight=2,
                 search_api_token=str(default_google.get("api_token", "")).strip(),
@@ -205,7 +207,7 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
 
     return GoogleHubSettings(
         host=str(config.get("host", "0.0.0.0")),
-        port=int(config.get("port", 18100)),
+        port=int(config.get("port", DEFAULT_GOOGLE_HUB_PORT)),
         admin_token=str(config.get("admin_token", default_admin_token)).strip(),
         strategy=str(config.get("strategy", "least-inflight")).strip().lower(),
         request_timeout_sec=int(config.get("request_timeout_sec", 90)),
@@ -294,24 +296,29 @@ class GoogleHubManager:
         selected.last_selected_ts = time.time()
         return selected
 
-    async def search(self, *, query: str, num: int, lang: str) -> dict[str, Any]:
+    def ordered_backends(self) -> list[BackendRuntimeState]:
         candidates = self._eligible_states()
         if not candidates:
-            raise RuntimeError("no hub backends available")
+            return []
+        return sorted(
+            candidates,
+            key=lambda state: (
+                state.inflight / max(1, state.backend.weight),
+                state.consecutive_failures,
+                state.last_selected_ts,
+                state.latency_ms,
+                state.backend.name,
+            ),
+        )
 
-        ordered = []
-        while len(ordered) < len(candidates):
-            candidate = self.choose_backend()
-            if candidate.backend.name not in [state.backend.name for state in ordered]:
-                ordered.append(candidate)
-            else:
-                break
-
+    async def search(self, *, query: str, num: int, lang: str) -> dict[str, Any]:
+        ordered = self.ordered_backends()
         if not ordered:
-            ordered = candidates
+            raise RuntimeError("no hub backends available")
 
         last_error = None
         for state in ordered:
+            state.last_selected_ts = time.time()
             state.inflight += 1
             try:
                 headers = {}

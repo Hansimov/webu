@@ -12,7 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright", "psutil", "pymongo", "pytest-asyncio", "aiohttp", "aiohttp-socks", "huggingface_hub", "opencv-python-headless", "cryptography"]
+dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright", "psutil", "pymongo", "pytest-asyncio", "aiohttp", "aiohttp-socks", "huggingface_hub", "opencv-python-headless", "cryptography", "dash", "a2wsgi"]
 
 [project.urls]
 Homepage = "https://github.com/Hansimov/webu"

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.responses import HTMLResponse
 
 SWAGGER_CUSTOM_CSS = """
@@ -106,3 +107,9 @@ def setup_root_landing_page(app: FastAPI, title: str, message: str):
 </body>
 </html>
 """
+
+
+def setup_root_redirect_page(app: FastAPI, target_path: str):
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        return RedirectResponse(url=target_path, status_code=307)

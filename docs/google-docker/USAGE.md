@@ -194,7 +194,7 @@ ggdk hf-health
 
 ### `hf-home`
 
-读取远端隐藏首页。
+读取远端默认首页；HF Space 默认展示运行面板。
 
 ```bash
 ggdk hf-home

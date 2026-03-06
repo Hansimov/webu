@@ -9,6 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from webu.fastapis.styles import setup_swagger_ui
+from webu.runtime_settings import DEFAULT_GOOGLE_HUB_PORT
 
 from .manager import GoogleHubManager, GoogleHubSettings, resolve_google_hub_settings
 
@@ -105,7 +106,7 @@ def app_instance():
 def main():
     parser = argparse.ArgumentParser(description="Run google_hub service")
     parser.add_argument("--host", default=os.getenv("WEBU_HUB_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_HUB_PORT", "18100")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_HUB_PORT", str(DEFAULT_GOOGLE_HUB_PORT))))
     args = parser.parse_args()
     uvicorn.run(
         "webu.google_hub.server:app_instance",

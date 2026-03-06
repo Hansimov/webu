@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .defaults import DEFAULT_GOOGLE_API_PORT, DEFAULT_GOOGLE_HUB_PORT
 from .sensitive import assert_public_text_safe
 
 
@@ -40,10 +41,10 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
         ],
         "sample": {
             "host": "0.0.0.0",
-            "port": 18200,
+            "port": DEFAULT_GOOGLE_API_PORT,
             "proxy_mode": "auto",
             "services": [
-                {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
+                {"url": f"http://127.0.0.1:{DEFAULT_GOOGLE_API_PORT}", "type": "local", "api_token": ""},
                 {"type": "hf-space", "api_token": "your-hf-search-token"},
             ],
         },
@@ -97,7 +98,7 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
         ],
         "sample": {
             "host": "0.0.0.0",
-            "port": 18100,
+            "port": DEFAULT_GOOGLE_HUB_PORT,
             "strategy": "least-inflight",
             "health_interval_sec": 30,
             "health_timeout_sec": 10,
@@ -106,7 +107,7 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                 {
                     "name": "local-google-api",
                     "kind": "local-google-api",
-                    "base_url": "http://127.0.0.1:18200",
+                    "base_url": f"http://127.0.0.1:{DEFAULT_GOOGLE_API_PORT}",
                     "enabled": True,
                     "weight": 2,
                     "tags": ["local", "primary"],

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from webu.runtime_settings import DEFAULT_GOOGLE_API_PORT, DEFAULT_GOOGLE_HUB_PORT
 from webu.runtime_settings.sensitive import assert_public_text_safe
 
 
@@ -37,11 +38,11 @@ COMMAND_HELP = {
     },
     "serve": {
         "summary": "以前台方式直接启动 google_docker 服务。",
-        "examples": ["python -m webu.google_docker serve --host 0.0.0.0 --port 18200"],
+        "examples": [f"python -m webu.google_docker serve --host 0.0.0.0 --port {DEFAULT_GOOGLE_API_PORT}"],
     },
     "hub-serve": {
         "summary": "以前台方式直接启动中心化 google_hub 服务。",
-        "examples": ["python -m webu.google_docker hub-serve --host 0.0.0.0 --port 18100"],
+        "examples": [f"python -m webu.google_docker hub-serve --host 0.0.0.0 --port {DEFAULT_GOOGLE_HUB_PORT}"],
     },
     "docker-build": {
         "summary": "构建本地 Docker 镜像。",
@@ -64,7 +65,7 @@ COMMAND_HELP = {
     },
     "docker-check": {
         "summary": "检查本地容器状态、服务健康和同端口冲突提示。",
-        "examples": ["ggdk docker-check", "ggdk docker-check --port 18200"],
+        "examples": ["ggdk docker-check", f"ggdk docker-check --port {DEFAULT_GOOGLE_API_PORT}"],
     },
     "docker-logs": {
         "summary": "查看本地 Docker 日志。",
@@ -82,7 +83,7 @@ COMMAND_HELP = {
         "summary": "构建并启动本地 hub Docker 服务。",
         "examples": [
             "ggdk hub-docker-up --mount-configs --replace",
-            "ggdk hub-docker-up --skip-build --port 18100",
+            f"ggdk hub-docker-up --skip-build --port {DEFAULT_GOOGLE_HUB_PORT}",
         ],
     },
     "hub-docker-down": {
@@ -91,7 +92,7 @@ COMMAND_HELP = {
     },
     "hub-check": {
         "summary": "检查本地 hub 服务和所有后端状态。",
-        "examples": ["ggdk hub-check", "ggdk hub-check --port 18100"],
+        "examples": ["ggdk hub-check", f"ggdk hub-check --port {DEFAULT_GOOGLE_HUB_PORT}"],
     },
     "hub-backends": {
         "summary": "列出 hub 当前维护的后端状态和指标。",
@@ -141,7 +142,7 @@ COMMAND_HELP = {
         "examples": ["ggdk hf-health"],
     },
     "hf-home": {
-        "summary": "读取远端隐藏首页。",
+        "summary": "读取远端默认首页；HF Space 默认展示运行面板。",
         "examples": ["ggdk hf-home"],
     },
     "hf-search": {

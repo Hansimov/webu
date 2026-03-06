@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
-from webu.runtime_settings import resolve_google_api_settings, resolve_google_docker_settings
+from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, resolve_google_api_settings, resolve_google_docker_settings
 from webu.google_docker.server import create_google_docker_server
 
 
@@ -23,6 +23,8 @@ def _fake_google_search_app(home_mode="swagger"):
     async def root():
         if home_mode == "hidden":
             return "Static workspace content is available. Interactive routes are not published from this path."
+        if home_mode == "panel":
+            return f"panel-root:{DEFAULT_GOOGLE_API_PANEL_PATH}"
         return "swagger-root"
 
     return app
@@ -73,7 +75,7 @@ def test_admin_config_masks_token(monkeypatch, tmp_path):
     assert data["api_token_configured"] is True
 
 
-def test_hf_space_root_page_is_hidden(monkeypatch, tmp_path):
+def test_hf_space_root_page_uses_panel(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
     monkeypatch.setenv("WEBU_RUNTIME_ENV", "hf-space")
     monkeypatch.setattr(
@@ -87,4 +89,4 @@ def test_hf_space_root_page_is_hidden(monkeypatch, tmp_path):
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "Static workspace content is available" in resp.text
+    assert resp.text == f"panel-root:{DEFAULT_GOOGLE_API_PANEL_PATH}"

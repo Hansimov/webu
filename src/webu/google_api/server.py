@@ -7,22 +7,25 @@
 import asyncio
 import os
 import tempfile
+import time
 import uvicorn
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pathlib import Path
 from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
 
-from webu.runtime_settings import GoogleApiSettings, resolve_google_api_settings
+from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_API_PORT, GoogleApiSettings, resolve_google_api_settings
 
+from .panel import build_process_snapshot, mount_google_api_panel
 from .profile_assets import DEFAULT_SHARED_PROFILE_SECRET
 from .profile_bootstrap import create_encrypted_profile_archive
 from .proxy_manager import ProxyManager, DEFAULT_PROXIES
 from .scraper import GoogleScraper
-from ..fastapis.styles import setup_root_landing_page, setup_swagger_ui
+from ..fastapis.styles import setup_root_landing_page, setup_root_redirect_page, setup_swagger_ui
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -125,6 +128,12 @@ def _profile_status(profile_dir) -> ProfileStatusResponse:
     )
 
 
+def _format_timestamp(ts: float) -> str:
+    if not ts:
+        return ""
+    return datetime.fromtimestamp(ts).isoformat(sep=" ", timespec="seconds")
+
+
 def _resolve_search_api_token(
     header_token: str | None,
     query_token: str | None,
@@ -152,6 +161,7 @@ def create_google_search_server(
 
     resolved_settings = settings or resolve_google_api_settings(headless=headless)
     resolved_proxies = proxies if proxies is not None else resolved_settings.proxies
+    started_at = time.time()
 
     proxy_manager: ProxyManager = None
     scraper: GoogleScraper = None
@@ -212,9 +222,56 @@ def create_google_search_server(
             title="Workspace Assets",
             message="Static workspace content is available. Interactive routes are not published from this path.",
         )
+    elif home_mode == "panel":
+        setup_root_redirect_page(app, DEFAULT_GOOGLE_API_PANEL_PATH)
     else:
         setup_swagger_ui(app)
     app.state.google_api_settings = resolved_settings
+
+    def _panel_snapshot() -> dict:
+        proxy_stats = _proxy_stats()
+        profile_status = _profile_status(resolved_settings.profile_dir)
+        return {
+            "updated_at_human": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "health": {
+                "scraper_ready": scraper is not None,
+            },
+            "runtime": {
+                "runtime_env": resolved_settings.runtime_env,
+                "host": resolved_settings.host,
+                "port": resolved_settings.port,
+                "service_url": resolved_settings.service_url,
+                "service_type": resolved_settings.service_type,
+                "headless": resolved_settings.headless,
+                "proxy_mode": resolved_settings.proxy_mode,
+                "proxy_count": len(resolved_settings.proxies),
+                "api_token_configured": bool(resolved_settings.api_token),
+                "admin_token_configured": bool(_resolve_admin_token()),
+                "panel_root_enabled": home_mode == "panel",
+                "profile_dir": str(resolved_settings.profile_dir),
+                "screenshot_dir": str(resolved_settings.screenshot_dir),
+                "data_dir": str(resolved_settings.data_dir),
+            },
+            "process": build_process_snapshot(started_at),
+            "profile": {
+                "profile_dir": profile_status.profile_dir,
+                "exists": profile_status.exists,
+                "file_count": profile_status.file_count,
+                "archive_available": profile_status.archive_available,
+                "last_modified_human": _format_timestamp(profile_status.last_modified_ts),
+            },
+            "proxy_stats": proxy_stats,
+            "links": {
+                "Health API": "/health",
+                "Search API": "/docs#/default/search_get_search_get",
+                "Proxy Status": "/proxy/status",
+                "Profile Status": "/admin/profile/status",
+                "Profile Archive": "/admin/profile/archive",
+                "Swagger UI": "/docs",
+            },
+        }
+
+    mount_google_api_panel(app, _panel_snapshot)
 
     def _require_search_token(
         header_token: str | None,
@@ -362,7 +419,7 @@ def main():
 
     argparser = argparse.ArgumentParser(description="Google Search API Server")
     argparser.add_argument("--host", default="0.0.0.0", help="Bind host")
-    argparser.add_argument("--port", type=int, default=18200, help="Bind port")
+    argparser.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT, help="Bind port")
     argparser.add_argument("--no-headless", action="store_true", help="Show browser")
     args = argparser.parse_args()
 
