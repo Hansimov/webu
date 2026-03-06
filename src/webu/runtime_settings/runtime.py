@@ -51,6 +51,9 @@ class GoogleApiSettings:
     data_dir: Path
     proxy_mode: str
     runtime_env: str
+    service_url: str
+    service_type: str
+    api_token: str
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,88 @@ def resolve_proxy_api_fetch_proxy() -> str:
 
 def resolve_searches_chrome_proxy() -> str:
     return resolve_named_local_proxy("searches", "chrome_proxy")
+
+
+def _default_google_api_service_type(runtime_env: str) -> str:
+    if runtime_env == "hf-space":
+        return "hf-space"
+    if runtime_env == "docker":
+        return "local"
+    return "local"
+
+
+def _normalize_service_type(value: str | None, runtime_env: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"local", "remote-server", "hf-space"}:
+        return text
+    return _default_google_api_service_type(runtime_env)
+
+
+def _resolve_default_hf_space_name(selected: dict[str, Any] | None = None) -> str:
+    explicit = (
+        os.getenv("WEBU_HF_SPACE_NAME")
+        or os.getenv("SPACE_ID")
+        or os.getenv("HF_SPACE_NAME")
+    )
+    if explicit:
+        return str(explicit).strip()
+
+    if selected:
+        selected_space = str(selected.get("space", "")).strip()
+        if selected_space:
+            return selected_space
+
+    raw_entries = load_json_config("hf_spaces") or []
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            continue
+        space_name = str(entry.get("space", "")).strip()
+        if space_name:
+            return space_name
+    return ""
+
+
+def resolve_google_api_service_profile(
+    *,
+    runtime_env: str | None = None,
+    service_type: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+) -> dict[str, str]:
+    env = runtime_env or detect_runtime_environment()
+    config = load_json_config("google_api") or {}
+
+    resolved_type = _normalize_service_type(
+        os.getenv("WEBU_GOOGLE_SERVICE_TYPE") or service_type or config.get("service_type", ""),
+        env,
+    )
+    env_url = str(os.getenv("WEBU_GOOGLE_SERVICE_URL", "")).strip()
+    env_token = os.getenv("WEBU_GOOGLE_API_TOKEN")
+
+    selected = {}
+    for item in config.get("services", []):
+        if not isinstance(item, dict):
+            continue
+        item_type = _normalize_service_type(item.get("type"), env)
+        if item_type == resolved_type:
+            selected = item
+            break
+
+    resolved_host = str(host or os.getenv("WEBU_GOOGLE_HOST", config.get("host", "0.0.0.0")))
+    resolved_port = int(port or _env_int("WEBU_GOOGLE_PORT", int(config.get("port", 18000))))
+    default_url = f"http://127.0.0.1:{resolved_port}"
+    selected_url = str(selected.get("url", "")).strip()
+    derived_url = ""
+    if resolved_type == "hf-space" and not env_url and not selected_url:
+        derived_space_name = _resolve_default_hf_space_name(selected)
+        if derived_space_name:
+            derived_url = resolve_hf_space_settings(derived_space_name).space_host
+
+    return {
+        "url": env_url or selected_url or derived_url or default_url,
+        "type": resolved_type,
+        "api_token": env_token if env_token is not None else str(selected.get("api_token", "")).strip(),
+    }
 
 
 def get_workspace_paths() -> WorkspacePaths:
@@ -269,9 +354,11 @@ def resolve_google_api_settings(
     headless: bool | None = None,
     host: str | None = None,
     port: int | None = None,
+    runtime_env: str | None = None,
+    service_type: str | None = None,
 ) -> GoogleApiSettings:
     paths = get_workspace_paths()
-    runtime_env = detect_runtime_environment()
+    runtime_env = runtime_env or detect_runtime_environment()
     config = load_json_config("google_api") or {}
 
     proxy_mode = os.getenv("WEBU_GOOGLE_PROXY_MODE", config.get("proxy_mode", "auto")).strip().lower()
@@ -325,6 +412,12 @@ def resolve_google_api_settings(
             config.get("data_dir", paths.data_dir / "google_api"),
         )
     ).expanduser()
+    service_profile = resolve_google_api_service_profile(
+        runtime_env=runtime_env,
+        service_type=service_type,
+        host=resolved_host,
+        port=resolved_port,
+    )
 
     return GoogleApiSettings(
         host=str(resolved_host),
@@ -336,6 +429,9 @@ def resolve_google_api_settings(
         data_dir=data_dir,
         proxy_mode=proxy_mode,
         runtime_env=runtime_env,
+        service_url=service_profile["url"],
+        service_type=service_profile["type"],
+        api_token=service_profile["api_token"],
     )
 
 

@@ -8,5 +8,6 @@ __pycache__
 data
 debugs
 tests
-configs/*.json
+configs
 src/webu.egg-info
+src/webu/captcha/imgs

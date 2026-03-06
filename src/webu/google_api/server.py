@@ -8,7 +8,7 @@ import asyncio
 import uvicorn
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
@@ -84,6 +84,13 @@ class HealthResponse(BaseModel):
 
     status: str = "ok"
     version: str = "1.1.0"
+
+
+def _resolve_search_api_token(
+    header_token: str | None,
+    query_token: str | None,
+) -> str:
+    return (header_token or query_token or "").strip()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -170,6 +177,17 @@ def create_google_search_server(
         setup_swagger_ui(app)
     app.state.google_api_settings = resolved_settings
 
+    def _require_search_token(
+        header_token: str | None,
+        query_token: str | None,
+    ):
+        configured_token = resolved_settings.api_token.strip()
+        if not configured_token:
+            return
+        request_token = _resolve_search_api_token(header_token, query_token)
+        if request_token != configured_token:
+            raise HTTPException(status_code=401, detail="Invalid api token")
+
     def _ensure_ready():
         if not scraper:
             raise HTTPException(status_code=503, detail="Server not ready")
@@ -184,9 +202,14 @@ def create_google_search_server(
     # ── 搜索接口 ──────────────────────────────────────────────
 
     @app.post("/search", response_model=SearchResponse, tags=["搜索"])
-    async def search(req: SearchRequest):
+    async def search(
+        req: SearchRequest,
+        api_token: str | None = Query(None, description="搜索接口 token，可选"),
+        x_api_token: str | None = Header(default=None, alias="X-Api-Token"),
+    ):
         """执行 Google 搜索并返回解析后的结果。"""
         _ensure_ready()
+        _require_search_token(x_api_token, api_token)
         try:
             result = await scraper.search(
                 query=req.query,
@@ -214,10 +237,12 @@ def create_google_search_server(
         q: str = Query(..., description="搜索关键词", min_length=1),
         num: int = Query(10, description="结果数量", ge=1, le=50),
         lang: str = Query("en", description="搜索语言"),
+        api_token: str | None = Query(None, description="搜索接口 token，可选"),
+        x_api_token: str | None = Header(default=None, alias="X-Api-Token"),
     ):
         """GET 方式执行 Google 搜索。"""
         req = SearchRequest(query=q, num=num, lang=lang)
-        return await search(req)
+        return await search(req, api_token=api_token, x_api_token=x_api_token)
 
     # ── 代理状态接口 ──────────────────────────────────────────
 

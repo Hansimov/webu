@@ -18,11 +18,16 @@ import requests
 from huggingface_hub import HfApi
 from tclogger import dict_to_str, logger
 
+from webu.google_api.profile_bootstrap import (
+    DEFAULT_BOOTSTRAP_ARCHIVE_NAME,
+    create_encrypted_profile_archive,
+)
 from webu.runtime_settings import (
     get_workspace_paths,
     load_json_config,
     resolve_captcha_vlm_settings,
     resolve_google_api_settings,
+    resolve_google_api_service_profile,
     resolve_google_docker_settings,
     resolve_hf_space_settings,
 )
@@ -50,6 +55,20 @@ SPACE_PACKAGE_DIRS = [
     "google_docker",
     "runtime_settings",
 ]
+SPACE_BOOTSTRAP_ARCHIVE = f"bootstrap/{DEFAULT_BOOTSTRAP_ARCHIVE_NAME}"
+
+
+def _space_package_ignore(package_name: str):
+    ignore_names = [
+        "__pycache__",
+        "*.pyc",
+        "*.pyo",
+        "ipv6_global_addrs.json",
+        "ipv6_mirrors",
+    ]
+    if package_name == "captcha":
+        ignore_names.append("imgs")
+    return shutil.ignore_patterns(*ignore_names)
 
 
 def _write_minimal_webu_init(package_root: Path):
@@ -121,6 +140,26 @@ def _write_sanitized_pyproject(source_root: Path, bundle_root: Path):
     (bundle_root / "pyproject.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _create_google_profile_bootstrap_archive(bundle_root: Path):
+    bootstrap_root = bundle_root / "bootstrap"
+    bootstrap_root.mkdir(parents=True, exist_ok=True)
+
+    source_profile_dir = resolve_google_api_settings(runtime_env="local", service_type="local").profile_dir
+    if not source_profile_dir.exists() or not any(source_profile_dir.iterdir()):
+        return
+
+    google_service = resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
+    api_token = str(google_service.get("api_token", "")).strip()
+    if not api_token:
+        raise ValueError("google_api hf-space api_token is required to encrypt the bootstrap profile")
+
+    create_encrypted_profile_archive(
+        source_profile_dir,
+        bundle_root / SPACE_BOOTSTRAP_ARCHIVE,
+        api_token,
+    )
+
+
 def prepare_space_bundle(source_root: Path, output_root: Path, app_port: int, repo_id: str) -> Path:
     bundle_root = output_root / "bundle"
     bundle_root.mkdir(parents=True, exist_ok=True)
@@ -133,6 +172,7 @@ def prepare_space_bundle(source_root: Path, output_root: Path, app_port: int, re
 
     shutil.copy2(DOCKERFILE_PATH, bundle_root / "Dockerfile")
     (bundle_root / "README.md").write_text(_space_readme(repo_id, app_port), encoding="utf-8")
+    _create_google_profile_bootstrap_archive(bundle_root)
 
     src_root = source_root / "src"
     bundle_src_root = bundle_root / "src"
@@ -148,13 +188,7 @@ def prepare_space_bundle(source_root: Path, output_root: Path, app_port: int, re
             src_package,
             dst_package,
             dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(
-                "__pycache__",
-                "*.pyc",
-                "*.pyo",
-                "ipv6_global_addrs.json",
-                "ipv6_mirrors",
-            ),
+            ignore=_space_package_ignore(package_name),
         )
     return bundle_root
 
@@ -166,7 +200,69 @@ def _docker_env_args(env_map: dict[str, str]) -> list[str]:
     return args
 
 
+def _resolve_default_space_name(explicit_space: str | None = None) -> str:
+    space_name = str(explicit_space or os.getenv("WEBU_HF_SPACE_NAME") or "").strip()
+    if space_name:
+        return space_name
+
+    raw_entries = load_json_config("hf_spaces") or []
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            continue
+        candidate = str(entry.get("space", "")).strip()
+        if candidate:
+            return candidate
+
+    raise ValueError("HF space not configured; pass --space or add configs/hf_spaces.json")
+
+
+def _resolve_hf_service_profile() -> dict[str, str]:
+    return resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
+
+
+def _resolve_hf_service_url() -> str:
+    service_url = str(_resolve_hf_service_profile().get("url", "")).strip().rstrip("/")
+    if not service_url:
+        raise ValueError("hf-space service URL is not configured")
+    return service_url
+
+
+def _resolve_hf_search_token(explicit_token: str | None = None) -> str:
+    token = str(explicit_token or _resolve_hf_service_profile().get("api_token", "")).strip()
+    return token
+
+
+def _resolve_admin_token(explicit_token: str | None = None) -> str:
+    token = str(explicit_token or resolve_google_docker_settings().admin_token).strip()
+    return token
+
+
+def _print_http_response(response: requests.Response):
+    try:
+        print(json.dumps(response.json(), indent=2, ensure_ascii=False))
+    except ValueError:
+        print(response.text)
+
+
+def _request_hf_service(
+    path: str,
+    *,
+    params: dict[str, str | int] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = 30,
+):
+    response = requests.get(
+        f"{_resolve_hf_service_url()}{path}",
+        params=params,
+        headers=headers,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response
+
+
 def _resolve_hf_api(space_name: str) -> tuple[HfApi, object]:
+    space_name = _resolve_default_space_name(space_name)
     settings = resolve_hf_space_settings(space_name)
     if not settings.hf_token:
         raise ValueError(f"HF token not found for space: {space_name}")
@@ -224,6 +320,7 @@ def _is_public_http_endpoint(endpoint: str) -> bool:
 
 def _sync_space_runtime_config(api: HfApi, space_name: str, admin_token: str | None):
     captcha = resolve_captcha_vlm_settings()
+    google_service = resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
     llm_catalog = load_json_config("llms") or {}
     hf_profile_name = os.getenv("WEBU_HF_CAPTCHA_VLM_PROFILE", "sf_qwen3_vl_8b").strip()
     hf_profile = llm_catalog.get(hf_profile_name, {}) if hf_profile_name else {}
@@ -237,7 +334,10 @@ def _sync_space_runtime_config(api: HfApi, space_name: str, admin_token: str | N
         "WEBU_GOOGLE_PROXY_MODE": os.getenv("WEBU_GOOGLE_PROXY_MODE", "disabled"),
         "WEBU_GOOGLE_HEADLESS": "true",
         "WEBU_SERVICE_LOG": "/tmp/webu-google-docker.log",
+        "WEBU_GOOGLE_SERVICE_TYPE": google_service["type"],
     }
+    if google_service["url"]:
+        variable_map["WEBU_GOOGLE_SERVICE_URL"] = google_service["url"]
 
     selected_endpoint = hf_captcha_endpoint
     if not selected_endpoint:
@@ -268,6 +368,12 @@ def _sync_space_runtime_config(api: HfApi, space_name: str, admin_token: str | N
             key="WEBU_CAPTCHA_VLM_API_KEY",
             value=selected_api_key,
         )
+    if google_service["api_token"]:
+        api.add_space_secret(
+            repo_id=space_name,
+            key="WEBU_GOOGLE_API_TOKEN",
+            value=google_service["api_token"],
+        )
     if admin_token:
         api.add_space_secret(
             repo_id=space_name,
@@ -287,6 +393,9 @@ def cmd_print_config(args):
             "headless": google.headless,
             "proxy_mode": google.proxy_mode,
             "proxies": google.proxies,
+            "service_url": google.service_url,
+            "service_type": google.service_type,
+            "api_token_configured": bool(google.api_token),
             "profile_dir": str(google.profile_dir),
             "screenshot_dir": str(google.screenshot_dir),
         },
@@ -428,9 +537,10 @@ def cmd_docker_logs(args):
 
 
 def cmd_hf_sync(args):
-    api, hf_settings = _resolve_hf_api(args.space)
+    space_name = _resolve_default_space_name(args.space)
+    api, hf_settings = _resolve_hf_api(space_name)
     docker_settings = resolve_google_docker_settings()
-    repo_id = args.repo_id or args.space
+    repo_id = args.repo_id or space_name
 
     api.create_repo(repo_id=repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
 
@@ -461,10 +571,11 @@ def cmd_hf_sync(args):
 
 
 def cmd_hf_status(args):
-    api, hf_settings = _resolve_hf_api(args.space)
-    runtime = api.get_space_runtime(repo_id=args.space)
+    space_name = _resolve_default_space_name(args.space)
+    api, hf_settings = _resolve_hf_api(space_name)
+    runtime = api.get_space_runtime(repo_id=space_name)
     info = {
-        "repo_id": args.space,
+        "repo_id": space_name,
         "stage": str(runtime.stage),
         "hardware": runtime.hardware,
         "requested_hardware": runtime.requested_hardware,
@@ -476,24 +587,28 @@ def cmd_hf_status(args):
 
 
 def cmd_hf_restart(args):
-    _, hf_settings = _resolve_hf_api(args.space)
-    used_endpoint = _restart_space_request(args.space, hf_settings.hf_token, factory_reboot=args.factory)
-    logger.okay(f"  ✓ Restart requested for: {args.space} via {used_endpoint}")
+    space_name = _resolve_default_space_name(args.space)
+    _, hf_settings = _resolve_hf_api(space_name)
+    used_endpoint = _restart_space_request(space_name, hf_settings.hf_token, factory_reboot=args.factory)
+    logger.okay(f"  ✓ Restart requested for: {space_name} via {used_endpoint}")
 
 
 def cmd_hf_super_squash(args):
-    api, _ = _resolve_hf_api(args.space)
-    _super_squash_space_history(api, args.space, branch=args.branch)
-    logger.okay(f"  ✓ Super-squashed Space history for: {args.space} ({args.branch})")
+    space_name = _resolve_default_space_name(args.space)
+    api, _ = _resolve_hf_api(space_name)
+    _super_squash_space_history(api, space_name, branch=args.branch)
+    logger.okay(f"  ✓ Super-squashed Space history for: {space_name} ({args.branch})")
 
 
 def cmd_hf_logs(args):
-    _, hf_settings = _resolve_hf_api(args.space)
+    space_name = _resolve_default_space_name(args.space)
+    _, hf_settings = _resolve_hf_api(space_name)
     headers = {}
     if hf_settings.hf_token:
         headers["Authorization"] = f"Bearer {hf_settings.hf_token}"
-    if args.admin_token:
-        headers["X-Admin-Token"] = args.admin_token
+    admin_token = _resolve_admin_token(args.admin_token)
+    if admin_token:
+        headers["X-Admin-Token"] = admin_token
     response = requests.get(
         f"{hf_settings.space_host}/admin/logs",
         params={"lines": args.lines},
@@ -502,6 +617,63 @@ def cmd_hf_logs(args):
     )
     response.raise_for_status()
     print(response.json().get("content", ""))
+
+
+def cmd_hf_url(args):
+    print(_resolve_hf_service_url())
+
+
+def cmd_hf_health(args):
+    response = _request_hf_service("/health", timeout=args.timeout)
+    _print_http_response(response)
+
+
+def cmd_hf_home(args):
+    response = _request_hf_service("/", timeout=args.timeout)
+    _print_http_response(response)
+
+
+def cmd_hf_runtime(args):
+    admin_token = _resolve_admin_token(args.admin_token)
+    if not admin_token:
+        raise ValueError("Admin token not configured; set configs/google_docker.json or pass --admin-token")
+    response = _request_hf_service(
+        "/admin/runtime",
+        headers={"X-Admin-Token": admin_token},
+        timeout=args.timeout,
+    )
+    _print_http_response(response)
+
+
+def cmd_hf_search(args):
+    headers = {}
+    if not args.no_auth:
+        api_token = _resolve_hf_search_token(args.api_token)
+        if api_token:
+            headers["X-Api-Token"] = api_token
+    response = _request_hf_service(
+        "/search",
+        params={"q": args.query, "num": args.num, "lang": args.lang},
+        headers=headers or None,
+        timeout=args.timeout,
+    )
+    _print_http_response(response)
+
+
+def cmd_hf_files(args):
+    space_name = _resolve_default_space_name(args.space)
+    api, _ = _resolve_hf_api(space_name)
+    files = sorted(api.list_repo_files(space_name, repo_type="space"))
+    for path in files:
+        if args.prefix and not path.startswith(args.prefix):
+            continue
+        print(path)
+
+
+def cmd_hf_commit_count(args):
+    space_name = _resolve_default_space_name(args.space)
+    api, _ = _resolve_hf_api(space_name)
+    print(len(api.list_repo_commits(space_name, repo_type="space")))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -543,7 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
     docker_logs.set_defaults(func=cmd_docker_logs)
 
     hf_sync = subparsers.add_parser("hf-sync", help="Upload current workspace to a Docker Space")
-    hf_sync.add_argument("--space", required=True)
+    hf_sync.add_argument("--space", default="")
     hf_sync.add_argument("--repo-id", default="")
     hf_sync.add_argument("--port", type=int, default=18000)
     hf_sync.add_argument("--message", default="")
@@ -553,24 +725,58 @@ def build_parser() -> argparse.ArgumentParser:
     hf_sync.set_defaults(func=cmd_hf_sync)
 
     hf_status = subparsers.add_parser("hf-status", help="Get HF Space runtime status")
-    hf_status.add_argument("--space", required=True)
+    hf_status.add_argument("--space", default="")
     hf_status.set_defaults(func=cmd_hf_status)
 
     hf_restart = subparsers.add_parser("hf-restart", help="Restart HF Space")
-    hf_restart.add_argument("--space", required=True)
+    hf_restart.add_argument("--space", default="")
     hf_restart.add_argument("--factory", action="store_true")
     hf_restart.set_defaults(func=cmd_hf_restart)
 
     hf_super_squash = subparsers.add_parser("hf-super-squash", help="Super-squash HF Space commit history")
-    hf_super_squash.add_argument("--space", required=True)
+    hf_super_squash.add_argument("--space", default="")
     hf_super_squash.add_argument("--branch", default="main")
     hf_super_squash.set_defaults(func=cmd_hf_super_squash)
 
     hf_logs = subparsers.add_parser("hf-logs", help="Read remote service logs from HF Space")
-    hf_logs.add_argument("--space", required=True)
+    hf_logs.add_argument("--space", default="")
     hf_logs.add_argument("--lines", type=int, default=200)
     hf_logs.add_argument("--admin-token", default="")
     hf_logs.set_defaults(func=cmd_hf_logs)
+
+    hf_url = subparsers.add_parser("hf-url", help="Print the resolved HF service URL")
+    hf_url.set_defaults(func=cmd_hf_url)
+
+    hf_health = subparsers.add_parser("hf-health", help="Call remote /health")
+    hf_health.add_argument("--timeout", type=int, default=30)
+    hf_health.set_defaults(func=cmd_hf_health)
+
+    hf_home = subparsers.add_parser("hf-home", help="Call remote /")
+    hf_home.add_argument("--timeout", type=int, default=30)
+    hf_home.set_defaults(func=cmd_hf_home)
+
+    hf_runtime = subparsers.add_parser("hf-runtime", help="Call remote /admin/runtime")
+    hf_runtime.add_argument("--admin-token", default="")
+    hf_runtime.add_argument("--timeout", type=int, default=30)
+    hf_runtime.set_defaults(func=cmd_hf_runtime)
+
+    hf_search = subparsers.add_parser("hf-search", help="Call remote /search")
+    hf_search.add_argument("query")
+    hf_search.add_argument("--num", type=int, default=3)
+    hf_search.add_argument("--lang", default="en")
+    hf_search.add_argument("--api-token", default="")
+    hf_search.add_argument("--no-auth", action="store_true")
+    hf_search.add_argument("--timeout", type=int, default=60)
+    hf_search.set_defaults(func=cmd_hf_search)
+
+    hf_files = subparsers.add_parser("hf-files", help="List remote Space repository files")
+    hf_files.add_argument("--space", default="")
+    hf_files.add_argument("--prefix", default="")
+    hf_files.set_defaults(func=cmd_hf_files)
+
+    hf_commit_count = subparsers.add_parser("hf-commit-count", help="Print remote Space commit count")
+    hf_commit_count.add_argument("--space", default="")
+    hf_commit_count.set_defaults(func=cmd_hf_commit_count)
 
     return parser
 

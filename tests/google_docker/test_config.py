@@ -6,6 +6,7 @@ from webu.runtime_settings import (
     resolve_captcha_vlm_settings,
     resolve_gemini_default_proxy,
     resolve_google_api_settings,
+    resolve_google_api_service_profile,
     resolve_hf_space_settings,
     resolve_proxy_api_fetch_proxy,
     resolve_searches_chrome_proxy,
@@ -37,6 +38,33 @@ def test_google_api_settings_rewrite_local_proxy_for_docker(monkeypatch, tmp_pat
 
     settings = resolve_google_api_settings()
     assert settings.proxies[0]["url"] == "http://host.docker.internal:11111"
+
+
+def test_google_api_service_profile_resolves_by_type(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps(
+            {
+                "services": [
+                    {"url": "http://127.0.0.1:18000", "type": "local", "api_token": ""},
+                    {"type": "hf-space", "api_token": "hf-token"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "hf_spaces.json").write_text(
+        json.dumps([{"space": "owner/demo-space", "hf_token": "hf_demo"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    profile = resolve_google_api_service_profile(runtime_env="hf-space", service_type="hf-space")
+    assert profile["url"] == "https://owner-demo-space.hf.space"
+    assert profile["type"] == "hf-space"
+    assert profile["api_token"] == "hf-token"
 
 
 def test_proxy_helpers_read_local_proxy_config(monkeypatch, tmp_path):

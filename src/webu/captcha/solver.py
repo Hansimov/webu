@@ -6,6 +6,7 @@
 """
 
 import base64
+import asyncio
 import io
 import json
 import re
@@ -445,6 +446,7 @@ class CaptchaSolver:
         self.temperature = temperature
         self.timeout = timeout
         self.verbose = verbose
+        self.max_retries = 3
         self._annotator = GridAnnotator(verbose=verbose)
 
     async def solve(
@@ -583,20 +585,63 @@ class CaptchaSolver:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(self.timeout)
-        ) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        last_error = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                timeout = httpx.Timeout(
+                    timeout=self.timeout,
+                    connect=min(15.0, self.timeout),
+                    read=self.timeout,
+                    write=min(30.0, self.timeout),
+                )
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
 
-        # 提取回复文本
+                content = self._extract_response_text(data)
+                if content.strip():
+                    return content
+                last_error = RuntimeError("empty response body")
+            except Exception as exc:
+                last_error = exc
+
+            if attempt < self.max_retries:
+                if self.verbose:
+                    logger.warn(f"    VLM retry {attempt}/{self.max_retries}: {str(last_error)[:160]}")
+                await asyncio.sleep(min(1.5 * attempt, 4.0))
+
+        if last_error:
+            raise last_error
+        return ""
+
+    def _extract_response_text(self, data: dict) -> str:
         choices = data.get("choices", [])
         if not choices:
             return ""
+
         message = choices[0].get("message", {})
         content = message.get("content", "")
-        return content if isinstance(content, str) else str(content)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, str) and item.strip():
+                    text_parts.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text") or item.get("content") or item.get("reasoning_content")
+                if isinstance(text, str) and text.strip():
+                    text_parts.append(text)
+            if text_parts:
+                return "\n".join(text_parts)
+
+        reasoning = message.get("reasoning_content") or choices[0].get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return reasoning
+        return ""
 
     def _parse_response(self, text: str, max_index: int) -> list[int]:
         """从 VLM 回复中解析格子编号列表。

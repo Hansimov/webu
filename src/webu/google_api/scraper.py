@@ -14,7 +14,9 @@
 
 import asyncio
 import json
+import os
 import random
+import shutil
 import time
 
 from datetime import datetime, timezone, timedelta
@@ -32,6 +34,7 @@ from .constants import (
     LOCALES,
 )
 from .parser import GoogleResultParser, GoogleSearchResponse
+from .profile_bootstrap import restore_encrypted_profile_archive
 from .proxy_manager import ProxyManager
 from webu.captcha import CaptchaBypass
 
@@ -188,6 +191,8 @@ class GoogleScraper:
         if self._browser:
             return
 
+        self._bootstrap_profile_dir()
+
         self.perf = PerfTimer()
         logger.note("> Starting Playwright browser ...")
         if self._fixed_proxy:
@@ -215,6 +220,35 @@ class GoogleScraper:
 
         if self.verbose:
             logger.mesg(f"\n> Startup timing:\n{self.perf.summary()}\n")
+
+    def _bootstrap_profile_dir(self):
+        bootstrap_archive = Path(os.getenv("WEBU_GOOGLE_PROFILE_BOOTSTRAP_ARCHIVE", "")).expanduser()
+        bootstrap_dir = Path(os.getenv("WEBU_GOOGLE_PROFILE_BOOTSTRAP_DIR", "")).expanduser()
+        if self._profile_dir.exists() and any(self._profile_dir.iterdir()):
+            return
+
+        if str(bootstrap_archive) and bootstrap_archive.exists():
+            bootstrap_token = os.getenv("WEBU_GOOGLE_API_TOKEN", "").strip()
+            if not bootstrap_token:
+                raise RuntimeError("WEBU_GOOGLE_API_TOKEN is required to decrypt the bootstrap profile archive")
+            restore_encrypted_profile_archive(bootstrap_archive, self._profile_dir, bootstrap_token)
+            if self.verbose:
+                logger.mesg(f"  Bootstrapped profile dir: {logstr.file(self._profile_dir)}")
+            return
+
+        if not str(bootstrap_dir) or not bootstrap_dir.exists():
+            return
+
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
+        for item in bootstrap_dir.iterdir():
+            target = self._profile_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, target)
+
+        if self.verbose:
+            logger.mesg(f"  Bootstrapped profile dir: {logstr.file(self._profile_dir)}")
 
     async def stop(self):
         """关闭浏览器。"""

@@ -26,6 +26,9 @@ class RuntimeInfoResponse(BaseModel):
     headless: bool = True
     proxy_mode: str = "auto"
     proxy_count: int = 0
+    service_url: str = ""
+    service_type: str = "local"
+    api_token_configured: bool = False
     config_dir: str = ""
     project_root: str = ""
     service_log_path: str = ""
@@ -46,6 +49,9 @@ class ConfigResponse(BaseModel):
     container_name: str = ""
     proxy_mode: str = "auto"
     proxies: list[dict] = Field(default_factory=list)
+    service_url: str = ""
+    service_type: str = "local"
+    api_token_configured: bool = False
     config_dir: str = ""
     project_root: str = ""
     service_log_path: str = ""
@@ -93,6 +99,9 @@ def create_google_docker_server(
             headless=resolved_google.headless,
             proxy_mode=resolved_google.proxy_mode,
             proxy_count=len(resolved_google.proxies),
+            service_url=resolved_google.service_url,
+            service_type=resolved_google.service_type,
+            api_token_configured=bool(resolved_google.api_token),
             config_dir=str(resolved_docker.config_dir),
             project_root=str(resolved_docker.project_root),
             service_log_path=str(resolved_docker.service_log_path),
@@ -123,6 +132,9 @@ def create_google_docker_server(
             container_name=resolved_docker.container_name,
             proxy_mode=resolved_google.proxy_mode,
             proxies=resolved_google.proxies,
+            service_url=resolved_google.service_url,
+            service_type=resolved_google.service_type,
+            api_token_configured=bool(resolved_google.api_token),
             config_dir=str(resolved_docker.config_dir),
             project_root=str(resolved_docker.project_root),
             service_log_path=str(resolved_docker.service_log_path),

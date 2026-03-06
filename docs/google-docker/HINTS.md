@@ -1,62 +1,85 @@
-# HINTS
+# 调试提示
 
-## Environment Notes
+## 环境注意点
 
-Local workstation:
+本地工作站：
 
-1. `configs/proxies.json` is the only place where local proxy addresses should live.
-2. `google_api`, `gemini`, `proxy_api`, and `searches` now read from that file instead of code literals.
+1. 本地代理地址只能写在 `configs/proxies.json`。
+2. `google_api`、`gemini`、`proxy_api`、`searches` 都从这个文件读代理，不再从代码里取默认值。
+3. 如果 `google_api.json` 中 `local` 服务的 `api_token` 为空，本地 `/search` 不做鉴权。
 
-Local Docker:
+本地 Docker：
 
-1. Use `--mount-configs` if you expect the container to see local proxy config.
-2. On Linux, host-only proxies bound to `127.0.0.1` still require host networking when proxy mode is enabled.
+1. 如果要让容器看到本地代理配置，必须使用 `--mount-configs`。
+2. Linux 上本机代理如果只监听 `127.0.0.1`，仍然需要 host networking 才能被容器访问。
 
-Remote server:
+远程服务器：
 
-1. Do not ship `configs/proxies.json` unless that host really owns local proxies.
-2. Prefer `WEBU_GOOGLE_PROXY_MODE=disabled`.
+1. 除非该机器自己就有本地代理，否则不要复制 `configs/proxies.json`。
+2. 建议显式设置 `WEBU_GOOGLE_PROXY_MODE=disabled`。
+3. 如果要启用 `/search` 鉴权，推荐设置 `WEBU_GOOGLE_SERVICE_TYPE=remote-server`，并提供对应 token。
 
-HF Space:
+HF Space：
 
-1. The root page is intentionally generic and should not be used as a service indicator.
-2. Secrets are managed through HF Space secrets, not repo files.
-3. If rebuild control endpoints are flaky, `hf-sync` can still update repo contents without restart.
+1. 首页只是伪装页，不能作为服务能力说明。
+2. 搜索 token 和管理 token 都通过 HF secrets 注入，不依赖 bundle 内的本地配置文件。
+3. 如果 HF 的 rebuild 控制接口不稳定，先 `hf-sync` 更新内容，再检查实际页面是否切换。
+4. 新容器会优先使用 bundle 中打包的单文件加密 profile bootstrap；归档会用 search api_token 派生密钥加密，容器启动时自动解密恢复。如果本地 profile 本身已经过期或被 Google 判定异常，bootstrap 也不会神奇消除风控，只能降低冷启动概率。
 
-## Debug Commands
+## 常用调试命令
 
-List current Space repo files:
-
-```bash
-python - <<'PY'
-from huggingface_hub import HfApi
-from webu.runtime_settings import resolve_hf_space_settings
-settings = resolve_hf_space_settings('1krog/space1')
-api = HfApi(token=settings.hf_token)
-for name in sorted(api.list_repo_files(repo_id='1krog/space1', repo_type='space')):
-	print(name)
-PY
-```
-
-Check commit count after squash:
+查看 Space 仓库文件：
 
 ```bash
-python - <<'PY'
-from huggingface_hub import HfApi
-from webu.runtime_settings import resolve_hf_space_settings
-settings = resolve_hf_space_settings('1krog/space1')
-api = HfApi(token=settings.hf_token)
-print(len(api.list_repo_commits(repo_id='1krog/space1', repo_type='space')))
-PY
+ggdk hf-files
 ```
 
-## Common Failure Modes
+查看 Space 提交数量：
+
+```bash
+ggdk hf-commit-count
+```
+
+查看当前服务地址：
+
+```bash
+ggdk hf-url
+```
+
+读取远端日志：
+
+```bash
+ggdk hf-logs
+```
+
+查看管理运行时：
+
+```bash
+ggdk hf-runtime
+```
+
+验证远端搜索：
+
+```bash
+ggdk hf-search "OpenAI news"
+```
+
+## 常见状态
 
 `PAUSED`
-The Space has not been woken or rebuilt yet.
+Space 还没被唤醒或还没开始新的运行实例。
 
 `APP_STARTING`
-The image built successfully and is still booting.
+镜像已经构建完成，应用正在启动。
+
+`RUNNING_BUILDING`
+旧实例还在服务，新实例正在切换。
 
 `503` on restart endpoint
-Control plane issue. Try syncing without restart first, then re-check the Space host.
+HF 控制面异常。先尝试不带重启的同步，再检查实际页面和状态。
+
+## 仍然需要显式参数的情况
+
+1. 你维护多个 Space，并且当前要操作的不是默认第一项。
+2. 你要临时覆盖 `admin_token` 或 `api_token`。
+3. 你要故意验证匿名访问失败，此时可用 `ggdk hf-search "query" --no-auth`。

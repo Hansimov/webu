@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from webu.google_api.server import create_google_search_server
 from webu.google_api.proxy_manager import DEFAULT_PROXIES
+from webu.runtime_settings import resolve_google_api_settings
 
 
 class _FakeProxyManager:
@@ -116,6 +117,31 @@ class TestGoogleSearchServerUnit:
         resp = client.get("/search")
         # Should return 422 or handle gracefully
         assert resp.status_code in (200, 422)
+
+    def test_search_requires_api_token_when_configured(self, monkeypatch, tmp_path):
+        config_dir = tmp_path / "configs"
+        config_dir.mkdir()
+        (config_dir / "google_api.json").write_text(
+            '{"services": [{"url": "http://127.0.0.1:18000", "type": "local", "api_token": "local-search-token"}]}',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+        monkeypatch.setenv("WEBU_RUNTIME_ENV", "local")
+        with patch("webu.google_api.server.ProxyManager", _FakeProxyManager):
+            with patch("webu.google_api.server.GoogleScraper", _FakeGoogleScraper):
+                app = create_google_search_server(settings=resolve_google_api_settings(headless=True))
+                with TestClient(app) as client:
+                    resp = client.get("/search?q=test")
+                    assert resp.status_code == 401
+                    resp = client.get("/search?q=test&api_token=local-search-token")
+                    assert resp.status_code == 200
+                    resp = client.post(
+                        "/search",
+                        json={"query": "test"},
+                        headers={"X-Api-Token": "local-search-token"},
+                    )
+                    assert resp.status_code == 200
 
 
 @pytest.mark.integration
