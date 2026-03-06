@@ -63,6 +63,13 @@ CLI 在同步 HF Space 时会：
 2. `ggdk hf-health`、`ggdk hf-home`、`ggdk hf-runtime`、`ggdk hf-search` 不再要求手写 `curl`。
 3. `ggdk hf-files`、`ggdk hf-commit-count` 不再要求手写 `python - <<'PY'`。
 4. `ggdk hf-url` 负责打印当前解析出的服务地址，便于脚本和排查。
+5. `ggdk hf-check` 负责把状态、健康检查、管理运行时和匿名鉴权检查聚合到一次输出里。
+
+本地 Docker 工作流也做了同样的简化：
+
+1. `ggdk docker-up` 用默认参数完成 build + run。
+2. `ggdk docker-down` 统一 stop/remove。
+3. `ggdk docker-check` 聚合容器运行状态、本地 `/health` 和 `/admin/runtime` 检查。
 
 ## 管理接口
 

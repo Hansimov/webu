@@ -19,6 +19,16 @@ from .runtime import (
     resolve_proxy_catalog,
     resolve_searches_chrome_proxy,
 )
+from .schema import (
+    CONFIGS_DOC_PATH,
+    available_config_names,
+    config_schema_json,
+    default_config_payload,
+    has_config_schema,
+    render_config_template_json,
+    render_configs_markdown,
+    validate_config_payload,
+)
 
 __all__ = [
     "CaptchaVlmSettings",
@@ -26,9 +36,16 @@ __all__ = [
     "GoogleDockerSettings",
     "HfSpaceSettings",
     "WorkspacePaths",
+    "CONFIGS_DOC_PATH",
+    "available_config_names",
+    "config_schema_json",
     "detect_runtime_environment",
+    "default_config_payload",
     "get_workspace_paths",
+    "has_config_schema",
     "load_json_config",
+    "render_config_template_json",
+    "render_configs_markdown",
     "resolve_captcha_vlm_settings",
     "resolve_gemini_default_proxy",
     "resolve_google_api_settings",
@@ -40,4 +57,5 @@ __all__ = [
     "resolve_proxy_api_fetch_proxy",
     "resolve_proxy_catalog",
     "resolve_searches_chrome_proxy",
+    "validate_config_payload",
 ]

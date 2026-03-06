@@ -1,12 +1,25 @@
 from types import SimpleNamespace
 
+from webu.google_docker.config_schema import CONFIGS_DOC_PATH, render_configs_markdown, validate_config_payload
+from webu.google_docker.helptext import (
+    HINTS_DOC_PATH,
+    SETUP_DOC_PATH,
+    USAGE_DOC_PATH,
+    render_hints_markdown,
+    render_setup_markdown,
+    render_usage_markdown,
+)
 from webu.google_api.profile_bootstrap import restore_encrypted_profile_archive
 from webu.runtime_settings import GoogleDockerSettings, HfSpaceSettings
 
 from webu.google_docker.cli import (
     _resolve_default_space_name,
     build_parser,
+    cmd_config_init,
+    cmd_docker_check,
     cmd_hf_search,
+    cmd_hf_check,
+    cmd_hf_doctor,
     cmd_hf_super_squash,
     cmd_hf_sync,
     prepare_space_bundle,
@@ -139,6 +152,41 @@ def test_cli_parser_supports_hf_search():
     args = parser.parse_args(["hf-search", "OpenAI news", "--num", "5"])
     assert args.query == "OpenAI news"
     assert args.num == 5
+
+
+def test_cli_parser_supports_hf_check_and_docker_up():
+    parser = build_parser()
+    hf_args = parser.parse_args(["hf-check", "--check-auth"])
+    docker_args = parser.parse_args(["docker-up", "--skip-build"])
+    assert hf_args.check_auth is True
+    assert docker_args.skip_build is True
+
+
+def test_cli_parser_supports_hf_doctor_and_config_commands():
+    parser = build_parser()
+    doctor_args = parser.parse_args(["hf-doctor", "--check-auth", "--lines", "50"])
+    schema_args = parser.parse_args(["config-schema", "google_api"])
+    check_args = parser.parse_args(["config-check", "--name", "google_api"])
+    init_args = parser.parse_args(["config-init", "--name", "google_api", "--force"])
+    assert doctor_args.lines == 50
+    assert schema_args.name == "google_api"
+    assert check_args.name == "google_api"
+    assert init_args.force is True
+
+
+def test_root_help_contains_quick_start_examples():
+    parser = build_parser()
+    help_text = parser.format_help()
+    assert "Quick Start:" in help_text
+    assert "ggdk hf-check --check-auth" in help_text
+
+
+def test_subcommand_help_contains_examples():
+    parser = build_parser()
+    subparser_action = next(action for action in parser._actions if getattr(action, "choices", None))
+    help_text = subparser_action.choices["hf-check"].format_help()
+    assert "Examples:" in help_text
+    assert "ggdk hf-check --check-auth" in help_text
 
 
 def test_cli_parser_supports_factory_restart_during_sync():
@@ -300,3 +348,206 @@ def test_cmd_hf_search_uses_resolved_url_and_token(monkeypatch, capsys):
     assert recorded["params"] == {"q": "OpenAI news", "num": 3, "lang": "en"}
     assert recorded["headers"] == {"X-Api-Token": "search-token"}
     assert '"success": true' in output.lower()
+
+
+def test_cmd_hf_check_renders_combined_status(monkeypatch, capsys):
+    class _Runtime:
+        stage = "RUNNING"
+        hardware = "cpu-basic"
+        requested_hardware = "cpu-basic"
+
+    class _Api:
+        def get_space_runtime(self, repo_id):
+            return _Runtime()
+
+    class _Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http {self.status_code}")
+
+        def json(self):
+            return self._payload
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/health"):
+            return _Response(200, {"status": "ok"})
+        if url.endswith("/admin/runtime"):
+            return _Response(200, {"service_type": "hf-space"})
+        if url.endswith("/search"):
+            return _Response(401, {"detail": "Invalid api token"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr(
+        "webu.google_docker.cli._resolve_hf_api",
+        lambda space_name: (_Api(), SimpleNamespace(space_host="https://space-host.example", hf_token="hf_xxx")),
+    )
+    monkeypatch.setattr("webu.google_docker.cli._resolve_default_space_name", lambda explicit=None: "owner/demo")
+    monkeypatch.setattr("webu.google_docker.cli._resolve_hf_service_url", lambda: "https://space-host.example")
+    monkeypatch.setattr("webu.google_docker.cli._resolve_admin_token", lambda explicit=None: "admin-token")
+    monkeypatch.setattr("webu.google_docker.cli.requests.get", _fake_get)
+
+    cmd_hf_check(SimpleNamespace(space="", admin_token="", timeout=30, query="OpenAI news", check_auth=True))
+    output = capsys.readouterr().out
+    assert '"repo_id": "owner/demo"' in output
+    assert '"anonymous_search_status": 401' in output
+
+
+def test_cmd_hf_doctor_includes_bootstrap_and_commit_details(monkeypatch, capsys):
+    class _Runtime:
+        stage = "RUNNING"
+        hardware = "cpu-basic"
+        requested_hardware = "cpu-basic"
+
+    class _Api:
+        def get_space_runtime(self, repo_id):
+            return _Runtime()
+
+        def list_repo_files(self, repo_id, repo_type):
+            return ["README.md", "bootstrap/google_api_profile.bin"]
+
+        def list_repo_commits(self, repo_id, repo_type):
+            return [1, 2, 3]
+
+    class _Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http {self.status_code}")
+
+        def json(self):
+            return self._payload
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/health"):
+            return _Response(200, {"status": "ok"})
+        if url.endswith("/admin/runtime"):
+            return _Response(200, {"service_type": "hf-space"})
+        if url.endswith("/admin/logs"):
+            return _Response(200, {"content": "recent logs"})
+        if url.endswith("/search"):
+            return _Response(401, {"detail": "Invalid api token"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr(
+        "webu.google_docker.cli._resolve_hf_api",
+        lambda space_name: (_Api(), SimpleNamespace(space_host="https://space-host.example", hf_token="hf_xxx")),
+    )
+    monkeypatch.setattr("webu.google_docker.cli._resolve_default_space_name", lambda explicit=None: "owner/demo")
+    monkeypatch.setattr("webu.google_docker.cli._resolve_hf_service_url", lambda: "https://space-host.example")
+    monkeypatch.setattr("webu.google_docker.cli._resolve_admin_token", lambda explicit=None: "admin-token")
+    monkeypatch.setattr("webu.google_docker.cli.requests.get", _fake_get)
+
+    cmd_hf_doctor(SimpleNamespace(space="", admin_token="", timeout=30, query="OpenAI news", check_auth=True, lines=80))
+    output = capsys.readouterr().out
+    assert '"bootstrap_files": [' in output
+    assert '"commit_count": 3' in output
+    assert 'recent logs' in output
+
+
+def test_cmd_docker_check_renders_local_status(monkeypatch, capsys):
+    class _Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def _fake_get(url, headers=None, timeout=None):
+        if url.endswith("/health"):
+            return _Response({"status": "ok"})
+        if url.endswith("/admin/runtime"):
+            return _Response({"service_type": "docker"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("webu.google_docker.cli._container_running", lambda name: True)
+    monkeypatch.setattr("webu.google_docker.cli._resolve_admin_token", lambda explicit=None: "admin-token")
+    monkeypatch.setattr("webu.google_docker.cli.requests.get", _fake_get)
+
+    cmd_docker_check(SimpleNamespace(name="", port=18000, admin_token="", timeout=15))
+    output = capsys.readouterr().out
+    assert '"running": true' in output.lower()
+    assert '"service_url": "http://127.0.0.1:18000"' in output
+
+
+def test_cmd_docker_check_reports_direct_process_hint(monkeypatch, capsys):
+    class _Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setattr("webu.google_docker.cli._container_running", lambda name: False)
+    monkeypatch.setattr("webu.google_docker.cli._resolve_admin_token", lambda explicit=None: "admin-token")
+    monkeypatch.setattr("webu.google_docker.cli._detect_port_listener", lambda port: "LISTEN 0 128 127.0.0.1:18000 users:(('python',pid=1234,fd=8))")
+    monkeypatch.setattr(
+        "webu.google_docker.cli.requests.get",
+        lambda url, headers=None, timeout=None: _Response({"status": "ok"}),
+    )
+
+    cmd_docker_check(SimpleNamespace(name="", port=18000, admin_token="", timeout=15))
+    output = capsys.readouterr().out
+    assert '"runtime_error": "docker container is not running"' in output
+    assert 'python' in output
+
+
+def test_usage_doc_matches_shared_help_source():
+    assert USAGE_DOC_PATH.read_text(encoding="utf-8") == render_usage_markdown()
+
+
+def test_setup_doc_matches_shared_help_source():
+    assert SETUP_DOC_PATH.read_text(encoding="utf-8") == render_setup_markdown()
+
+
+def test_hints_doc_matches_shared_help_source():
+    assert HINTS_DOC_PATH.read_text(encoding="utf-8") == render_hints_markdown()
+
+
+def test_configs_doc_matches_schema_source():
+    assert CONFIGS_DOC_PATH.read_text(encoding="utf-8") == render_configs_markdown()
+
+
+def test_config_schema_validator_reports_errors():
+    errors = validate_config_payload("google_api", {"host": "0.0.0.0", "port": "18000", "services": []})
+    assert any("expected integer" in error for error in errors)
+
+
+def test_cmd_config_init_writes_missing_templates(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    cmd_config_init(SimpleNamespace(name="google_api", force=False))
+    output = capsys.readouterr().out
+
+    assert '"action": "written"' in output
+    assert (config_dir / "google_api.json").exists()
+
+
+def test_cmd_config_init_skips_existing_without_force(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    config_path = config_dir / "google_api.json"
+    config_path.write_text('{"custom": true}\n', encoding="utf-8")
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    cmd_config_init(SimpleNamespace(name="google_api", force=False))
+    output = capsys.readouterr().out
+
+    assert '"action": "skipped"' in output
+    assert config_path.read_text(encoding="utf-8") == '{"custom": true}\n'

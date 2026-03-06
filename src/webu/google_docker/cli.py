@@ -18,6 +18,26 @@ import requests
 from huggingface_hub import HfApi
 from tclogger import dict_to_str, logger
 
+from webu.runtime_settings.schema import (
+    CONFIGS_DOC_PATH,
+    available_config_names,
+    config_schema_json,
+    render_config_template_json,
+    render_configs_markdown,
+    validate_config_payload,
+)
+from webu.google_docker.helptext import (
+    HINTS_DOC_PATH,
+    SETUP_DOC_PATH,
+    USAGE_DOC_PATH,
+    command_description,
+    command_epilog,
+    render_hints_markdown,
+    render_setup_markdown,
+    render_usage_markdown,
+    root_description,
+    root_epilog,
+)
 from webu.google_api.profile_bootstrap import (
     DEFAULT_BOOTSTRAP_ARCHIVE_NAME,
     create_encrypted_profile_archive,
@@ -81,6 +101,16 @@ def _write_minimal_webu_init(package_root: Path):
 def _run_command(command: list[str], check: bool = True):
     logger.note("> " + " ".join(command))
     return subprocess.run(command, check=check)
+
+
+def _add_command_parser(subparsers, command_name: str, help_text: str):
+    return subparsers.add_parser(
+        command_name,
+        help=help_text,
+        description=command_description(command_name),
+        epilog=command_epilog(command_name),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
 
 
 def _space_readme(repo_id: str, app_port: int) -> str:
@@ -242,6 +272,41 @@ def _print_http_response(response: requests.Response):
         print(json.dumps(response.json(), indent=2, ensure_ascii=False))
     except ValueError:
         print(response.text)
+
+
+def _read_config_payload(name: str):
+    config_path = get_workspace_paths().config_dir / f"{name}.json"
+    if not config_path.exists():
+        return None, str(config_path), "missing"
+    return json.loads(config_path.read_text(encoding="utf-8")), str(config_path), "present"
+
+
+def _container_running(container_name: str) -> bool:
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
+
+def _resolve_local_service_url(port: int | None = None) -> str:
+    resolved_port = int(port or resolve_google_docker_settings().port)
+    return f"http://127.0.0.1:{resolved_port}"
+
+
+def _detect_port_listener(port: int) -> str:
+    commands = [
+        ["ss", "-ltnp", f"( sport = :{port} )"],
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+    ]
+    for command in commands:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+        output = (result.stdout or "").strip()
+        if result.returncode == 0 and output:
+            return output
+    return ""
 
 
 def _request_hf_service(
@@ -536,6 +601,91 @@ def cmd_docker_logs(args):
     _run_command(command, check=False)
 
 
+def cmd_docker_up(args):
+    docker_settings = resolve_google_docker_settings()
+    build_args = argparse.Namespace(
+        image=args.image,
+        no_cache=args.no_cache,
+    )
+    run_args = argparse.Namespace(
+        image=args.image,
+        name=args.name,
+        port=args.port,
+        proxy_mode=args.proxy_mode,
+        bind_source=not args.no_bind_source,
+        mount_configs=not args.no_mount_configs,
+        replace=True,
+        admin_token=args.admin_token,
+    )
+    if not args.skip_build:
+        cmd_docker_build(build_args)
+    cmd_docker_run(run_args)
+    logger.okay(f"  ✓ Docker service is up: {args.name or docker_settings.container_name}")
+
+
+def cmd_docker_down(args):
+    cmd_docker_stop(argparse.Namespace(name=args.name))
+
+
+def cmd_docker_check(args):
+    docker_settings = resolve_google_docker_settings()
+    container_name = args.name or docker_settings.container_name
+    local_url = _resolve_local_service_url(args.port)
+    is_running = _container_running(container_name)
+    health = None
+    runtime = None
+    health_error = ""
+    runtime_error = ""
+    service_hint = ""
+    port_listener = ""
+    admin_token = _resolve_admin_token(args.admin_token)
+
+    try:
+        response = requests.get(f"{local_url}/health", timeout=args.timeout)
+        response.raise_for_status()
+        health = response.json()
+    except Exception as exc:
+        health_error = str(exc)
+
+    if admin_token and is_running:
+        try:
+            response = requests.get(
+                f"{local_url}/admin/runtime",
+                headers={"X-Admin-Token": admin_token},
+                timeout=args.timeout,
+            )
+            response.raise_for_status()
+            runtime = response.json()
+        except Exception as exc:
+            runtime_error = str(exc)
+    elif not is_running:
+        runtime_error = "docker container is not running"
+        if health is not None:
+            port_listener = _detect_port_listener(args.port)
+            service_hint = (
+                "service port is reachable even though the docker container is stopped; "
+                "this usually means a direct local process is already bound to the same port"
+            )
+
+    print(
+        json.dumps(
+            {
+                "container_name": container_name,
+                "running": is_running,
+                "service_url": local_url,
+                "health": health,
+                "health_error": health_error,
+                "runtime": runtime,
+                "runtime_error": runtime_error,
+                "service_hint": service_hint,
+                "port_listener": port_listener,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
 def cmd_hf_sync(args):
     space_name = _resolve_default_space_name(args.space)
     api, hf_settings = _resolve_hf_api(space_name)
@@ -676,24 +826,209 @@ def cmd_hf_commit_count(args):
     print(len(api.list_repo_commits(space_name, repo_type="space")))
 
 
+def _collect_hf_check_report(args, *, include_diagnostics: bool = False) -> dict[str, object]:
+    space_name = _resolve_default_space_name(args.space)
+    api, hf_settings = _resolve_hf_api(space_name)
+    runtime = api.get_space_runtime(repo_id=space_name)
+    service_url = _resolve_hf_service_url()
+    health = None
+    runtime_info = None
+    health_error = ""
+    runtime_error = ""
+    search_auth_error = ""
+    search_auth_status = None
+    admin_token = _resolve_admin_token(args.admin_token)
+    report: dict[str, object] = {
+        "repo_id": space_name,
+        "service_url": service_url,
+        "space_host": hf_settings.space_host,
+        "stage": str(runtime.stage),
+        "hardware": runtime.hardware,
+        "requested_hardware": runtime.requested_hardware,
+    }
+
+    try:
+        response = requests.get(f"{service_url}/health", timeout=args.timeout)
+        response.raise_for_status()
+        health = response.json()
+    except Exception as exc:
+        health_error = str(exc)
+
+    if admin_token:
+        try:
+            response = requests.get(
+                f"{service_url}/admin/runtime",
+                headers={"X-Admin-Token": admin_token},
+                timeout=args.timeout,
+            )
+            response.raise_for_status()
+            runtime_info = response.json()
+        except Exception as exc:
+            runtime_error = str(exc)
+
+    if args.check_auth:
+        try:
+            response = requests.get(
+                f"{service_url}/search",
+                params={"q": args.query, "num": 1},
+                timeout=args.timeout,
+            )
+            search_auth_status = response.status_code
+            if response.status_code != 401:
+                search_auth_error = f"expected 401 for anonymous search, got {response.status_code}"
+        except Exception as exc:
+            search_auth_error = str(exc)
+
+    report.update(
+        {
+            "health": health,
+            "health_error": health_error,
+            "runtime": runtime_info,
+            "runtime_error": runtime_error,
+            "anonymous_search_status": search_auth_status,
+            "anonymous_search_error": search_auth_error,
+        }
+    )
+
+    if include_diagnostics:
+        bootstrap_files: list[str] = []
+        bootstrap_error = ""
+        commit_count = None
+        commit_error = ""
+        logs_excerpt = ""
+        logs_error = ""
+
+        try:
+            bootstrap_files = sorted(
+                path for path in api.list_repo_files(space_name, repo_type="space") if path.startswith("bootstrap/")
+            )
+        except Exception as exc:
+            bootstrap_error = str(exc)
+
+        try:
+            commit_count = len(api.list_repo_commits(space_name, repo_type="space"))
+        except Exception as exc:
+            commit_error = str(exc)
+
+        if admin_token:
+            try:
+                response = requests.get(
+                    f"{service_url}/admin/logs",
+                    params={"lines": args.lines},
+                    headers={"X-Admin-Token": admin_token},
+                    timeout=args.timeout,
+                )
+                response.raise_for_status()
+                logs_excerpt = response.json().get("content", "")
+            except Exception as exc:
+                logs_error = str(exc)
+        else:
+            logs_error = "admin token not configured"
+
+        report.update(
+            {
+                "bootstrap_files": bootstrap_files,
+                "bootstrap_error": bootstrap_error,
+                "commit_count": commit_count,
+                "commit_error": commit_error,
+                "logs_excerpt": logs_excerpt,
+                "logs_error": logs_error,
+            }
+        )
+
+    return report
+
+
+def cmd_hf_check(args):
+    print(json.dumps(_collect_hf_check_report(args), indent=2, ensure_ascii=False))
+
+
+def cmd_hf_doctor(args):
+    print(json.dumps(_collect_hf_check_report(args, include_diagnostics=True), indent=2, ensure_ascii=False))
+
+
+def cmd_config_check(args):
+    names = [args.name] if args.name else available_config_names()
+    results = []
+    for name in names:
+        payload, path, state = _read_config_payload(name)
+        entry = {
+            "name": name,
+            "path": path,
+            "state": state,
+            "valid": False,
+            "errors": [],
+        }
+        if state == "missing":
+            entry["errors"] = ["file does not exist"]
+        else:
+            entry["errors"] = validate_config_payload(name, payload)
+            entry["valid"] = not entry["errors"]
+        results.append(entry)
+    print(json.dumps({"configs": results}, indent=2, ensure_ascii=False))
+
+
+def cmd_config_init(args):
+    config_dir = get_workspace_paths().config_dir
+    config_dir.mkdir(parents=True, exist_ok=True)
+    names = [args.name] if args.name else available_config_names()
+    results = []
+    for name in names:
+        config_path = config_dir / f"{name}.json"
+        existed_before = config_path.exists()
+        action = "skipped"
+        if args.force or not existed_before:
+            config_path.write_text(render_config_template_json(name), encoding="utf-8")
+            action = "updated" if existed_before else "written"
+        results.append(
+            {
+                "name": name,
+                "path": str(config_path),
+                "action": action,
+            }
+        )
+    print(json.dumps({"configs": results}, indent=2, ensure_ascii=False))
+
+
+def cmd_config_schema(args):
+    print(json.dumps(config_schema_json(args.name), indent=2, ensure_ascii=False))
+
+
+def cmd_docs_sync(args):
+    rendered_docs = {
+        USAGE_DOC_PATH: render_usage_markdown(),
+        SETUP_DOC_PATH: render_setup_markdown(),
+        HINTS_DOC_PATH: render_hints_markdown(),
+        CONFIGS_DOC_PATH: render_configs_markdown(),
+    }
+    for path, content in rendered_docs.items():
+        path.write_text(content, encoding="utf-8")
+    for path in rendered_docs:
+        print(str(path))
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage dockerized WebU google_api deployments")
+    parser = argparse.ArgumentParser(
+        description=root_description(),
+        epilog=root_epilog(),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="command")
 
-    print_config = subparsers.add_parser("print-config", help="Render resolved runtime config")
+    print_config = _add_command_parser(subparsers, "print-config", "Render resolved runtime config")
     print_config.set_defaults(func=cmd_print_config)
 
-    serve = subparsers.add_parser("serve", help="Run google_docker service in foreground")
+    serve = _add_command_parser(subparsers, "serve", "Run google_docker service in foreground")
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=18000)
     serve.set_defaults(func=cmd_serve)
 
-    docker_build = subparsers.add_parser("docker-build", help="Build local docker image")
+    docker_build = _add_command_parser(subparsers, "docker-build", "Build local docker image")
     docker_build.add_argument("--image", default="")
     docker_build.add_argument("--no-cache", action="store_true")
     docker_build.set_defaults(func=cmd_docker_build)
 
-    docker_run = subparsers.add_parser("docker-run", help="Run local docker container")
+    docker_run = _add_command_parser(subparsers, "docker-run", "Run local docker container")
     docker_run.add_argument("--image", default="")
     docker_run.add_argument("--name", default="")
     docker_run.add_argument("--port", type=int, default=18000)
@@ -704,17 +1039,40 @@ def build_parser() -> argparse.ArgumentParser:
     docker_run.add_argument("--admin-token", default="")
     docker_run.set_defaults(func=cmd_docker_run)
 
-    docker_stop = subparsers.add_parser("docker-stop", help="Stop local docker container")
+    docker_stop = _add_command_parser(subparsers, "docker-stop", "Stop local docker container")
     docker_stop.add_argument("--name", default="")
     docker_stop.set_defaults(func=cmd_docker_stop)
 
-    docker_logs = subparsers.add_parser("docker-logs", help="Tail local docker logs")
+    docker_logs = _add_command_parser(subparsers, "docker-logs", "Tail local docker logs")
     docker_logs.add_argument("--name", default="")
     docker_logs.add_argument("--lines", type=int, default=200)
     docker_logs.add_argument("--follow", action="store_true")
     docker_logs.set_defaults(func=cmd_docker_logs)
 
-    hf_sync = subparsers.add_parser("hf-sync", help="Upload current workspace to a Docker Space")
+    docker_up = _add_command_parser(subparsers, "docker-up", "Build and run the local docker service with practical defaults")
+    docker_up.add_argument("--image", default="")
+    docker_up.add_argument("--name", default="")
+    docker_up.add_argument("--port", type=int, default=18000)
+    docker_up.add_argument("--proxy-mode", choices=["auto", "enabled", "disabled"], default="auto")
+    docker_up.add_argument("--skip-build", action="store_true")
+    docker_up.add_argument("--no-cache", action="store_true")
+    docker_up.add_argument("--no-bind-source", action="store_true")
+    docker_up.add_argument("--no-mount-configs", action="store_true")
+    docker_up.add_argument("--admin-token", default="")
+    docker_up.set_defaults(func=cmd_docker_up)
+
+    docker_down = _add_command_parser(subparsers, "docker-down", "Stop and remove the local docker service")
+    docker_down.add_argument("--name", default="")
+    docker_down.set_defaults(func=cmd_docker_down)
+
+    docker_check = _add_command_parser(subparsers, "docker-check", "Check local docker container and service health")
+    docker_check.add_argument("--name", default="")
+    docker_check.add_argument("--port", type=int, default=18000)
+    docker_check.add_argument("--admin-token", default="")
+    docker_check.add_argument("--timeout", type=int, default=15)
+    docker_check.set_defaults(func=cmd_docker_check)
+
+    hf_sync = _add_command_parser(subparsers, "hf-sync", "Upload current workspace to a Docker Space")
     hf_sync.add_argument("--space", default="")
     hf_sync.add_argument("--repo-id", default="")
     hf_sync.add_argument("--port", type=int, default=18000)
@@ -724,43 +1082,43 @@ def build_parser() -> argparse.ArgumentParser:
     hf_sync.add_argument("--admin-token", default="")
     hf_sync.set_defaults(func=cmd_hf_sync)
 
-    hf_status = subparsers.add_parser("hf-status", help="Get HF Space runtime status")
+    hf_status = _add_command_parser(subparsers, "hf-status", "Get HF Space runtime status")
     hf_status.add_argument("--space", default="")
     hf_status.set_defaults(func=cmd_hf_status)
 
-    hf_restart = subparsers.add_parser("hf-restart", help="Restart HF Space")
+    hf_restart = _add_command_parser(subparsers, "hf-restart", "Restart HF Space")
     hf_restart.add_argument("--space", default="")
     hf_restart.add_argument("--factory", action="store_true")
     hf_restart.set_defaults(func=cmd_hf_restart)
 
-    hf_super_squash = subparsers.add_parser("hf-super-squash", help="Super-squash HF Space commit history")
+    hf_super_squash = _add_command_parser(subparsers, "hf-super-squash", "Super-squash HF Space commit history")
     hf_super_squash.add_argument("--space", default="")
     hf_super_squash.add_argument("--branch", default="main")
     hf_super_squash.set_defaults(func=cmd_hf_super_squash)
 
-    hf_logs = subparsers.add_parser("hf-logs", help="Read remote service logs from HF Space")
+    hf_logs = _add_command_parser(subparsers, "hf-logs", "Read remote service logs from HF Space")
     hf_logs.add_argument("--space", default="")
     hf_logs.add_argument("--lines", type=int, default=200)
     hf_logs.add_argument("--admin-token", default="")
     hf_logs.set_defaults(func=cmd_hf_logs)
 
-    hf_url = subparsers.add_parser("hf-url", help="Print the resolved HF service URL")
+    hf_url = _add_command_parser(subparsers, "hf-url", "Print the resolved HF service URL")
     hf_url.set_defaults(func=cmd_hf_url)
 
-    hf_health = subparsers.add_parser("hf-health", help="Call remote /health")
+    hf_health = _add_command_parser(subparsers, "hf-health", "Call remote /health")
     hf_health.add_argument("--timeout", type=int, default=30)
     hf_health.set_defaults(func=cmd_hf_health)
 
-    hf_home = subparsers.add_parser("hf-home", help="Call remote /")
+    hf_home = _add_command_parser(subparsers, "hf-home", "Call remote /")
     hf_home.add_argument("--timeout", type=int, default=30)
     hf_home.set_defaults(func=cmd_hf_home)
 
-    hf_runtime = subparsers.add_parser("hf-runtime", help="Call remote /admin/runtime")
+    hf_runtime = _add_command_parser(subparsers, "hf-runtime", "Call remote /admin/runtime")
     hf_runtime.add_argument("--admin-token", default="")
     hf_runtime.add_argument("--timeout", type=int, default=30)
     hf_runtime.set_defaults(func=cmd_hf_runtime)
 
-    hf_search = subparsers.add_parser("hf-search", help="Call remote /search")
+    hf_search = _add_command_parser(subparsers, "hf-search", "Call remote /search")
     hf_search.add_argument("query")
     hf_search.add_argument("--num", type=int, default=3)
     hf_search.add_argument("--lang", default="en")
@@ -769,14 +1127,47 @@ def build_parser() -> argparse.ArgumentParser:
     hf_search.add_argument("--timeout", type=int, default=60)
     hf_search.set_defaults(func=cmd_hf_search)
 
-    hf_files = subparsers.add_parser("hf-files", help="List remote Space repository files")
+    hf_files = _add_command_parser(subparsers, "hf-files", "List remote Space repository files")
     hf_files.add_argument("--space", default="")
     hf_files.add_argument("--prefix", default="")
     hf_files.set_defaults(func=cmd_hf_files)
 
-    hf_commit_count = subparsers.add_parser("hf-commit-count", help="Print remote Space commit count")
+    hf_commit_count = _add_command_parser(subparsers, "hf-commit-count", "Print remote Space commit count")
     hf_commit_count.add_argument("--space", default="")
     hf_commit_count.set_defaults(func=cmd_hf_commit_count)
+
+    hf_check = _add_command_parser(subparsers, "hf-check", "Run a compact remote health and auth check")
+    hf_check.add_argument("--space", default="")
+    hf_check.add_argument("--admin-token", default="")
+    hf_check.add_argument("--timeout", type=int, default=30)
+    hf_check.add_argument("--query", default="OpenAI news")
+    hf_check.add_argument("--check-auth", action="store_true")
+    hf_check.set_defaults(func=cmd_hf_check)
+
+    hf_doctor = _add_command_parser(subparsers, "hf-doctor", "Run a broader remote diagnosis with repo and log details")
+    hf_doctor.add_argument("--space", default="")
+    hf_doctor.add_argument("--admin-token", default="")
+    hf_doctor.add_argument("--timeout", type=int, default=30)
+    hf_doctor.add_argument("--query", default="OpenAI news")
+    hf_doctor.add_argument("--check-auth", action="store_true")
+    hf_doctor.add_argument("--lines", type=int, default=80)
+    hf_doctor.set_defaults(func=cmd_hf_doctor)
+
+    config_check = _add_command_parser(subparsers, "config-check", "Validate local configs against shared schema")
+    config_check.add_argument("--name", choices=available_config_names(), default="")
+    config_check.set_defaults(func=cmd_config_check)
+
+    config_init = _add_command_parser(subparsers, "config-init", "Write minimal local config templates from shared schema")
+    config_init.add_argument("--name", choices=available_config_names(), default="")
+    config_init.add_argument("--force", action="store_true")
+    config_init.set_defaults(func=cmd_config_init)
+
+    config_schema = _add_command_parser(subparsers, "config-schema", "Print shared schema for one config file")
+    config_schema.add_argument("name", choices=available_config_names())
+    config_schema.set_defaults(func=cmd_config_schema)
+
+    docs_sync = _add_command_parser(subparsers, "docs-sync", "Regenerate shared docs/google-docker markdown files")
+    docs_sync.set_defaults(func=cmd_docs_sync)
 
     return parser
 

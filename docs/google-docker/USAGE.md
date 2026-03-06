@@ -1,133 +1,256 @@
 # 使用说明
 
+> 本文档由 `ggdk docs-sync` 从共享帮助源自动生成。
+
 ## 默认行为
 
-常用 `ggdk hf-*` 命令现在都会自动读取本地配置：
+1. 默认 Space：取 configs/hf_spaces.json 中的第一个 space。
+2. 默认 HF 服务地址：从 google_api.json 和 hf_spaces.json 自动解析。
+3. 默认搜索 token：取 google_api.json 中 hf-space 项的 api_token。
+4. 默认管理 token：取 google_docker.json 中的 admin_token。
+5. 因此日常使用通常不再需要手写 jq、python heredoc 或 curl。
 
-1. 默认 Space：取 `configs/hf_spaces.json` 中的第一个 `space`。
-2. 默认 HF 服务地址：从 `google_api.json` 和 `hf_spaces.json` 自动解析。
-3. 默认搜索 token：取 `google_api.json` 中 `hf-space` 项的 `api_token`。
-4. 默认管理 token：取 `google_docker.json` 中的 `admin_token`。
-
-所以日常使用通常不再需要手写 `jq`、`python - <<'PY'` 或 `curl`。
-
-## 配置检查
+## 推荐最短路径
 
 ```bash
-ggdk print-config
-ggdk hf-url
+ggdk docker-up
 ```
-
-## 本地 Docker
-
 ```bash
-ggdk docker-build
-ggdk docker-run --bind-source --mount-configs --replace
-ggdk docker-logs --follow
-ggdk docker-stop
+ggdk docker-check
 ```
-
-如果只想以前台方式直接跑服务：
-
-```bash
-python -m webu.google_docker serve --host 0.0.0.0 --port 18000
-```
-
-## HF 日常工作流
-
-同步当前代码：
-
 ```bash
 ggdk hf-sync
 ```
-
-同步并请求 factory rebuild：
-
 ```bash
-ggdk hf-sync --restart --factory
+ggdk hf-check --check-auth
 ```
 
-查看运行状态：
+## 命令速查
+
+### `print-config`
+
+查看当前解析后的运行时配置。
+
+```bash
+ggdk print-config
+```
+
+### `docker-build`
+
+构建本地 Docker 镜像。
+
+```bash
+ggdk docker-build
+ggdk docker-build --no-cache
+```
+
+### `docker-run`
+
+手动运行本地 Docker 容器。
+
+```bash
+ggdk docker-run --bind-source --mount-configs --replace
+ggdk docker-run --proxy-mode disabled --replace
+```
+
+### `docker-up`
+
+按默认建议完成本地 build + run。
+
+```bash
+ggdk docker-up
+ggdk docker-up --skip-build
+ggdk docker-up --proxy-mode disabled
+```
+
+### `docker-check`
+
+检查本地容器状态、服务健康和同端口冲突提示。
+
+```bash
+ggdk docker-check
+ggdk docker-check --port 18000
+```
+
+### `docker-logs`
+
+查看本地 Docker 日志。
+
+```bash
+ggdk docker-logs --follow
+ggdk docker-logs --lines 50
+```
+
+### `docker-down`
+
+停止并删除本地 Docker 容器。
+
+```bash
+ggdk docker-down
+```
+
+### `hf-url`
+
+打印当前解析出的 HF 服务地址。
+
+```bash
+ggdk hf-url
+```
+
+### `hf-sync`
+
+同步当前代码到默认 HF Space。
+
+```bash
+ggdk hf-sync
+ggdk hf-sync --restart --factory
+ggdk hf-sync --space owner/other-space
+```
+
+### `hf-status`
+
+查看 HF Space 运行状态。
 
 ```bash
 ggdk hf-status
 ```
 
-读取远端日志：
+### `hf-health`
 
-```bash
-ggdk hf-logs
-```
-
-重启实例：
-
-```bash
-ggdk hf-restart
-```
-
-压缩远端提交历史：
-
-```bash
-ggdk hf-super-squash
-```
-
-## 在线接口验证
-
-健康检查：
+读取远端 /health。
 
 ```bash
 ggdk hf-health
 ```
 
-查看隐藏首页：
+### `hf-home`
+
+读取远端隐藏首页。
 
 ```bash
 ggdk hf-home
 ```
 
-查看管理运行时：
+### `hf-runtime`
+
+读取远端 /admin/runtime。
 
 ```bash
 ggdk hf-runtime
 ```
 
-发起搜索：
+### `hf-search`
+
+向远端 /search 发起请求。
 
 ```bash
 ggdk hf-search "OpenAI news"
-```
-
-如果需要临时跳过鉴权头，专门验证匿名行为：
-
-```bash
+ggdk hf-search "OpenAI news" --num 10
 ggdk hf-search "OpenAI news" --no-auth
 ```
 
-## 调试与审计
+### `hf-check`
 
-列出远端仓库文件：
+聚合远端状态、健康检查、运行时和匿名鉴权检查。
+
+```bash
+ggdk hf-check
+ggdk hf-check --check-auth
+```
+
+### `hf-doctor`
+
+输出更完整的远端诊断信息，包括 bootstrap 文件、提交数和日志摘要。
+
+```bash
+ggdk hf-doctor
+ggdk hf-doctor --check-auth --lines 80
+```
+
+### `hf-logs`
+
+读取远端服务日志。
+
+```bash
+ggdk hf-logs
+ggdk hf-logs --lines 80
+```
+
+### `hf-files`
+
+列出远端仓库文件。
 
 ```bash
 ggdk hf-files
-```
-
-只看 bootstrap 相关文件：
-
-```bash
 ggdk hf-files --prefix bootstrap/
 ```
 
-查看远端提交数量：
+### `hf-commit-count`
+
+查看远端提交数量。
 
 ```bash
 ggdk hf-commit-count
 ```
 
-## 覆盖默认值
+### `hf-restart`
 
-只有以下场景才需要额外传参：
+请求重启远端 Space。
+
+```bash
+ggdk hf-restart
+ggdk hf-restart --factory
+```
+
+### `hf-super-squash`
+
+压缩远端提交历史。
+
+```bash
+ggdk hf-super-squash
+```
+
+### `config-check`
+
+按共享 schema 校验本地 configs/*.json。
+
+```bash
+ggdk config-check
+ggdk config-check --name google_api
+```
+
+### `config-init`
+
+按共享 schema 生成最小配置骨架。
+
+```bash
+ggdk config-init
+ggdk config-init --name google_api --force
+```
+
+### `config-schema`
+
+打印某个配置文件对应的 schema。
+
+```bash
+ggdk config-schema google_api
+ggdk config-schema llms
+```
+
+### `docs-sync`
+
+用共享说明源重写 docs/google-docker 下的主要文档。
+
+```bash
+ggdk docs-sync
+```
+
+## 覆盖默认值
 
 1. 操作非默认 Space：加 `--space owner/other-space`。
 2. 临时覆盖管理 token：加 `--admin-token ...`。
 3. 临时覆盖搜索 token：加 `--api-token ...`。
-4. 需要更多搜索结果：加 `--num 10`。
+4. 验证匿名行为：对 `hf-search` 使用 `--no-auth`。
+5. 缺最小配置骨架时，先运行 `ggdk config-init`。
+6. 配置有疑问时，先运行 `ggdk config-check`。
+7. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。

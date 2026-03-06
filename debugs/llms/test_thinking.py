@@ -1,4 +1,4 @@
-"""快速测试 SiliconFlow Thinking model — 确认不再卡死。"""
+"""快速测试 SiliconFlow 默认 VLM model。"""
 
 import json
 import sys
@@ -15,22 +15,21 @@ LLM_CONFIG_PATH = PROJECT_ROOT / "configs" / "llms.json"
 
 def test_thinking_model():
     logger.note("=" * 60)
-    logger.note("Test: SiliconFlow Thinking model (timeout + error handling)")
+    logger.note("Test: SiliconFlow default VLM model (timeout + error handling)")
     logger.note("=" * 60)
 
     with open(LLM_CONFIG_PATH) as f:
         configs = json.load(f)
     config = configs["sf_qwen3_vl_8b"]
 
-    # Use Thinking variant
-    thinking_model = "Qwen/Qwen3-VL-8B-Thinking"
+    default_model = "Qwen/Qwen3-VL-8B-Instruct"
 
     client = LLMClient(
         endpoint=config["endpoint"],
         api_key=config["api_key"],
         api_format=config.get("api_format", "openai"),
-        model=thinking_model,
-        timeout=120,  # 2 minutes — generous but won't hang forever
+        model=default_model,
+        timeout=120,
         verbose=True,
         verbose_user=True,
         verbose_assistant=True,

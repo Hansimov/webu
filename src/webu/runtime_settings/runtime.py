@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
+from .schema import has_config_schema, validate_config_payload
+
 
 def _find_project_root() -> Path:
     explicit_root = os.getenv("WEBU_PROJECT_ROOT")
@@ -257,7 +259,17 @@ def load_json_config(name: str) -> Any:
     paths = get_workspace_paths()
     env_key = f"WEBU_{name.upper()}_CONFIG_PATH"
     config_path = Path(os.getenv(env_key, paths.config_dir / f"{name}.json")).expanduser()
-    return _load_json_file(config_path)
+    payload = _load_json_file(config_path)
+
+    validation_env = os.getenv("WEBU_VALIDATE_CONFIGS", "true").strip().lower()
+    validation_enabled = validation_env not in {"0", "false", "no", "off"}
+    if validation_enabled and config_path.exists() and has_config_schema(name):
+        errors = validate_config_payload(name, payload)
+        if errors:
+            joined = "; ".join(errors)
+            raise ValueError(f"Invalid config '{name}' at {config_path}: {joined}")
+
+    return payload
 
 
 def _env_bool(name: str, default: bool) -> bool:

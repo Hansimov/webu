@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from webu.runtime_settings import (
+    load_json_config,
     resolve_captcha_vlm_settings,
     resolve_gemini_default_proxy,
     resolve_google_api_settings,
@@ -129,3 +130,50 @@ def test_hf_space_settings_reads_token(monkeypatch, tmp_path):
     settings = resolve_hf_space_settings("owner/demo")
     assert settings.hf_token == "hf_demo"
     assert settings.space_host == "https://owner-demo.hf.space"
+
+
+def test_load_json_config_validates_known_configs(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps({"host": "0.0.0.0", "port": "18000", "proxy_mode": "auto", "services": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    try:
+        load_json_config("google_api")
+        assert False, "expected validation error"
+    except ValueError as exc:
+        assert "Invalid config 'google_api'" in str(exc)
+        assert "expected integer" in str(exc)
+
+
+def test_load_json_config_allows_disabling_validation(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps({"host": "0.0.0.0", "port": "18000", "proxy_mode": "auto", "services": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("WEBU_VALIDATE_CONFIGS", "false")
+
+    payload = load_json_config("google_api")
+    assert payload["port"] == "18000"
+
+
+def test_google_api_config_allows_runtime_defaults(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps({"services": [{"type": "local", "api_token": "local-search-token"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    payload = load_json_config("google_api")
+    assert payload["services"][0]["api_token"] == "local-search-token"
