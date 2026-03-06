@@ -5,16 +5,21 @@
 """
 
 import asyncio
+import os
+import tempfile
 import uvicorn
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Response
+from pathlib import Path
 from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
 
 from webu.runtime_settings import GoogleApiSettings, resolve_google_api_settings
 
+from .profile_assets import DEFAULT_SHARED_PROFILE_SECRET
+from .profile_bootstrap import create_encrypted_profile_archive
 from .proxy_manager import ProxyManager, DEFAULT_PROXIES
 from .scraper import GoogleScraper
 from ..fastapis.styles import setup_root_landing_page, setup_swagger_ui
@@ -84,6 +89,40 @@ class HealthResponse(BaseModel):
 
     status: str = "ok"
     version: str = "1.1.0"
+
+
+class ProfileStatusResponse(BaseModel):
+    profile_dir: str = ""
+    exists: bool = False
+    file_count: int = 0
+    last_modified_ts: float = 0.0
+    archive_available: bool = False
+
+
+def _resolve_admin_token() -> str:
+    return os.getenv("WEBU_ADMIN_TOKEN", "").strip()
+
+
+def _require_admin(x_admin_token: str | None):
+    configured_token = _resolve_admin_token()
+    if configured_token and x_admin_token != configured_token:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def _profile_status(profile_dir) -> ProfileStatusResponse:
+    profile_path = resolved = profile_dir.expanduser()
+    if not profile_path.exists():
+        return ProfileStatusResponse(profile_dir=str(profile_path), exists=False, file_count=0, last_modified_ts=0.0, archive_available=False)
+
+    file_paths = [path for path in profile_path.rglob("*") if path.is_file()]
+    last_modified_ts = max((path.stat().st_mtime for path in file_paths), default=profile_path.stat().st_mtime)
+    return ProfileStatusResponse(
+        profile_dir=str(profile_path),
+        exists=True,
+        file_count=len(file_paths),
+        last_modified_ts=float(last_modified_ts),
+        archive_available=bool(file_paths),
+    )
 
 
 def _resolve_search_api_token(
@@ -199,6 +238,32 @@ def create_google_search_server(
         """健康检查。"""
         return HealthResponse()
 
+    @app.get("/admin/profile/status", response_model=ProfileStatusResponse, tags=["管理"])
+    async def admin_profile_status(x_admin_token: str | None = Header(default=None)):
+        _require_admin(x_admin_token)
+        return _profile_status(resolved_settings.profile_dir)
+
+    @app.get("/admin/profile/archive", tags=["管理"])
+    async def admin_profile_archive(
+        secret: str = Query(DEFAULT_SHARED_PROFILE_SECRET, min_length=1),
+        x_admin_token: str | None = Header(default=None),
+    ):
+        _require_admin(x_admin_token)
+        with tempfile.TemporaryDirectory(prefix="webu-profile-export-") as tempdir:
+            archive_path = Path(tempdir) / "google_api_profile.bin"
+            created = create_encrypted_profile_archive(resolved_settings.profile_dir, archive_path, secret)
+            if not created or not archive_path.exists():
+                raise HTTPException(status_code=404, detail="Profile archive is not available")
+            status = _profile_status(resolved_settings.profile_dir)
+            return Response(
+                content=archive_path.read_bytes(),
+                media_type="application/octet-stream",
+                headers={
+                    "X-Profile-Last-Modified-Ts": str(status.last_modified_ts),
+                    "Content-Disposition": 'attachment; filename="google_api_profile.bin"',
+                },
+            )
+
     # ── 搜索接口 ──────────────────────────────────────────────
 
     @app.post("/search", response_model=SearchResponse, tags=["搜索"])
@@ -297,7 +362,7 @@ def main():
 
     argparser = argparse.ArgumentParser(description="Google Search API Server")
     argparser.add_argument("--host", default="0.0.0.0", help="Bind host")
-    argparser.add_argument("--port", type=int, default=18000, help="Bind port")
+    argparser.add_argument("--port", type=int, default=18200, help="Bind port")
     argparser.add_argument("--no-headless", action="store_true", help="Show browser")
     args = argparser.parse_args()
 

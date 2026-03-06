@@ -13,16 +13,16 @@
 ## 推荐最短路径
 
 ```bash
-ggdk docker-up
+ggdk hub-docker-up --mount-configs --replace
 ```
 ```bash
-ggdk docker-check
+ggdk hub-check
 ```
 ```bash
-ggdk hf-sync
+ggdk hf-sync-all
 ```
 ```bash
-ggdk hf-check --check-auth
+ggdk hub-search "OpenAI news"
 ```
 
 ## 命令速查
@@ -33,6 +33,14 @@ ggdk hf-check --check-auth
 
 ```bash
 ggdk print-config
+```
+
+### `hub-serve`
+
+以前台方式直接启动中心化 google_hub 服务。
+
+```bash
+python -m webu.google_docker hub-serve --host 0.0.0.0 --port 18100
 ```
 
 ### `docker-build`
@@ -69,7 +77,7 @@ ggdk docker-up --proxy-mode disabled
 
 ```bash
 ggdk docker-check
-ggdk docker-check --port 18000
+ggdk docker-check --port 18200
 ```
 
 ### `docker-logs`
@@ -89,6 +97,57 @@ ggdk docker-logs --lines 50
 ggdk docker-down
 ```
 
+### `hub-docker-up`
+
+构建并启动本地 hub Docker 服务。
+
+```bash
+ggdk hub-docker-up --mount-configs --replace
+ggdk hub-docker-up --skip-build --port 18100
+```
+
+### `hub-docker-down`
+
+停止并删除本地 hub Docker 容器。
+
+```bash
+ggdk hub-docker-down
+```
+
+### `hub-check`
+
+检查本地 hub 服务和所有后端状态。
+
+```bash
+ggdk hub-check
+ggdk hub-check --port 18100
+```
+
+### `hub-backends`
+
+列出 hub 当前维护的后端状态和指标。
+
+```bash
+ggdk hub-backends
+```
+
+### `hub-search`
+
+通过中心化 hub 路由搜索请求。
+
+```bash
+ggdk hub-search "OpenAI news"
+ggdk hub-search "OpenAI news" --num 20
+```
+
+### `hf-create-space`
+
+创建新的 HF Docker Space。
+
+```bash
+ggdk hf-create-space --space owner/space2 --exist-ok
+```
+
 ### `hf-url`
 
 打印当前解析出的 HF 服务地址。
@@ -105,6 +164,16 @@ ggdk hf-url
 ggdk hf-sync
 ggdk hf-sync --restart --factory
 ggdk hf-sync --space owner/other-space
+```
+
+### `hf-sync-all`
+
+并行把当前代码同步到所有启用的 HF Spaces。
+
+```bash
+ggdk hf-sync-all
+ggdk hf-sync-all --restart
+ggdk hf-sync-all --max-workers 4
 ```
 
 ### `hf-status`
@@ -251,6 +320,6 @@ ggdk docs-sync
 2. 临时覆盖管理 token：加 `--admin-token ...`。
 3. 临时覆盖搜索 token：加 `--api-token ...`。
 4. 验证匿名行为：对 `hf-search` 使用 `--no-auth`。
-5. 缺最小配置骨架时，先运行 `ggdk config-init`。
+5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。
 6. 配置有疑问时，先运行 `ggdk config-check`。
 7. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。

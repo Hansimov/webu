@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from webu.runtime_settings.sensitive import assert_public_text_safe
+
 
 USAGE_DOC_PATH = Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "USAGE.md"
 SETUP_DOC_PATH = Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "SETUP.md"
@@ -21,15 +23,13 @@ OVERVIEW_SECTIONS = [
     (
         "推荐最短路径",
         [
-            "ggdk docker-up",
-            "ggdk docker-check",
-            "ggdk hf-sync",
-            "ggdk hf-check --check-auth",
+            "ggdk hub-docker-up --mount-configs --replace",
+            "ggdk hub-check",
+            "ggdk hf-sync-all",
+            "ggdk hub-search \"OpenAI news\"",
         ],
     ),
 ]
-
-
 COMMAND_HELP = {
     "print-config": {
         "summary": "查看当前解析后的运行时配置。",
@@ -37,7 +37,11 @@ COMMAND_HELP = {
     },
     "serve": {
         "summary": "以前台方式直接启动 google_docker 服务。",
-        "examples": ["python -m webu.google_docker serve --host 0.0.0.0 --port 18000"],
+        "examples": ["python -m webu.google_docker serve --host 0.0.0.0 --port 18200"],
+    },
+    "hub-serve": {
+        "summary": "以前台方式直接启动中心化 google_hub 服务。",
+        "examples": ["python -m webu.google_docker hub-serve --host 0.0.0.0 --port 18100"],
     },
     "docker-build": {
         "summary": "构建本地 Docker 镜像。",
@@ -60,7 +64,7 @@ COMMAND_HELP = {
     },
     "docker-check": {
         "summary": "检查本地容器状态、服务健康和同端口冲突提示。",
-        "examples": ["ggdk docker-check", "ggdk docker-check --port 18000"],
+        "examples": ["ggdk docker-check", "ggdk docker-check --port 18200"],
     },
     "docker-logs": {
         "summary": "查看本地 Docker 日志。",
@@ -74,9 +78,39 @@ COMMAND_HELP = {
         "summary": "停止并删除本地 Docker 容器。",
         "examples": ["ggdk docker-down"],
     },
+    "hub-docker-up": {
+        "summary": "构建并启动本地 hub Docker 服务。",
+        "examples": [
+            "ggdk hub-docker-up --mount-configs --replace",
+            "ggdk hub-docker-up --skip-build --port 18100",
+        ],
+    },
+    "hub-docker-down": {
+        "summary": "停止并删除本地 hub Docker 容器。",
+        "examples": ["ggdk hub-docker-down"],
+    },
+    "hub-check": {
+        "summary": "检查本地 hub 服务和所有后端状态。",
+        "examples": ["ggdk hub-check", "ggdk hub-check --port 18100"],
+    },
+    "hub-backends": {
+        "summary": "列出 hub 当前维护的后端状态和指标。",
+        "examples": ["ggdk hub-backends"],
+    },
+    "hub-search": {
+        "summary": "通过中心化 hub 路由搜索请求。",
+        "examples": [
+            'ggdk hub-search "OpenAI news"',
+            'ggdk hub-search "OpenAI news" --num 20',
+        ],
+    },
     "hf-url": {
         "summary": "打印当前解析出的 HF 服务地址。",
         "examples": ["ggdk hf-url"],
+    },
+    "hf-create-space": {
+        "summary": "创建新的 HF Docker Space。",
+        "examples": ["ggdk hf-create-space --space owner/space2 --exist-ok"],
     },
     "hf-sync": {
         "summary": "同步当前代码到默认 HF Space。",
@@ -85,6 +119,10 @@ COMMAND_HELP = {
             "ggdk hf-sync --restart --factory",
             "ggdk hf-sync --space owner/other-space",
         ],
+    },
+    "hf-sync-all": {
+        "summary": "并行把当前代码同步到所有启用的 HF Spaces。",
+        "examples": ["ggdk hf-sync-all", "ggdk hf-sync-all --restart", "ggdk hf-sync-all --max-workers 4"],
     },
     "hf-status": {
         "summary": "查看 HF Space 运行状态。",
@@ -159,14 +197,22 @@ COMMAND_HELP = {
 
 COMMAND_ORDER = [
     "print-config",
+    "hub-serve",
     "docker-build",
     "docker-run",
     "docker-up",
     "docker-check",
     "docker-logs",
     "docker-down",
+    "hub-docker-up",
+    "hub-docker-down",
+    "hub-check",
+    "hub-backends",
+    "hub-search",
+    "hf-create-space",
     "hf-url",
     "hf-sync",
+    "hf-sync-all",
     "hf-status",
     "hf-health",
     "hf-home",
@@ -202,10 +248,10 @@ def root_epilog() -> str:
             break
     lines.append("")
     lines.append("Examples:")
-    lines.append("  ggdk hf-check --check-auth")
-    lines.append("  ggdk docker-up")
-    lines.append("  ggdk hf-sync")
-    return "\n".join(lines)
+    lines.append("  ggdk hub-check")
+    lines.append("  ggdk hub-docker-up --mount-configs --replace")
+    lines.append("  ggdk hf-sync-all")
+    return assert_public_text_safe("\n".join(lines))
 
 
 def command_description(command_name: str) -> str:
@@ -219,7 +265,7 @@ def command_epilog(command_name: str) -> str:
         return ""
     lines = ["Examples:"]
     lines.extend(f"  {example}" for example in item.get("examples", []))
-    return "\n".join(lines)
+    return assert_public_text_safe("\n".join(lines))
 
 
 def render_usage_markdown() -> str:
@@ -260,7 +306,7 @@ def render_usage_markdown() -> str:
     lines.append("2. 临时覆盖管理 token：加 `--admin-token ...`。")
     lines.append("3. 临时覆盖搜索 token：加 `--api-token ...`。")
     lines.append("4. 验证匿名行为：对 `hf-search` 使用 `--no-auth`。")
-    lines.append("5. 缺最小配置骨架时，先运行 `ggdk config-init`。")
+    lines.append("5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。")
     lines.append("6. 配置有疑问时，先运行 `ggdk config-check`。")
     lines.append("7. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。")
     lines.append("")
@@ -280,36 +326,38 @@ def render_setup_markdown() -> str:
         "1. `configs/hf_spaces.json`",
         "2. `configs/google_api.json`",
         "3. `configs/google_docker.json`",
+        "4. `configs/google_hub.json`",
         "",
         "如果要启用验证码 VLM 或本地代理，再额外维护 `configs/captcha.json`、`configs/llms.json`、`configs/proxies.json`。",
         "",
         "配置写完后，先跑一次校验：",
         "",
         "```bash",
-        "ggdk config-init",
+        "ggdk config-init --name google_hub",
         "ggdk config-check",
         "```",
         "",
-        "## 2. 本地 Docker 启动",
+        "## 2. 本地中心服务启动",
         "",
         "```bash",
-        "ggdk docker-up",
-        "ggdk docker-check",
+        "ggdk hub-docker-up --mount-configs --replace",
+        "ggdk hub-check",
         "```",
         "",
-        "如果你已经在本机直接跑了 google_api，又想检查 Docker 状态，优先用 `ggdk docker-check`，它会提示是否出现同端口冲突。",
+        "如果你还保留单实例 google_api，本地 hub 会把它当成一个后端节点统一调度。",
         "",
         "## 3. 同步到 HF Space",
         "",
         "```bash",
-        "ggdk hf-sync",
-        "ggdk hf-check --check-auth",
+        "ggdk hf-create-space --space owner/space2 --exist-ok",
+        "ggdk hf-sync-all --restart",
         "```",
         "",
         "如果想拿到更完整的诊断信息，用：",
         "",
         "```bash",
-        "ggdk hf-doctor --check-auth",
+        "ggdk hf-doctor --space owner/space1 --check-auth",
+        "ggdk hf-doctor --space owner/space2 --check-auth",
         "```",
         "",
         "## 4. 常见临时覆盖",
@@ -320,7 +368,7 @@ def render_setup_markdown() -> str:
         "4. 修改共享说明源后，执行 `ggdk docs-sync`。",
         "",
     ]
-    return "\n".join(lines)
+    return assert_public_text_safe("\n".join(lines))
 
 
 def render_hints_markdown() -> str:
@@ -333,26 +381,26 @@ def render_hints_markdown() -> str:
         "",
         "优先顺序：",
         "",
-        "1. 状态检查用 `ggdk hf-check` 或 `ggdk hf-doctor`。",
-        "2. Docker 本地联调用 `ggdk docker-up`、`ggdk docker-check`、`ggdk docker-down`。",
-        "3. 仓库内容排查用 `ggdk hf-files --prefix bootstrap/`。",
+        "1. 状态检查优先用 `ggdk hub-check` 或 `ggdk hub-backends`。",
+        "2. Docker 本地联调用 `ggdk hub-docker-up`、`ggdk hub-check`、`ggdk hub-docker-down`。",
+        "3. Space 仓库排查用 `ggdk hf-files --space owner/space1 --prefix bootstrap/`。",
         "4. 配置排查用 `ggdk config-init` 和 `ggdk config-check`。",
         "",
         "## 常见排查动作",
         "",
         "```bash",
-        "ggdk hf-health",
-        "ggdk hf-runtime",
-        "ggdk hf-logs --lines 80",
-        "ggdk hf-files --prefix bootstrap/",
+        "ggdk hub-check",
+        "ggdk hub-backends",
+        "ggdk hf-logs --space owner/space1 --lines 80",
+        "ggdk hf-files --space owner/space2 --prefix bootstrap/",
         "```",
         "",
         "## 推荐诊断顺序",
         "",
-        "1. `ggdk config-init` 或 `ggdk config-check`",
-        "2. `ggdk docker-check` 或 `ggdk hf-check --check-auth`",
-        "3. `ggdk hf-doctor --check-auth`",
-        "4. `ggdk hf-logs --lines 80`",
+        "1. `ggdk config-init --name google_hub` 或 `ggdk config-check`",
+        "2. `ggdk hub-check`",
+        "3. `ggdk hf-doctor --space owner/space1 --check-auth`",
+        "4. `ggdk hf-doctor --space owner/space2 --check-auth`",
         "",
         "## 文档维护原则",
         "",
@@ -362,4 +410,4 @@ def render_hints_markdown() -> str:
         "",
     ]
     lines.append("")
-    return "\n".join(lines)
+    return assert_public_text_safe("\n".join(lines))

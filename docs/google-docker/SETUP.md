@@ -9,36 +9,38 @@
 1. `configs/hf_spaces.json`
 2. `configs/google_api.json`
 3. `configs/google_docker.json`
+4. `configs/google_hub.json`
 
 如果要启用验证码 VLM 或本地代理，再额外维护 `configs/captcha.json`、`configs/llms.json`、`configs/proxies.json`。
 
 配置写完后，先跑一次校验：
 
 ```bash
-ggdk config-init
+ggdk config-init --name google_hub
 ggdk config-check
 ```
 
-## 2. 本地 Docker 启动
+## 2. 本地中心服务启动
 
 ```bash
-ggdk docker-up
-ggdk docker-check
+ggdk hub-docker-up --mount-configs --replace
+ggdk hub-check
 ```
 
-如果你已经在本机直接跑了 google_api，又想检查 Docker 状态，优先用 `ggdk docker-check`，它会提示是否出现同端口冲突。
+如果你还保留单实例 google_api，本地 hub 会把它当成一个后端节点统一调度。
 
 ## 3. 同步到 HF Space
 
 ```bash
-ggdk hf-sync
-ggdk hf-check --check-auth
+ggdk hf-create-space --space owner/space2 --exist-ok
+ggdk hf-sync-all --restart
 ```
 
 如果想拿到更完整的诊断信息，用：
 
 ```bash
-ggdk hf-doctor --check-auth
+ggdk hf-doctor --space owner/space1 --check-auth
+ggdk hf-doctor --space owner/space2 --check-auth
 ```
 
 ## 4. 常见临时覆盖

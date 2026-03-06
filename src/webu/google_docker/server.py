@@ -21,8 +21,8 @@ class RuntimeInfoResponse(BaseModel):
     service: str = "google_docker"
     runtime_env: str = "local"
     host: str = "0.0.0.0"
-    port: int = 18000
-    app_port: int = 18000
+    port: int = 18200
+    app_port: int = 18200
     headless: bool = True
     proxy_mode: str = "auto"
     proxy_count: int = 0
@@ -44,7 +44,7 @@ class LogsResponse(BaseModel):
 class ConfigResponse(BaseModel):
     runtime_env: str = "local"
     host: str = "0.0.0.0"
-    port: int = 18000
+    port: int = 18200
     image_name: str = ""
     container_name: str = ""
     proxy_mode: str = "auto"
@@ -151,7 +151,7 @@ def app_instance():
 def main():
     parser = argparse.ArgumentParser(description="Run google_docker service")
     parser.add_argument("--host", default=os.getenv("WEBU_DOCKER_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_DOCKER_PORT", "18000")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("WEBU_DOCKER_PORT", "18200")))
     args = parser.parse_args()
     uvicorn.run(
         "webu.google_docker.server:app_instance",

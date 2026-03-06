@@ -48,6 +48,7 @@ ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
     WEBU_SERVICE_LOG=/tmp/webu-google-docker.log \
     WEBU_RUNTIME_ENV=docker \
+    WEBU_SERVICE_MODE=google-docker \
     WEBU_GOOGLE_PROFILE_BOOTSTRAP_ARCHIVE=/home/user/app/bootstrap/google_api_profile.bin
 WORKDIR /home/user/app
 
@@ -59,6 +60,6 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} . \
     && python -m playwright install chromium
 
-EXPOSE 18000
+EXPOSE 18100 18200
 
-CMD ["sh", "-lc", "python -m webu.google_docker serve --host 0.0.0.0 --port ${WEBU_DOCKER_PORT:-18000} 2>&1 | tee -a ${WEBU_SERVICE_LOG}"]
+CMD ["sh", "-lc", "if [ \"${WEBU_SERVICE_MODE}\" = \"hub\" ]; then python -m webu.google_hub.server --host 0.0.0.0 --port ${WEBU_HUB_PORT:-18100}; else python -m webu.google_docker serve --host 0.0.0.0 --port ${WEBU_DOCKER_PORT:-18200}; fi 2>&1 | tee -a ${WEBU_SERVICE_LOG}"]

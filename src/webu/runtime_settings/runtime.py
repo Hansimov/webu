@@ -206,7 +206,7 @@ def resolve_google_api_service_profile(
             break
 
     resolved_host = str(host or os.getenv("WEBU_GOOGLE_HOST", config.get("host", "0.0.0.0")))
-    resolved_port = int(port or _env_int("WEBU_GOOGLE_PORT", int(config.get("port", 18000))))
+    resolved_port = int(port or _env_int("WEBU_GOOGLE_PORT", int(config.get("port", 18200))))
     default_url = f"http://127.0.0.1:{resolved_port}"
     selected_url = str(selected.get("url", "")).strip()
     derived_url = ""
@@ -404,7 +404,7 @@ def resolve_google_api_settings(
         )
 
     resolved_host = host or os.getenv("WEBU_GOOGLE_HOST", config.get("host", "0.0.0.0"))
-    resolved_port = port or _env_int("WEBU_GOOGLE_PORT", int(config.get("port", 18000)))
+    resolved_port = port or _env_int("WEBU_GOOGLE_PORT", int(config.get("port", 18200)))
 
     profile_dir = Path(
         os.getenv(
@@ -452,7 +452,7 @@ def resolve_google_docker_settings() -> GoogleDockerSettings:
     runtime_env = detect_runtime_environment()
     config = load_json_config("google_docker") or {}
     host = os.getenv("WEBU_DOCKER_HOST", config.get("host", "0.0.0.0"))
-    port = _env_int("WEBU_DOCKER_PORT", int(config.get("port", 18000)))
+    port = _env_int("WEBU_DOCKER_PORT", int(config.get("port", 18200)))
     app_port = _env_int("WEBU_DOCKER_APP_PORT", int(config.get("app_port", port)))
     image_name = os.getenv("WEBU_DOCKER_IMAGE", config.get("image_name", "webu/google-api:dev"))
     container_name = os.getenv("WEBU_DOCKER_CONTAINER", config.get("container_name", "webu-google-api"))

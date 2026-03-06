@@ -122,7 +122,7 @@ class TestGoogleSearchServerUnit:
         config_dir = tmp_path / "configs"
         config_dir.mkdir()
         (config_dir / "google_api.json").write_text(
-            '{"services": [{"url": "http://127.0.0.1:18000", "type": "local", "api_token": "local-search-token"}]}',
+            '{"services": [{"url": "http://127.0.0.1:18200", "type": "local", "api_token": "local-search-token"}]}',
             encoding="utf-8",
         )
         monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
@@ -142,6 +142,46 @@ class TestGoogleSearchServerUnit:
                         headers={"X-Api-Token": "local-search-token"},
                     )
                     assert resp.status_code == 200
+
+    def test_admin_profile_status_and_archive(self, monkeypatch, tmp_path):
+        config_dir = tmp_path / "configs"
+        profile_dir = tmp_path / "profile"
+        config_dir.mkdir()
+        profile_dir.mkdir()
+        (profile_dir / "google_cookies.json").write_text("[]\n", encoding="utf-8")
+        (config_dir / "google_api.json").write_text(
+            (
+                '{'
+                '"host": "0.0.0.0", '
+                '"port": 18200, '
+                '"proxy_mode": "auto", '
+                f'"profile_dir": "{profile_dir}", '
+                '"services": [{"type": "local", "api_token": "local-search-token"}]'
+                '}'
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+        monkeypatch.setenv("WEBU_RUNTIME_ENV", "local")
+        monkeypatch.setenv("WEBU_ADMIN_TOKEN", "admin-secret")
+
+        with patch("webu.google_api.server.ProxyManager", _FakeProxyManager):
+            with patch("webu.google_api.server.GoogleScraper", _FakeGoogleScraper):
+                app = create_google_search_server(settings=resolve_google_api_settings(headless=True))
+                with TestClient(app) as client:
+                    assert client.get("/admin/profile/status").status_code == 401
+                    resp = client.get("/admin/profile/status", headers={"X-Admin-Token": "admin-secret"})
+                    assert resp.status_code == 200
+                    assert resp.json()["archive_available"] is True
+
+                    archive_resp = client.get(
+                        "/admin/profile/archive?secret=webu",
+                        headers={"X-Admin-Token": "admin-secret"},
+                    )
+                    assert archive_resp.status_code == 200
+                    assert archive_resp.headers["content-type"] == "application/octet-stream"
+                    assert len(archive_resp.content) > 0
 
 
 @pytest.mark.integration

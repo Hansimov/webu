@@ -188,3 +188,15 @@ def restore_encrypted_profile_archive(archive_path: str | Path, target_dir: str 
         for member in archive.getmembers():
             _validate_archive_member(member.name, target_dir)
         archive.extractall(path=target_dir)
+
+
+def rewrite_encrypted_profile_archive(
+    source_archive_path: str | Path,
+    target_archive_path: str | Path,
+    source_secret: str,
+    target_secret: str,
+) -> bool:
+    with tempfile.TemporaryDirectory(prefix="webu-profile-rewrite-") as tempdir:
+        restored_dir = Path(tempdir) / "profile"
+        restore_encrypted_profile_archive(source_archive_path, restored_dir, source_secret)
+        return create_encrypted_profile_archive(restored_dir, target_archive_path, target_secret)

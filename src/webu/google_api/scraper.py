@@ -34,6 +34,7 @@ from .constants import (
     LOCALES,
 )
 from .parser import GoogleResultParser, GoogleSearchResponse
+from .profile_assets import resolve_bootstrap_secret, resolve_default_bootstrap_archive_path
 from .profile_bootstrap import restore_encrypted_profile_archive
 from .proxy_manager import ProxyManager
 from webu.captcha import CaptchaBypass
@@ -222,15 +223,13 @@ class GoogleScraper:
             logger.mesg(f"\n> Startup timing:\n{self.perf.summary()}\n")
 
     def _bootstrap_profile_dir(self):
-        bootstrap_archive = Path(os.getenv("WEBU_GOOGLE_PROFILE_BOOTSTRAP_ARCHIVE", "")).expanduser()
+        bootstrap_archive = resolve_default_bootstrap_archive_path().expanduser()
         bootstrap_dir = Path(os.getenv("WEBU_GOOGLE_PROFILE_BOOTSTRAP_DIR", "")).expanduser()
         if self._profile_dir.exists() and any(self._profile_dir.iterdir()):
             return
 
         if str(bootstrap_archive) and bootstrap_archive.exists():
-            bootstrap_token = os.getenv("WEBU_GOOGLE_API_TOKEN", "").strip()
-            if not bootstrap_token:
-                raise RuntimeError("WEBU_GOOGLE_API_TOKEN is required to decrypt the bootstrap profile archive")
+            bootstrap_token = resolve_bootstrap_secret()
             restore_encrypted_profile_archive(bootstrap_archive, self._profile_dir, bootstrap_token)
             if self.verbose:
                 logger.mesg(f"  Bootstrapped profile dir: {logstr.file(self._profile_dir)}")

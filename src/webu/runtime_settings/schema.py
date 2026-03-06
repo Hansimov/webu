@@ -1,13 +1,28 @@
 from __future__ import annotations
 
 import json
+import os
 
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .sensitive import assert_public_text_safe
+
 
 CONFIGS_DOC_PATH = Path(__file__).resolve().parents[3] / "docs" / "google-docker" / "CONFIGS.md"
+
+
+def _find_project_root() -> Path:
+    explicit_root = os.getenv("WEBU_PROJECT_ROOT")
+    if explicit_root:
+        return Path(explicit_root).expanduser().resolve()
+
+    for candidate in [Path.cwd(), *Path.cwd().parents]:
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+
+    return Path(__file__).resolve().parents[3]
 
 
 CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
@@ -25,10 +40,10 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
         ],
         "sample": {
             "host": "0.0.0.0",
-            "port": 18000,
+            "port": 18200,
             "proxy_mode": "auto",
             "services": [
-                {"url": "http://127.0.0.1:18000", "type": "local", "api_token": ""},
+                {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
                 {"type": "hf-space", "api_token": "your-hf-search-token"},
             ],
         },
@@ -65,6 +80,82 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "admin_token": {"type": "string"},
+            },
+        },
+    },
+    "google_hub": {
+        "file": "configs/google_hub.json",
+        "purpose": [
+            "定义本地中心化调度服务的监听参数和调度策略。",
+            "集中管理多个 Google API / HF Space 后端。",
+            "供 google_hub 服务执行健康检查、路由和负载均衡。",
+        ],
+        "notes": [
+            "kind 只允许 local-google-api、google-api、hf-space。",
+            "hf-space 后端可以只写 space，不写 base_url。",
+            "search_api_token 和 admin_token 为空时，会回退到现有 google_api/google_docker 配置中的默认 token。",
+        ],
+        "sample": {
+            "host": "0.0.0.0",
+            "port": 18100,
+            "strategy": "least-inflight",
+            "health_interval_sec": 30,
+            "health_timeout_sec": 10,
+            "request_timeout_sec": 90,
+            "backends": [
+                {
+                    "name": "local-google-api",
+                    "kind": "local-google-api",
+                    "base_url": "http://127.0.0.1:18200",
+                    "enabled": True,
+                    "weight": 2,
+                    "tags": ["local", "primary"],
+                },
+                {
+                    "name": "space1",
+                    "kind": "hf-space",
+                    "space": "owner/space1",
+                    "enabled": True,
+                    "weight": 1,
+                    "tags": ["hf", "primary"],
+                },
+                {
+                    "name": "space2",
+                    "kind": "hf-space",
+                    "space": "owner/space2",
+                    "enabled": True,
+                    "weight": 1,
+                    "tags": ["hf", "secondary"],
+                },
+            ],
+        },
+        "schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string"},
+                "port": {"type": "integer"},
+                "admin_token": {"type": "string"},
+                "strategy": {"type": "string", "enum": ["least-inflight"]},
+                "health_interval_sec": {"type": "integer"},
+                "health_timeout_sec": {"type": "integer"},
+                "request_timeout_sec": {"type": "integer"},
+                "backends": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "kind": {"type": "string", "enum": ["local-google-api", "google-api", "hf-space"]},
+                            "base_url": {"type": "string"},
+                            "space": {"type": "string"},
+                            "enabled": {"type": "boolean"},
+                            "weight": {"type": "integer"},
+                            "search_api_token": {"type": "string"},
+                            "admin_token": {"type": "string"},
+                            "tags": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
             },
         },
     },
@@ -176,8 +267,12 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
         "notes": [
             "这里不要放 /search 的业务 token。",
             "这里也不要放 admin_token。",
+            "可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置。",
         ],
-        "sample": [{"space": "owner/space-name", "hf_token": "your-hf-token"}],
+        "sample": [
+            {"space": "owner/space1", "hf_token": "your-hf-token", "enabled": True, "weight": 1, "tags": ["primary"]},
+            {"space": "owner/space2", "hf_token": "your-hf-token", "enabled": True, "weight": 1, "tags": ["secondary"]},
+        ],
         "schema": {
             "type": "array",
             "items": {
@@ -186,6 +281,9 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                 "properties": {
                     "space": {"type": "string"},
                     "hf_token": {"type": "string"},
+                    "enabled": {"type": "boolean"},
+                    "weight": {"type": "integer"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
                 },
             },
         },
@@ -266,8 +364,6 @@ def _validate_schema(value: Any, schema: dict[str, Any], path: str) -> list[str]
 
 def validate_config_payload(name: str, payload: Any) -> list[str]:
     return _validate_schema(payload, config_schema_json(name), name)
-
-
 def render_configs_markdown() -> str:
     lines = [
         "# 配置模板",
@@ -328,4 +424,4 @@ def render_configs_markdown() -> str:
     lines.append("ggdk config-check")
     lines.append("```")
     lines.append("")
-    return "\n".join(lines)
+    return assert_public_text_safe("\n".join(lines))

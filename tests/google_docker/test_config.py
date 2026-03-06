@@ -2,6 +2,7 @@ import json
 
 from pathlib import Path
 
+from webu.google_hub import resolve_google_hub_settings
 from webu.runtime_settings import (
     load_json_config,
     resolve_captcha_vlm_settings,
@@ -48,7 +49,7 @@ def test_google_api_service_profile_resolves_by_type(monkeypatch, tmp_path):
         json.dumps(
             {
                 "services": [
-                    {"url": "http://127.0.0.1:18000", "type": "local", "api_token": ""},
+                    {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
                     {"type": "hf-space", "api_token": "hf-token"},
                 ]
             }
@@ -136,7 +137,7 @@ def test_load_json_config_validates_known_configs(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
     (config_dir / "google_api.json").write_text(
-        json.dumps({"host": "0.0.0.0", "port": "18000", "proxy_mode": "auto", "services": []}),
+        json.dumps({"host": "0.0.0.0", "port": "18200", "proxy_mode": "auto", "services": []}),
         encoding="utf-8",
     )
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
@@ -154,7 +155,7 @@ def test_load_json_config_allows_disabling_validation(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
     (config_dir / "google_api.json").write_text(
-        json.dumps({"host": "0.0.0.0", "port": "18000", "proxy_mode": "auto", "services": []}),
+        json.dumps({"host": "0.0.0.0", "port": "18200", "proxy_mode": "auto", "services": []}),
         encoding="utf-8",
     )
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
@@ -162,7 +163,7 @@ def test_load_json_config_allows_disabling_validation(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBU_VALIDATE_CONFIGS", "false")
 
     payload = load_json_config("google_api")
-    assert payload["port"] == "18000"
+    assert payload["port"] == "18200"
 
 
 def test_google_api_config_allows_runtime_defaults(monkeypatch, tmp_path):
@@ -177,3 +178,88 @@ def test_google_api_config_allows_runtime_defaults(monkeypatch, tmp_path):
 
     payload = load_json_config("google_api")
     assert payload["services"][0]["api_token"] == "local-search-token"
+
+
+def test_google_hub_settings_resolve_backends(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps(
+            {
+                "host": "0.0.0.0",
+                "port": 18200,
+                "proxy_mode": "auto",
+                "services": [
+                    {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
+                    {"type": "hf-space", "api_token": "hf-search-token"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "google_docker.json").write_text(json.dumps({"admin_token": "admin-token"}), encoding="utf-8")
+    (config_dir / "hf_spaces.json").write_text(
+        json.dumps(
+            [
+                {"space": "owner/space1", "hf_token": "hf_demo", "enabled": True, "weight": 1},
+                {"space": "owner/space2", "hf_token": "hf_demo", "enabled": True, "weight": 2},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "port": 18100,
+                "backends": [
+                    {"name": "local-google-api", "kind": "local-google-api", "base_url": "http://127.0.0.1:18200", "weight": 2},
+                    {"name": "space2", "kind": "hf-space", "space": "owner/space2", "weight": 1},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    settings = resolve_google_hub_settings()
+    assert settings.port == 18100
+    assert [backend.name for backend in settings.backends] == ["local-google-api", "space2"]
+    assert settings.backends[1].base_url == "https://owner-space2.hf.space"
+
+
+def test_google_hub_settings_normalize_local_backend_for_docker(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps(
+            {
+                "host": "0.0.0.0",
+                "port": 18200,
+                "proxy_mode": "auto",
+                "services": [
+                    {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
+                    {"type": "hf-space", "api_token": "hf-search-token"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "google_docker.json").write_text(json.dumps({"admin_token": "admin-token"}), encoding="utf-8")
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "port": 18100,
+                "backends": [
+                    {"name": "local-google-api", "kind": "local-google-api", "base_url": "http://127.0.0.1:18200", "weight": 2}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("WEBU_RUNTIME_ENV", "docker")
+
+    settings = resolve_google_hub_settings()
+    assert settings.backends[0].base_url == "http://host.docker.internal:18200"

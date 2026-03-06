@@ -6,26 +6,26 @@
 
 优先顺序：
 
-1. 状态检查用 `ggdk hf-check` 或 `ggdk hf-doctor`。
-2. Docker 本地联调用 `ggdk docker-up`、`ggdk docker-check`、`ggdk docker-down`。
-3. 仓库内容排查用 `ggdk hf-files --prefix bootstrap/`。
+1. 状态检查优先用 `ggdk hub-check` 或 `ggdk hub-backends`。
+2. Docker 本地联调用 `ggdk hub-docker-up`、`ggdk hub-check`、`ggdk hub-docker-down`。
+3. Space 仓库排查用 `ggdk hf-files --space owner/space1 --prefix bootstrap/`。
 4. 配置排查用 `ggdk config-init` 和 `ggdk config-check`。
 
 ## 常见排查动作
 
 ```bash
-ggdk hf-health
-ggdk hf-runtime
-ggdk hf-logs --lines 80
-ggdk hf-files --prefix bootstrap/
+ggdk hub-check
+ggdk hub-backends
+ggdk hf-logs --space owner/space1 --lines 80
+ggdk hf-files --space owner/space2 --prefix bootstrap/
 ```
 
 ## 推荐诊断顺序
 
-1. `ggdk config-init` 或 `ggdk config-check`
-2. `ggdk docker-check` 或 `ggdk hf-check --check-auth`
-3. `ggdk hf-doctor --check-auth`
-4. `ggdk hf-logs --lines 80`
+1. `ggdk config-init --name google_hub` 或 `ggdk config-check`
+2. `ggdk hub-check`
+3. `ggdk hf-doctor --space owner/space1 --check-auth`
+4. `ggdk hf-doctor --space owner/space2 --check-auth`
 
 ## 文档维护原则
 

@@ -41,11 +41,11 @@
 ```json
 {
   "host": "0.0.0.0",
-  "port": 18000,
+  "port": 18200,
   "proxy_mode": "auto",
   "services": [
     {
-      "url": "http://127.0.0.1:18000",
+      "url": "http://127.0.0.1:18200",
       "type": "local",
       "api_token": ""
     },
@@ -80,7 +80,69 @@
 }
 ```
 
-## 4. `configs/hf_spaces.json`
+## 4. `configs/google_hub.json`
+
+用途：
+
+1. 定义本地中心化调度服务的监听参数和调度策略。
+2. 集中管理多个 Google API / HF Space 后端。
+3. 供 google_hub 服务执行健康检查、路由和负载均衡。
+
+模板：
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 18100,
+  "strategy": "least-inflight",
+  "health_interval_sec": 30,
+  "health_timeout_sec": 10,
+  "request_timeout_sec": 90,
+  "backends": [
+    {
+      "name": "local-google-api",
+      "kind": "local-google-api",
+      "base_url": "http://127.0.0.1:18200",
+      "enabled": true,
+      "weight": 2,
+      "tags": [
+        "local",
+        "primary"
+      ]
+    },
+    {
+      "name": "space1",
+      "kind": "hf-space",
+      "space": "owner/space1",
+      "enabled": true,
+      "weight": 1,
+      "tags": [
+        "hf",
+        "primary"
+      ]
+    },
+    {
+      "name": "space2",
+      "kind": "hf-space",
+      "space": "owner/space2",
+      "enabled": true,
+      "weight": 1,
+      "tags": [
+        "hf",
+        "secondary"
+      ]
+    }
+  ]
+}
+```
+
+说明：
+
+1. kind 只允许 local-google-api、google-api、hf-space。
+2. hf-space 后端可以只写 space，不写 base_url。
+3. search_api_token 和 admin_token 为空时，会回退到现有 google_api/google_docker 配置中的默认 token。
+
+## 5. `configs/hf_spaces.json`
 
 用途：
 
@@ -93,8 +155,22 @@
 ```json
 [
   {
-    "space": "owner/space-name",
-    "hf_token": "your-hf-token"
+    "space": "owner/space1",
+    "hf_token": "your-hf-token",
+    "enabled": true,
+    "weight": 1,
+    "tags": [
+      "primary"
+    ]
+  },
+  {
+    "space": "owner/space2",
+    "hf_token": "your-hf-token",
+    "enabled": true,
+    "weight": 1,
+    "tags": [
+      "secondary"
+    ]
   }
 ]
 ```
@@ -103,8 +179,9 @@
 
 1. 这里不要放 /search 的业务 token。
 2. 这里也不要放 admin_token。
+3. 可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置。
 
-## 5. `configs/llms.json`
+## 6. `configs/llms.json`
 
 用途：
 
@@ -124,7 +201,7 @@
 }
 ```
 
-## 6. `configs/proxies.json`
+## 7. `configs/proxies.json`
 
 用途：
 

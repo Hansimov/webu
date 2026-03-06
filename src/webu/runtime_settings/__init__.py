@@ -29,6 +29,7 @@ from .schema import (
     render_configs_markdown,
     validate_config_payload,
 )
+from .sensitive import assert_public_text_safe, collect_sensitive_local_values, find_sensitive_text_leaks
 
 __all__ = [
     "CaptchaVlmSettings",
@@ -38,12 +39,15 @@ __all__ = [
     "WorkspacePaths",
     "CONFIGS_DOC_PATH",
     "available_config_names",
+    "assert_public_text_safe",
     "config_schema_json",
+    "collect_sensitive_local_values",
     "detect_runtime_environment",
     "default_config_payload",
     "get_workspace_paths",
     "has_config_schema",
     "load_json_config",
+    "find_sensitive_text_leaks",
     "render_config_template_json",
     "render_configs_markdown",
     "resolve_captcha_vlm_settings",
