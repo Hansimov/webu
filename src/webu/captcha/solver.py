@@ -18,8 +18,7 @@ from pathlib import Path
 from tclogger import logger, logstr
 from typing import Optional
 
-# 配置文件
-CAPTCHA_CONFIG_PATH = Path("configs/captcha.json")
+from webu.runtime_settings import resolve_captcha_vlm_settings
 
 # 调试输出目录
 DEBUG_DIR = Path("debugs/captcha-samples")
@@ -368,14 +367,6 @@ class AnnotationResult:
 # ═════════════════════════════════════════════════════════════════
 
 
-def _load_captcha_config() -> dict:
-    """加载 captcha 配置。"""
-    if CAPTCHA_CONFIG_PATH.exists():
-        with open(CAPTCHA_CONFIG_PATH) as f:
-            return json.load(f)
-    return {}
-
-
 def _encode_image_bytes_to_base64(image_bytes: bytes, fmt: str = "png") -> str:
     """将图片 bytes 编码为 base64 data URL。"""
     mime = f"image/{fmt}"
@@ -437,17 +428,19 @@ class CaptchaSolver:
     def __init__(
         self,
         endpoint: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        api_format: str | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.2,
         timeout: float = 60.0,
         verbose: bool = True,
     ):
-        config = _load_captcha_config()
-        # old format: {"endpoint": "..."}
-        # new format: {"vlm": {"endpoint": "..."}}
-        vlm_config = config.get("vlm", {})
-        config_endpoint = vlm_config.get("endpoint", config.get("endpoint", ""))
-        self.endpoint = (endpoint or config_endpoint).rstrip("/")
+        settings = resolve_captcha_vlm_settings()
+        self.endpoint = (endpoint or settings.endpoint).rstrip("/")
+        self.api_key = api_key if api_key is not None else settings.api_key
+        self.model = model if model is not None else settings.model
+        self.api_format = api_format if api_format is not None else settings.api_format
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
@@ -475,7 +468,7 @@ class CaptchaSolver:
             需要点击的格子编号列表（1-based），空列表表示失败
         """
         if not self.endpoint:
-            logger.warn(f"  × VLM endpoint not configured ({logstr.file('configs/captcha.json')})")
+            logger.warn("  × VLM endpoint not configured (captcha config or WEBU_CAPTCHA_VLM_ENDPOINT)")
             return []
 
         # 1) 标注网格
@@ -577,6 +570,8 @@ class CaptchaSolver:
             "temperature": self.temperature,
             "stream": False,
         }
+        if self.model:
+            payload["model"] = self.model
 
         # Use endpoint directly if it already contains the API path,
         # otherwise append /v1/chat/completions
@@ -584,10 +579,14 @@ class CaptchaSolver:
         if not url.endswith("/chat/completions"):
             url = f"{url}/v1/chat/completions"
 
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout)
         ) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
 

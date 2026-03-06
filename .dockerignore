@@ -1,0 +1,12 @@
+.git
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+.chats
+__pycache__
+data
+debugs
+tests
+configs/*.json
+src/webu.egg-info

@@ -6,6 +6,8 @@ from pyvirtualdisplay import Display
 from tclogger import logger, logstr, dict_to_str, PathType, norm_path, strf_path, brk
 from typing import Union, TypedDict, Optional
 
+from webu.runtime_settings import resolve_searches_chrome_proxy
+
 CHROME_USER_DATA_DIR = norm_path("~/.config/google-chrome")
 
 
@@ -173,7 +175,7 @@ def test_chrome_client():
     client = ChromeClient(
         uid="1000",
         port=29001,
-        proxy="http://127.0.0.1:11111",
+        proxy=resolve_searches_chrome_proxy(),
         user_data_dir="./data/chrome",
         use_vdisp=False,
     )
@@ -198,4 +200,4 @@ if __name__ == "__main__":
     test_chrome_client_by_config()
 
     # python -m webu.browsers.chrome
-    # python -m webu.browsers.chrome -u 1001 -p 29002 -x "http://127.0.0.1:11111"
+    # python -m webu.browsers.chrome -u 1001 -p 29002 -x "$(jq -r '.searches.chrome_proxy' configs/proxies.json)"

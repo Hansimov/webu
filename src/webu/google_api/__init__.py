@@ -1,6 +1,6 @@
 """Google 搜索模块 — 基于 ProxyManager + undetected chromedriver。
 
-使用固定 HTTP 代理列表（11111 + 11119）进行 Google 搜索，
+本地代理列表从 configs/proxies.json 读取，
 包含 round-robin 负载均衡、健康检查、自动故障转移和 CAPTCHA 绕过。
 """
 

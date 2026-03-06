@@ -155,6 +155,7 @@ class GoogleScraper:
         verbose: bool = True,
         proxy_url: str = None,
         profile_dir: str | Path = None,
+        screenshot_dir: str | Path = None,
     ):
         self.proxy_manager = proxy_manager
         self.headless = headless
@@ -166,6 +167,7 @@ class GoogleScraper:
         self._fixed_proxy = proxy_url
         # 持久化目录（Cookie / Chrome Profile）
         self._profile_dir = Path(profile_dir) if profile_dir else DEFAULT_PROFILE_DIR
+        self._screenshot_dir = Path(screenshot_dir) if screenshot_dir else SCREENSHOT_DIR
         # Cookie 持久化文件
         self._cookie_file = self._profile_dir / "google_cookies.json"
 
@@ -525,7 +527,7 @@ class GoogleScraper:
                 search_perf.start("captcha_bypass")
                 # 创建本次运行的截图子目录
                 run_ts = datetime.now(TZ_SHANGHAI).strftime("%Y%m%d_%H%M%S")
-                run_dir = SCREENSHOT_DIR / run_ts
+                run_dir = self._screenshot_dir / run_ts
                 run_dir.mkdir(parents=True, exist_ok=True)
 
                 # 保存截图用于分析
@@ -607,6 +609,7 @@ class GoogleScraper:
                             query=query,
                             proxy_url=proxy_url or "direct",
                             reason="error",
+                            base_dir=self._screenshot_dir,
                         )
                 except Exception:
                     pass

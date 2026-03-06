@@ -1,10 +1,8 @@
 """代理管理器 — 基于固定代理列表的健康检查、负载均衡和自动故障转移。
 
-使用本地 HTTP 代理进行 Google 搜索：
-- http://127.0.0.1:11111
-- http://127.0.0.1:11119
+使用本地 `configs/proxies.json` 中的 Google 代理列表进行搜索。
 
-两个代理地位平等，通过 round-robin 轮换 + 健康检查实现负载均衡：
+多个代理地位平等，通过 round-robin 轮换 + 健康检查实现负载均衡：
 - 周期性健康检查（默认 30 秒）
 - 不健康代理自动跳过，加速恢复检测（15 秒）
 - 搜索成功/失败实时更新代理状态
@@ -22,15 +20,14 @@ from typing import Optional
 import aiohttp
 from aiohttp_socks import ProxyConnector
 
+from webu.runtime_settings import resolve_local_google_proxies
+
 
 # ═══════════════════════════════════════════════════════════════
 # 默认代理配置
 # ═══════════════════════════════════════════════════════════════
 
-DEFAULT_PROXIES = [
-    {"url": "http://127.0.0.1:11111", "name": "proxy-11111"},
-    {"url": "http://127.0.0.1:11119", "name": "proxy-11119"},
-]
+DEFAULT_PROXIES = resolve_local_google_proxies()
 
 # 健康检查间隔（秒）
 HEALTH_CHECK_INTERVAL = 30
@@ -114,7 +111,7 @@ async def check_proxy_health(
     通过代理发送 HTTP 请求到检测端点，验证连通性。
 
     Args:
-        proxy_url: 代理 URL (e.g. "http://127.0.0.1:11111")
+        proxy_url: 代理 URL (e.g. value from configs/proxies.json)
         timeout_s: 超时秒数
         check_url: 检测 URL（默认使用 Google）
 
@@ -263,7 +260,7 @@ class ProxyManager:
 
         策略：
         1. 在健康代理中 round-robin 轮换
-        2. 所有代理都不健康时，降级使用失败次数最少的
+        2. 所有代理都不健康时，返回 None 让上层自行决定是否直连
 
         Returns:
             代理 URL 字符串，或 None（无可用代理）
@@ -275,17 +272,8 @@ class ProxyManager:
             selected = healthy[idx]
             return selected.url
 
-        # 降级：所有代理都不健康，选失败次数最少的
-        all_sorted = sorted(self._proxies, key=lambda p: p.consecutive_failures)
-        if all_sorted:
-            selected = all_sorted[0]
-            if self.verbose:
-                logger.warn(
-                    f"  ⚠ All proxies unhealthy, degraded to: "
-                    f"{logstr.mesg(selected.name)} "
-                    f"(failures: {selected.consecutive_failures})"
-                )
-            return selected.url
+        if self.verbose and self._proxies:
+            logger.warn("  ⚠ All proxies unhealthy, falling back to direct access")
 
         return None
 
@@ -376,8 +364,9 @@ class ProxyManager:
                 )
         else:
             proxy.consecutive_failures += 1
-            if proxy.consecutive_failures >= self.failure_threshold:
-                proxy.healthy = False
+            proxy.total_failures += 1
+            proxy.last_failure_time = proxy.last_check_time
+            proxy.healthy = False
             if self.verbose and not was_healthy:
                 logger.mesg(
                     f"  · Proxy still down: {logstr.mesg(proxy.name)} — {error}"

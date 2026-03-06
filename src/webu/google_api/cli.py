@@ -25,16 +25,20 @@ import time
 from pathlib import Path
 from tclogger import logger, logstr
 
+from webu.runtime_settings import resolve_google_api_settings
+
 # ═══════════════════════════════════════════════════════════════
 # 常量
 # ═══════════════════════════════════════════════════════════════
 
-DATA_DIR = Path("data/google_api")
+_GOOGLE_API_SETTINGS = resolve_google_api_settings()
+
+DATA_DIR = _GOOGLE_API_SETTINGS.data_dir
 PID_FILE = DATA_DIR / "server.pid"
 LOG_FILE = DATA_DIR / "server.log"
 
-DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 18000
+DEFAULT_HOST = _GOOGLE_API_SETTINGS.host
+DEFAULT_PORT = _GOOGLE_API_SETTINGS.port
 
 # ═══════════════════════════════════════════════════════════════
 # PID 管理

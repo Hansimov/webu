@@ -106,14 +106,13 @@ class TestProxyManager:
         assert url2 == "http://127.0.0.1:11119"
 
     def test_get_proxy_all_unhealthy(self):
-        """所有代理不健康时，应返回失败次数最少的。"""
+        """所有代理不健康时，应返回 None 让上层决定是否直连。"""
         manager = ProxyManager(verbose=False)
         for p in manager._proxies:
             p.healthy = False
             p.consecutive_failures = 10
-        manager._proxies[1].consecutive_failures = 1
         url = manager.get_proxy()
-        assert url == manager._proxies[1].url
+        assert url is None
 
     def test_report_success(self):
         manager = ProxyManager(verbose=False)
@@ -202,11 +201,13 @@ class TestProxyManagerAsync:
             proxy = manager._proxies[0]
             await manager._check_single(proxy)
             assert proxy.consecutive_failures == 1
-            assert proxy.healthy is True  # 1 < threshold 2
+            assert proxy.healthy is False
+            assert proxy.total_failures == 1
 
             await manager._check_single(proxy)
             assert proxy.consecutive_failures == 2
-            assert proxy.healthy is False  # 2 = threshold 2
+            assert proxy.healthy is False
+            assert proxy.total_failures == 2
 
 
 # ═══════════════════════════════════════════════════════════════

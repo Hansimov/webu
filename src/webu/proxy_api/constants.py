@@ -6,6 +6,8 @@ Google 搜索特有的常量请参见 webu.google_api.constants。
 
 from typing import TypedDict
 
+from webu.runtime_settings import resolve_proxy_api_fetch_proxy
+
 # ═══════════════════════════════════════════════════════════════
 # MongoDB 配置
 # ═══════════════════════════════════════════════════════════════
@@ -160,7 +162,7 @@ PROXY_CHECK_TIMEOUT = 15
 CHECK_CONCURRENCY = 20
 
 # 采集代理列表时使用的 HTTP 代理（用于访问外网代理源 URL）
-FETCH_PROXY = "http://127.0.0.1:11119"
+FETCH_PROXY = resolve_proxy_api_fetch_proxy()
 
 # ═══════════════════════════════════════════════════════════════
 # 废弃 (Abandoned) 机制配置

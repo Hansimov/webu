@@ -13,9 +13,11 @@ from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
 
+from webu.runtime_settings import GoogleApiSettings, resolve_google_api_settings
+
 from .proxy_manager import ProxyManager, DEFAULT_PROXIES
 from .scraper import GoogleScraper
-from ..fastapis.styles import setup_swagger_ui
+from ..fastapis.styles import setup_root_landing_page, setup_swagger_ui
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -91,7 +93,9 @@ class HealthResponse(BaseModel):
 
 def create_google_search_server(
     proxies: list[dict] = None,
-    headless: bool = True,
+    headless: bool | None = None,
+    settings: GoogleApiSettings | None = None,
+    home_mode: str = "swagger",
 ) -> FastAPI:
     """创建 Google 搜索 FastAPI 应用。
 
@@ -100,8 +104,21 @@ def create_google_search_server(
         headless: 是否无头浏览器模式
     """
 
+    resolved_settings = settings or resolve_google_api_settings(headless=headless)
+    resolved_proxies = proxies if proxies is not None else resolved_settings.proxies
+
     proxy_manager: ProxyManager = None
     scraper: GoogleScraper = None
+
+    def _proxy_stats() -> dict:
+        if not proxy_manager:
+            return {
+                "total_proxies": 0,
+                "healthy_proxies": 0,
+                "unhealthy_proxies": 0,
+                "proxies": [],
+            }
+        return proxy_manager.stats()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -109,16 +126,19 @@ def create_google_search_server(
         logger.note("> Initializing Google Search Server ...")
 
         # 启动代理管理器
-        proxy_manager = ProxyManager(
-            proxies=proxies or DEFAULT_PROXIES,
-            verbose=True,
-        )
-        await proxy_manager.start()
+        if resolved_proxies:
+            proxy_manager = ProxyManager(
+                proxies=resolved_proxies,
+                verbose=True,
+            )
+            await proxy_manager.start()
 
         # 启动搜索抓取器
         scraper = GoogleScraper(
             proxy_manager=proxy_manager,
-            headless=headless,
+            headless=resolved_settings.headless,
+            profile_dir=resolved_settings.profile_dir,
+            screenshot_dir=resolved_settings.screenshot_dir,
         )
         await scraper.start()
 
@@ -140,10 +160,18 @@ def create_google_search_server(
         version="1.1.0",
         lifespan=lifespan,
     )
-    setup_swagger_ui(app)
+    if home_mode == "hidden":
+        setup_root_landing_page(
+            app,
+            title="Workspace Assets",
+            message="Static workspace content is available. Interactive routes are not published from this path.",
+        )
+    else:
+        setup_swagger_ui(app)
+    app.state.google_api_settings = resolved_settings
 
     def _ensure_ready():
-        if not proxy_manager or not scraper:
+        if not scraper:
             raise HTTPException(status_code=503, detail="Server not ready")
 
     # ── 系统接口 ──────────────────────────────────────────────
@@ -197,7 +225,7 @@ def create_google_search_server(
     async def proxy_status():
         """获取代理健康状态。"""
         _ensure_ready()
-        stats = proxy_manager.stats()
+        stats = _proxy_stats()
         return ProxyStatusResponse(
             total_proxies=stats["total_proxies"],
             healthy_proxies=stats["healthy_proxies"],
@@ -209,6 +237,8 @@ def create_google_search_server(
     async def proxy_current():
         """获取当前推荐的代理。"""
         _ensure_ready()
+        if not proxy_manager:
+            raise HTTPException(status_code=404, detail="Proxy manager disabled")
         proxy_url = proxy_manager.get_proxy()
         if not proxy_url:
             raise HTTPException(status_code=404, detail="No proxy available")
@@ -218,6 +248,8 @@ def create_google_search_server(
     async def proxy_check_now():
         """立即对所有代理执行健康检查。"""
         _ensure_ready()
+        if not proxy_manager:
+            return _proxy_stats()
         await proxy_manager._check_all()
         return proxy_manager.stats()
 

@@ -158,5 +158,5 @@ def run_url_pager():
 if __name__ == "__main__":
     run_url_pager()
 
-    # python -m webu.workers.page -r "./data/htmls" -x "http://127.0.0.1:11111" -i "https://arxiv.org/abs/1810.04805"
-    # python -m webu.workers.page -l -k -x "http://127.0.0.1:11111" -i "https://arxiv.org/abs/1810.04805"
+    # python -m webu.workers.page -r "./data/htmls" -x "$(jq -r '.searches.chrome_proxy' configs/proxies.json)" -i "https://arxiv.org/abs/1810.04805"
+    # python -m webu.workers.page -l -k -x "$(jq -r '.searches.chrome_proxy' configs/proxies.json)" -i "https://arxiv.org/abs/1810.04805"

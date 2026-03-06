@@ -11,14 +11,81 @@ from webu.google_api.server import create_google_search_server
 from webu.google_api.proxy_manager import DEFAULT_PROXIES
 
 
+class _FakeProxyManager:
+    def __init__(self, proxies=None, verbose=True):
+        self._proxies = proxies or DEFAULT_PROXIES
+
+    async def start(self):
+        return None
+
+    async def stop(self):
+        return None
+
+    async def _check_all(self):
+        return None
+
+    def get_proxy(self):
+        if not self._proxies:
+            return None
+        return self._proxies[0]["url"]
+
+    def stats(self):
+        return {
+            "total_proxies": len(self._proxies),
+            "healthy_proxies": len(self._proxies),
+            "unhealthy_proxies": 0,
+            "proxies": [
+                {
+                    "url": proxy["url"],
+                    "name": proxy.get("name", proxy["url"]),
+                    "healthy": True,
+                    "latency_ms": 1,
+                    "consecutive_failures": 0,
+                    "total_successes": 0,
+                    "total_failures": 0,
+                    "success_rate": "100.0%",
+                    "last_check": "now",
+                }
+                for proxy in self._proxies
+            ],
+        }
+
+
+class _FakeSearchResult:
+    def __init__(self):
+        self.results = []
+        self.query = ""
+        self.total_results_text = ""
+        self.has_captcha = False
+        self.error = ""
+
+
+class _FakeGoogleScraper:
+    def __init__(self, proxy_manager=None, headless=True, profile_dir=None, screenshot_dir=None):
+        self.proxy_manager = proxy_manager
+
+    async def start(self):
+        return None
+
+    async def stop(self):
+        return None
+
+    async def search(self, query, num=10, lang="en", proxy_url=None):
+        result = _FakeSearchResult()
+        result.query = query
+        return result
+
+
 class TestGoogleSearchServerUnit:
     """FastAPI 服务单元测试（mock 代理和搜索）。"""
 
     @pytest.fixture
     def client(self):
-        app = create_google_search_server(headless=True)
-        with TestClient(app) as c:
-            yield c
+        with patch("webu.google_api.server.ProxyManager", _FakeProxyManager):
+            with patch("webu.google_api.server.GoogleScraper", _FakeGoogleScraper):
+                app = create_google_search_server(headless=True)
+                with TestClient(app) as c:
+                    yield c
 
     def test_health(self, client):
         """测试健康检查。"""

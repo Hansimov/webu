@@ -1,3 +1,5 @@
+from webu.runtime_settings import resolve_gemini_default_proxy
+
 GEMINI_URL = "https://gemini.google.com/app"
 GEMINI_NEW_CHAT_URL = "https://gemini.google.com/app"
 
@@ -14,7 +16,7 @@ GEMINI_USER_DATA_DIR = "./data/chrome/gemini"
 GEMINI_NOVNC_DIR = "./data/novnc"
 
 # 默认代理
-GEMINI_DEFAULT_PROXY = "http://127.0.0.1:11119"
+GEMINI_DEFAULT_PROXY = resolve_gemini_default_proxy()
 
 # 默认配置文件路径
 GEMINI_CONFIG_FILE = "configs/gemini.json"
