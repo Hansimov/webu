@@ -211,6 +211,15 @@ def _get_ipv6_global_prefix() -> tuple[str, str, int] | None:
         return None
 
 
+def _get_ipv6_prefixer():
+    try:
+        from ..ipv6.route import IPv6Prefixer
+
+        return IPv6Prefixer()
+    except Exception:
+        return None
+
+
 def _has_ip6_rule(priority: int, keyword: str) -> bool:
     """检查 ip -6 rule 是否已存在。"""
     rc, out = _run("ip -6 rule show")
@@ -226,15 +235,45 @@ def fix_ipv6_routing() -> dict:
     Returns:
         dict: {"ipv6_rule": bool} — 是否本次添加了规则
     """
-    result = {"ipv6_rule": False}
+    result = {"ipv6_rule": False, "stale_rules_removed": 0}
 
-    prefix_info = _get_ipv6_global_prefix()
-    if prefix_info is None:
+    prefixer = _get_ipv6_prefixer()
+    if prefixer is None:
         logger.mesg("  IPv6: no global prefix detected — skipping")
         return result
 
-    prefix, netint, prefix_bits = prefix_info
+    prefix = prefixer.prefix
+    netint = prefixer.netint
+    prefix_bits = prefixer.prefix_bits
     prefix_cidr = f"{prefix}::/{prefix_bits}"
+
+    stale_prefixes = {
+        f"{item['prefix']}::/{item['prefix_bits']}"
+        for item in prefixer.interfaces
+        if item["prefix"] != prefix
+    }
+    for stale_prefix in sorted(stale_prefixes):
+        if not _has_ip6_rule(IPV6_PROTECT_PRIORITY, stale_prefix):
+            continue
+        rc, _ = _sudo_run(
+            [
+                "ip",
+                "-6",
+                "rule",
+                "del",
+                "priority",
+                str(IPV6_PROTECT_PRIORITY),
+                "from",
+                stale_prefix,
+                "lookup",
+                "main",
+            ]
+        )
+        if rc == 0:
+            result["stale_rules_removed"] += 1
+            logger.okay(f"  ✓ IPv6: removed stale rule for {stale_prefix}")
+        else:
+            logger.warn(f"  × IPv6: failed to remove stale rule for {stale_prefix}")
 
     if _has_ip6_rule(IPV6_PROTECT_PRIORITY, prefix_cidr):
         logger.mesg(
@@ -284,7 +323,7 @@ def _get_resolvectl_domain(interface: str) -> str:
     rc, out = _run(f"resolvectl domain {interface}")
     if rc != 0:
         return ""
-    # 输出格式: "Link 4 (enp100s0f1): ~."
+    # 输出格式: "Link 4 (primary0): ~."
     for line in out.splitlines():
         if interface in line and "~." in line:
             return "~."
@@ -300,14 +339,27 @@ def fix_dns_routing() -> dict:
     Returns:
         dict: {"dns_fix": bool} — 是否本次进行了修复
     """
-    result = {"dns_fix": False}
+    result = {"dns_fix": False, "stale_dns_cleared": 0}
 
-    prefix_info = _get_ipv6_global_prefix()
-    if prefix_info is None:
+    prefixer = _get_ipv6_prefixer()
+    if prefixer is None:
         logger.mesg("  DNS: no network interface detected — skipping")
         return result
 
-    _, netint, _ = prefix_info
+    netint = prefixer.netint
+
+    stale_interfaces = {
+        item["interface"] for item in prefixer.interfaces if item["interface"] != netint
+    }
+    for stale_interface in sorted(stale_interfaces):
+        if _get_resolvectl_domain(stale_interface) != "~.":
+            continue
+        rc, _ = _sudo_run(["resolvectl", "domain", stale_interface, ""])
+        if rc == 0:
+            result["stale_dns_cleared"] += 1
+            logger.okay(f"  ✓ DNS: cleared stale routing domain on {stale_interface}")
+        else:
+            logger.warn(f"  × DNS: failed to clear routing domain on {stale_interface}")
 
     # 检查是否已设置
     if _get_resolvectl_domain(netint) == "~.":

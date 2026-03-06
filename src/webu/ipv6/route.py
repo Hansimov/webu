@@ -1,4 +1,5 @@
 import argparse
+import ipaddress
 import netifaces
 import os
 import re
@@ -25,14 +26,46 @@ class IPv6Prefixer:
         self._init_network_interfaces()
         self._init_prefix()
 
+    def _get_preferred_interfaces(self) -> list[str]:
+        preferred_interfaces: list[str] = []
+        try:
+            gateways = netifaces.gateways()
+        except Exception:
+            return preferred_interfaces
+
+        default_gateways = gateways.get("default", {})
+        for family in (netifaces.AF_INET6, netifaces.AF_INET):
+            gateway_info = default_gateways.get(family)
+            if not gateway_info:
+                family_gateways = gateways.get(family, [])
+                for candidate in family_gateways:
+                    if len(candidate) >= 3 and candidate[2]:
+                        gateway_info = candidate
+                        break
+            if gateway_info:
+                interface = gateway_info[1]
+                if interface and interface not in preferred_interfaces:
+                    preferred_interfaces.append(interface)
+        return preferred_interfaces
+
     def _get_prefix_from_addr_netmask(self, addr: str, netmask: str) -> tuple[str, int]:
-        # netmask "ffff:ffff:ffff:ffff::/64" means 64-bit prefix (4 groups)
-        prefix_bits = netmask.count("f") * 4
-        # each group is 16 bits, sep by ":"
-        num_groups = prefix_bits // 16
-        addr_groups = addr.split(":")
-        prefix = ":".join(addr_groups[:num_groups])
+        normalized_addr = addr.split("%", 1)[0]
+        if "/" in netmask:
+            prefix_bits = int(netmask.rsplit("/", 1)[1])
+        else:
+            prefix_bits = netmask.count("f") * 4
+        interface = ipaddress.IPv6Interface(f"{normalized_addr}/{prefix_bits}")
+        prefix = interface.network.network_address.exploded
+        prefix_groups = prefix.split(":")[: prefix_bits // 16]
+        prefix = ":".join(prefix_groups)
         return prefix, prefix_bits
+
+    def _is_global_ipv6_addr(self, addr: str) -> bool:
+        normalized_addr = addr.split("%", 1)[0]
+        try:
+            return ipaddress.IPv6Address(normalized_addr).is_global
+        except ipaddress.AddressValueError:
+            return False
 
     def _init_network_interfaces(self):
         interfaces = netifaces.interfaces()
@@ -44,15 +77,17 @@ class IPv6Prefixer:
                 # skip cloudflare tunnel interface
                 continue
             for addr_info in addresses[netifaces.AF_INET6]:
-                if not addr_info["addr"].startswith("2"):
-                    break
-                addr = addr_info["addr"]
+                addr = addr_info.get("addr")
+                if not addr or not self._is_global_ipv6_addr(addr):
+                    continue
                 netmask = addr_info.get("netmask") or addr_info.get("mask")
+                if not netmask:
+                    continue
                 prefix, prefix_bits = self._get_prefix_from_addr_netmask(addr, netmask)
                 self.interfaces.append(
                     {
                         "interface": interface,
-                        "addr": addr,
+                        "addr": addr.split("%", 1)[0],
                         "netmask": netmask,
                         "prefix": prefix,
                         "prefix_bits": prefix_bits,
@@ -60,6 +95,20 @@ class IPv6Prefixer:
                 )
 
     def _init_prefix(self):
+        if not self.interfaces:
+            raise RuntimeError("No global IPv6 interface found")
+
+        preferred_interfaces = self._get_preferred_interfaces()
+        if preferred_interfaces:
+            preferred_order = {
+                interface: index for index, interface in enumerate(preferred_interfaces)
+            }
+            self.interfaces.sort(
+                key=lambda item: preferred_order.get(
+                    item["interface"], len(preferred_interfaces)
+                )
+            )
+
         interface = self.interfaces[0]
         netint = interface["interface"]
         prefix = interface["prefix"].strip(":")

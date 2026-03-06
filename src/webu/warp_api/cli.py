@@ -7,6 +7,7 @@
   stop       — 停止服务
   restart    — 重启服务
   status     — 查看服务及 WARP 状态
+    test       — 运行 WARP/IPv6 回归测试
   logs       — 查看服务日志
   ip         — 检测直连/WARP 出口 IP
   connect    — 连接 WARP
@@ -17,10 +18,10 @@
 import argparse
 import asyncio
 import os
+import psutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 
 from pathlib import Path
@@ -74,6 +75,67 @@ def _is_process_running(pid: int) -> bool:
         return True
     except (ProcessLookupError, PermissionError, OSError):
         return False
+
+
+def _cmdline_matches_warp_serve(cmdline: list[str]) -> bool:
+    return "webu.warp_api" in cmdline and "_serve" in cmdline
+
+
+def _find_running_service_pid() -> int | None:
+    candidates: list[tuple[float, int]] = []
+    for proc in psutil.process_iter(["pid", "cmdline", "create_time"]):
+        try:
+            cmdline = proc.info.get("cmdline") or []
+            if not _cmdline_matches_warp_serve(cmdline):
+                continue
+            executable = Path(cmdline[0]).name if cmdline else ""
+            if executable == "sudo":
+                continue
+            candidates.append((proc.info.get("create_time") or 0.0, proc.pid))
+        except (psutil.Error, OSError):
+            continue
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][1]
+
+
+def _resolve_service_pid(launcher_pid: int, wait_seconds: float = 2.0) -> int:
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        try:
+            launcher = psutil.Process(launcher_pid)
+            for child in launcher.children(recursive=True):
+                try:
+                    cmdline = child.cmdline()
+                except (psutil.Error, OSError):
+                    continue
+                if _cmdline_matches_warp_serve(cmdline):
+                    return child.pid
+        except (psutil.Error, OSError):
+            break
+        time.sleep(0.1)
+    return _find_running_service_pid() or launcher_pid
+
+
+def _recover_service_pid(pid: int | None) -> int | None:
+    discovered_pid = _find_running_service_pid()
+    if discovered_pid:
+        if discovered_pid != pid:
+            _write_pid(discovered_pid)
+        return discovered_pid
+
+    if pid and _is_process_running(pid):
+        return pid
+
+    return None
+
+
+def _get_process_group_id(pid: int) -> int | None:
+    try:
+        return os.getpgid(pid)
+    except OSError:
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -187,8 +249,9 @@ def cmd_start(args):
         except Exception:
             pass
 
-    _write_pid(proc.pid)
-    logger.okay(f"  ✓ Server started (PID: {proc.pid})")
+    managed_pid = _resolve_service_pid(proc.pid)
+    _write_pid(managed_pid)
+    logger.okay(f"  ✓ Server started (PID: {managed_pid})")
     logger.mesg(f"  Log: {LOG_FILE}")
     logger.mesg(f"  Proxy: socks5://{proxy_host}:{proxy_port}")
     logger.mesg(f"  Proxy: http://{proxy_host}:{proxy_port} (HTTP forward)")
@@ -199,26 +262,31 @@ def cmd_stop(args):
     """停止服务。"""
     pid = _read_pid()
     if not pid:
-        logger.warn("  × No PID file found — server not running?")
-        return
+        pid = _recover_service_pid(None)
+        if not pid:
+            logger.warn("  × No PID file found — server not running?")
+            return
+        logger.note(f"> Recovered running server PID: {pid}")
 
-    if not _is_process_running(pid):
-        logger.warn(f"  × Process {pid} not found — cleaning up PID file")
+    pid = _recover_service_pid(pid)
+    if not pid:
+        logger.warn("  × Server process not found — cleaning up PID file")
         _remove_pid()
         return
 
+    pgid = _get_process_group_id(pid)
     logger.note(f"> Stopping server (PID: {pid}) ...")
 
     def _kill(pid, sig, group=False):
         """发送信号给进程或进程组（自动提权，使用 SUDOPASS）。"""
-        target = -pid if group else pid
+        target = -pgid if group and pgid is not None else pid
         try:
             os.kill(target, sig)
         except PermissionError:
             sudopass = os.environ.get("SUDOPASS", "")
             kill_args = ["sudo"] + (["-S"] if sudopass else [])
-            if group:
-                kill_args += ["kill", f"-{sig}", "--", f"-{pid}"]
+            if group and pgid is not None:
+                kill_args += ["kill", f"-{sig}", "--", f"-{pgid}"]
             else:
                 kill_args += ["kill", f"-{sig}", str(pid)]
             subprocess.run(
@@ -259,12 +327,18 @@ def cmd_status(args):
 
     # 服务状态
     pid = _read_pid()
-    if not pid:
-        logger.mesg("  Proxy server: NOT RUNNING (no PID file)")
-    elif _is_process_running(pid):
-        logger.okay(f"  Proxy server: RUNNING (PID: {pid})")
+    pid = _recover_service_pid(pid)
+    if pid:
+        logger.okay(
+            f"  Proxy server: RUNNING (PID: {pid}) on "
+            f"{WARP_PROXY_HOST}:{WARP_PROXY_PORT}"
+        )
+        logger.mesg(f"  API server: http://{WARP_API_HOST}:{WARP_API_PORT}/docs")
     else:
-        logger.warn(f"  Proxy server: DEAD (PID: {pid} not found)")
+        if _read_pid() is not None:
+            logger.warn("  Proxy server: DEAD (PID not found)")
+        else:
+            logger.mesg("  Proxy server: NOT RUNNING (no PID file)")
         _remove_pid()
 
     # WARP 状态
@@ -283,6 +357,20 @@ def cmd_status(args):
         logger.mesg(f"  Organization: {logstr.mesg(org)}")
     except Exception:
         pass
+
+
+def cmd_test(args):
+    repo_root = Path(__file__).resolve().parents[3]
+    script_path = repo_root / "debugs" / "warp_api" / "run_ipv6_warp_regression.sh"
+    script_label = "debugs/warp_api/run_ipv6_warp_regression.sh"
+    if not script_path.exists():
+        logger.err(f"  × Regression script not found: {script_label}")
+        raise SystemExit(1)
+
+    logger.note(f"> Running regression script: {script_label}")
+    result = subprocess.run(["bash", str(script_path)], cwd=repo_root)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
 
 
 def cmd_logs(args):
@@ -489,6 +577,10 @@ def main():
     # status
     sp_status = subparsers.add_parser("status", help="查看服务及 WARP 状态")
     sp_status.set_defaults(func=cmd_status)
+
+    # test
+    sp_test = subparsers.add_parser("test", help="运行 WARP/IPv6 回归测试")
+    sp_test.set_defaults(func=cmd_test)
 
     # logs
     sp_logs = subparsers.add_parser("logs", help="查看服务日志")

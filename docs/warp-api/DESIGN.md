@@ -140,8 +140,8 @@ curl --proxy http://127.0.0.1:11000 http://example.com
           │    │  WarpSocksProxy :11000 │          │
           │    │  Management API :11001 │          │
           │    └────────────┬───────────┘          │
-          │                 │            enp100s0f1│
-          │    tailscale0   │       (192.168.1.5)  │
+          │                 │       <primary_uplink>│
+          │    tailscale0   │   (<primary_lan_ipv4>) │
           │    (100.99.x.x) │                      │
           │                 │                      │
           │              Server                    │

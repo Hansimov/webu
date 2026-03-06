@@ -1,6 +1,8 @@
 """warp_api 模块单元测试。"""
 
+import argparse
 import pytest
+import psutil
 import subprocess
 
 from webu.warp_api.constants import (
@@ -12,6 +14,7 @@ from webu.warp_api.constants import (
     DATA_DIR,
     IP_CHECK_URLS,
 )
+from webu.warp_api import cli as warp_cli
 from webu.warp_api.warp import WarpClient
 
 
@@ -91,6 +94,167 @@ class TestNetfix:
         assert "nft_output_ok" in result
         assert "ip_rule_ok" in result
 
+    def test_fix_dns_routing_clears_stale_interface(self, monkeypatch):
+        from webu.warp_api import netfix
+
+        primary_interface = "primary0"
+        stale_interface = "vpn0"
+        primary_prefix = "2606:4700:1234:5678"
+        stale_prefix = "2607:f8b0:abcd:1234"
+
+        class FakePrefixer:
+            netint = primary_interface
+            interfaces = [
+                {
+                    "interface": primary_interface,
+                    "prefix": primary_prefix,
+                    "prefix_bits": 64,
+                },
+                {
+                    "interface": stale_interface,
+                    "prefix": stale_prefix,
+                    "prefix_bits": 64,
+                },
+            ]
+
+        domains = {primary_interface: "~.", stale_interface: "~."}
+        commands = []
+
+        monkeypatch.setattr(netfix, "_get_ipv6_prefixer", lambda: FakePrefixer())
+        monkeypatch.setattr(
+            netfix,
+            "_get_resolvectl_domain",
+            lambda interface: domains.get(interface, ""),
+        )
+
+        def fake_sudo_run(cmd, check=False):
+            commands.append(cmd)
+            if cmd[:3] == ["resolvectl", "domain", stale_interface]:
+                domains[stale_interface] = ""
+            return 0, ""
+
+        monkeypatch.setattr(netfix, "_sudo_run", fake_sudo_run)
+
+        result = netfix.fix_dns_routing()
+
+        assert result["stale_dns_cleared"] == 1
+        assert ["resolvectl", "domain", stale_interface, ""] in commands
+
+    def test_fix_ipv6_routing_clears_stale_prefix_rule(self, monkeypatch):
+        from webu.warp_api import netfix
+
+        primary_interface = "primary0"
+        stale_interface = "vpn0"
+        primary_prefix = "2606:4700:1234:5678"
+        stale_prefix = "2607:f8b0:abcd:1234"
+
+        class FakePrefixer:
+            prefix = primary_prefix
+            netint = primary_interface
+            prefix_bits = 64
+            interfaces = [
+                {
+                    "interface": primary_interface,
+                    "prefix": primary_prefix,
+                    "prefix_bits": 64,
+                },
+                {
+                    "interface": stale_interface,
+                    "prefix": stale_prefix,
+                    "prefix_bits": 64,
+                },
+            ]
+
+        active_rules = {f"{stale_prefix}::/64"}
+        commands = []
+
+        monkeypatch.setattr(netfix, "_get_ipv6_prefixer", lambda: FakePrefixer())
+        monkeypatch.setattr(
+            netfix,
+            "_has_ip6_rule",
+            lambda priority, keyword: keyword in active_rules,
+        )
+
+        def fake_sudo_run(cmd, check=False):
+            commands.append(cmd)
+            if cmd[:4] == ["ip", "-6", "rule", "del"]:
+                active_rules.discard(cmd[6])
+            return 0, ""
+
+        monkeypatch.setattr(netfix, "_sudo_run", fake_sudo_run)
+
+        result = netfix.fix_ipv6_routing()
+
+        assert result["stale_rules_removed"] == 1
+        assert [
+            "ip",
+            "-6",
+            "rule",
+            "del",
+            "priority",
+            str(netfix.IPV6_PROTECT_PRIORITY),
+            "from",
+            f"{stale_prefix}::/64",
+            "lookup",
+            "main",
+        ] in commands
+
+
+class TestCliPidRecovery:
+    def test_resolve_service_pid_prefers_child_process(self, monkeypatch):
+        class FakeChild:
+            pid = 4321
+
+            def cmdline(self):
+                return ["python", "-m", "webu.warp_api", "_serve"]
+
+        class FakeLauncher:
+            def children(self, recursive=True):
+                return [FakeChild()]
+
+        monkeypatch.setattr(warp_cli.psutil, "Process", lambda pid: FakeLauncher())
+
+        managed_pid = warp_cli._resolve_service_pid(1234, wait_seconds=0.01)
+        assert managed_pid == 4321
+
+    def test_recover_service_pid_updates_pid_file(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(warp_cli, "PID_FILE", tmp_path / "server.pid")
+        monkeypatch.setattr(warp_cli, "_is_process_running", lambda pid: False)
+        monkeypatch.setattr(warp_cli, "_find_running_service_pid", lambda: 5678)
+
+        recovered_pid = warp_cli._recover_service_pid(1234)
+
+        assert recovered_pid == 5678
+        assert warp_cli.PID_FILE.read_text() == "5678"
+
+    def test_cmd_test_runs_regression_script(self, monkeypatch, tmp_path):
+        repo_root = tmp_path / "repo"
+        script_path = repo_root / "debugs" / "warp_api" / "run_ipv6_warp_regression.sh"
+        script_path.parent.mkdir(parents=True)
+        script_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+        calls = []
+
+        monkeypatch.setattr(
+            warp_cli.Path,
+            "resolve",
+            lambda self: repo_root / "src" / "webu" / "warp_api" / "cli.py",
+        )
+
+        def fake_run(cmd, cwd=None):
+            calls.append((cmd, cwd))
+
+            class Result:
+                returncode = 0
+
+            return Result()
+
+        monkeypatch.setattr(warp_cli.subprocess, "run", fake_run)
+
+        warp_cli.cmd_test(argparse.Namespace())
+
+        assert calls == [(["bash", str(script_path)], repo_root)]
+
 
 # ═══════════════════════════════════════════════════════════════
 # 集成测试（需要 WARP 连接 + root 权限）
@@ -100,6 +264,29 @@ class TestNetfix:
 @pytest.mark.integration
 class TestWarpIntegration:
     """需要 WARP 已连接且代理已运行。"""
+
+    def test_restart_and_status_report_ports(self):
+        restart = subprocess.run(
+            ["cfwp", "restart"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert restart.returncode == 0, restart.stderr or restart.stdout
+
+        status = subprocess.run(
+            ["cfwp", "status"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert status.returncode == 0, status.stderr or status.stdout
+        status_output = f"{status.stdout}\n{status.stderr}"
+        assert (
+            f"Proxy server: RUNNING (PID:" in status_output
+            and f"{WARP_PROXY_HOST}:{WARP_PROXY_PORT}" in status_output
+        )
+        assert f"http://{WARP_API_HOST}:{WARP_API_PORT}/docs" in status_output
 
     def test_warp_connected(self):
         """验证 WARP 已连接。"""
