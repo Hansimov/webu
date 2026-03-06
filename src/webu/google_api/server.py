@@ -11,14 +11,13 @@ import time
 import uvicorn
 
 from contextlib import asynccontextmanager
-from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pathlib import Path
 from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
 
-from webu.fastapis.request_metrics import RequestMetrics, resolve_server_identity
+from webu.fastapis.request_metrics import RequestMetrics, format_dashboard_timestamp, resolve_server_identity
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_API_PORT, GoogleApiSettings, resolve_google_api_settings
 
 from .panel import mount_google_api_panel
@@ -129,12 +128,6 @@ def _profile_status(profile_dir) -> ProfileStatusResponse:
     )
 
 
-def _format_timestamp(ts: float) -> str:
-    if not ts:
-        return ""
-    return datetime.fromtimestamp(ts).isoformat(sep=" ", timespec="seconds")
-
-
 def _resolve_search_api_token(
     header_token: str | None,
     query_token: str | None,
@@ -235,7 +228,7 @@ def create_google_search_server(
         node = resolve_server_identity(resolved_settings.runtime_env)
         has_proxies = bool(proxy_stats.get("total_proxies", 0))
         return {
-            "updated_at_human": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "updated_at_human": format_dashboard_timestamp(),
             "runtime_env": resolved_settings.runtime_env,
             "node": node,
             "service": {
@@ -289,7 +282,11 @@ def create_google_search_server(
             logger.err(f"  × Search error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
         finally:
-            request_metrics.record((time.perf_counter() - started) * 1000.0, success)
+            request_metrics.record(
+                (time.perf_counter() - started) * 1000.0,
+                success,
+                query=req.query,
+            )
 
     # ── 系统接口 ──────────────────────────────────────────────
 

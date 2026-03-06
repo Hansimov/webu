@@ -7,17 +7,15 @@ from dash import Input, Output, dcc, html
 
 from webu.fastapis.dashboard_ui import (
     THEME,
-    backend_card,
-    bar_figure,
-    chip,
     create_dash_app,
-    donut_figure,
     format_ms,
     format_rate,
-    gauge_figure,
     graph_card,
+    instance_card,
+    line_figure,
     metric_card,
     page_shell,
+    request_table,
     section,
 )
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_API_PANEL_REFRESH_MS
@@ -26,93 +24,97 @@ from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_
 SnapshotProvider = Callable[[], dict]
 
 
+def _history_labels(history: list[dict]) -> list[str]:
+    labels = [str(item.get("label", "")) for item in history if item]
+    return labels or ["00:00:00"]
+
+
+def _history_values(history: list[dict], key: str) -> list[float]:
+    values = [float(item.get(key, 0.0)) for item in history if item]
+    return values or [0.0]
+
+
 def _build_body(snapshot: dict):
     requests = snapshot.get("requests", {})
     health = snapshot.get("health", {})
-    backends = list(snapshot.get("backends", []))
+    instances = list(snapshot.get("backends", []))
     node = snapshot.get("node", {})
+    history = list(requests.get("history", []))
+    request_log = list(requests.get("request_log", []))
 
-    healthy_backends = int(health.get("healthy_backends", 0))
-    backend_count = int(health.get("backend_count", len(backends)))
-    accepted_requests = int(requests.get("accepted_requests", 0))
-    successful_requests = int(requests.get("successful_requests", 0))
-    failed_requests = int(requests.get("failed_requests", 0))
+    healthy_count = int(health.get("healthy_backends", 0))
+    total_count = int(health.get("backend_count", len(instances)))
+    accepted = int(requests.get("accepted_requests", 0))
+    successful = int(requests.get("successful_requests", 0))
+    failed = int(requests.get("failed_requests", 0))
+    success_rate = float(requests.get("success_rate", 0.0))
+    avg_latency = float(requests.get("avg_latency_ms", 0.0))
+    history_labels = _history_labels(history)
+
+    badge_tone = "accent" if healthy_count == total_count and total_count > 0 else ("warn" if healthy_count > 0 else "danger")
+
+    subtitle_parts = [
+        f"Updated {snapshot.get('updated_at_human', '')}",
+        f"Strategy {snapshot.get('strategy', 'least-inflight')}",
+        f"Node {node.get('value', 'unknown')}",
+    ]
 
     cards = [
-        metric_card("Healthy backends", f"{healthy_backends}/{max(backend_count, 1)}", "Live routing pool", "accent" if healthy_backends else "danger"),
-        metric_card("Accepted requests", str(accepted_requests), "Routed through hub", "info"),
-        metric_card("Successful requests", str(successful_requests), f"{format_rate(float(requests.get('success_rate', 0.0)))} success", "accent"),
-        metric_card("Avg latency", format_ms(float(requests.get("avg_latency_ms", 0.0))), f"min {format_ms(float(requests.get('min_latency_ms', 0.0)))} / max {format_ms(float(requests.get('max_latency_ms', 0.0)))}", "warn"),
-        metric_card(node.get("label", "Server IP"), node.get("value", "unknown"), "Current hub node", "info"),
+        metric_card("Instances", f"{healthy_count}/{max(total_count, 1)}", f"Strategy {snapshot.get('strategy', 'least-inflight')}", badge_tone),
+        metric_card("Requests", str(accepted), f"{successful} success / {failed} failed", "info"),
+        metric_card("Success rate", format_rate(success_rate), f"of {accepted} total requests", "accent" if success_rate >= 90 else "warn"),
+        metric_card("Avg latency", format_ms(avg_latency), f"min {format_ms(float(requests.get('min_latency_ms', 0.0)))} · max {format_ms(float(requests.get('max_latency_ms', 0.0)))}", "warn"),
     ]
 
     charts = [
         graph_card(
-            "Backend health",
-            donut_figure(
-                labels=["Healthy", "Degraded"],
-                values=[healthy_backends, max(0, backend_count - healthy_backends)],
-                colors=[THEME["accent"], THEME["danger"]],
-            ),
-        ),
-        graph_card(
-            "Success rate",
-            gauge_figure(
-                value=float(requests.get("success_rate", 0.0)),
-                maximum=100.0,
-                color=THEME["info"],
-                suffix="%",
-            ),
-        ),
-        graph_card(
-            "Requests by backend",
-            bar_figure(
-                labels=[item.get("name", "backend") for item in backends],
-                values=[float(item.get("request_count", 0)) for item in backends],
-                colors=[THEME["info"] for _ in backends] or [THEME["info"]],
+            "Request trend",
+            line_figure(
+                labels=history_labels,
+                series=[
+                    {"name": "Accepted", "values": _history_values(history, "accepted_requests"), "color": THEME["info"]},
+                    {"name": "Success", "values": _history_values(history, "successful_requests"), "color": THEME["accent"]},
+                ],
                 axis_title="Requests",
             ),
         ),
         graph_card(
-            "Latency by backend",
-            bar_figure(
-                labels=[item.get("name", "backend") for item in backends],
-                values=[float(item.get("avg_request_latency_ms", 0.0)) for item in backends],
-                colors=[THEME["accent"] if item.get("healthy") else THEME["danger"] for item in backends] or [THEME["accent"]],
-                axis_title="Avg latency (ms)",
+            "Latency trend",
+            line_figure(
+                labels=history_labels,
+                series=[
+                    {"name": "Avg", "values": _history_values(history, "avg_latency_ms"), "color": THEME["warn"]},
+                    {"name": "Last", "values": _history_values(history, "last_latency_ms"), "color": THEME["info"]},
+                ],
+                axis_title="ms",
             ),
         ),
     ]
 
-    backend_cards = [
-        backend_card(
-            name=item.get("name", "backend"),
+    inst_cards = [
+        instance_card(
+            name=item.get("name", "instance"),
             caption=item.get("space_name") or item.get("kind", ""),
             healthy=bool(item.get("healthy")),
-            request_value=str(item.get("request_count", 0)),
-            success_value=f"{item.get('successful_requests', 0)} / {format_rate(float(item.get('success_rate', 0.0)))}",
-            latency_value=format_ms(float(item.get("avg_request_latency_ms", 0.0))),
-            note=f"{item.get('inflight', 0)} inflight",
+            stats=[
+                ("Requests", str(item.get("request_count", 0))),
+                ("Success", f"{format_rate(float(item.get('success_rate', 0.0)))}"),
+                ("Latency", format_ms(float(item.get("avg_request_latency_ms", 0.0)))),
+            ],
         )
-        for item in backends
-    ]
-
-    chips = [
-        chip(f"Updated {snapshot.get('updated_at_human', '')}"),
-        chip(f"Strategy {snapshot.get('strategy', 'least-inflight')}"),
-        chip(f"Backends {backend_count}"),
-        chip(f"Failures {failed_requests}"),
+        for item in instances
     ]
 
     return page_shell(
-        title="Hub Routing Deck",
-        kicker="Google Hub",
-        subtitle="Dark control surface for backend health, routed traffic, and latency distribution across local and HF nodes.",
-        chips=chips,
+        title="GOOGLE HUB",
+        subtitle=" · ".join(subtitle_parts),
+        badge=f"{healthy_count}/{total_count} HEALTHY",
+        badge_tone=badge_tone,
         body=[
-            section("Hub overview", cards, kind="cards"),
-            section("Traffic dashboards", charts, kind="charts"),
-            section("Instance cards", backend_cards, kind="backends"),
+            section("Overview", cards, kind="metric"),
+            section("Trends", charts, kind="chart"),
+            section("Instances", inst_cards, kind="instance"),
+            section("Request history", [request_table(request_log, show_backend=True)], kind="chart"),
         ],
     )
 

@@ -149,12 +149,24 @@ def _render_toml_string_list(key: str, values: list[str]) -> list[str]:
     return lines
 
 
-def _write_sanitized_pyproject(source_root: Path, bundle_root: Path):
+def _read_project_data(source_root: Path) -> dict:
     source_path = source_root / "pyproject.toml"
     if not source_path.exists():
-        return
+        return {}
+    return tomllib.loads(source_path.read_text(encoding="utf-8")).get("project", {})
 
-    project_data = tomllib.loads(source_path.read_text(encoding="utf-8")).get("project", {})
+
+def _write_dependency_requirements(source_root: Path, bundle_root: Path):
+    project_data = _read_project_data(source_root)
+    dependencies = [str(value).strip() for value in project_data.get("dependencies", []) if str(value).strip()]
+    content = "\n".join(dependencies) + ("\n" if dependencies else "")
+    (bundle_root / "requirements.txt").write_text(content, encoding="utf-8")
+
+
+def _write_sanitized_pyproject(source_root: Path, bundle_root: Path):
+    project_data = _read_project_data(source_root)
+    if not project_data:
+        return
     lines = ["[project]"]
 
     for key in ["name", "version", "description", "readme", "license", "requires-python"]:
@@ -228,6 +240,7 @@ def prepare_local_docker_build_context(source_root: Path, output_root: Path) -> 
     pyproject_path = source_root / "pyproject.toml"
     if pyproject_path.exists():
         shutil.copy2(pyproject_path, bundle_root / "pyproject.toml")
+    _write_dependency_requirements(source_root, bundle_root)
 
     license_path = source_root / "LICENSE"
     if license_path.exists():
@@ -392,6 +405,7 @@ def prepare_space_bundle(source_root: Path, output_root: Path, app_port: int, re
     bundle_root.mkdir(parents=True, exist_ok=True)
 
     _write_sanitized_pyproject(source_root, bundle_root)
+    _write_dependency_requirements(source_root, bundle_root)
 
     license_path = source_root / "LICENSE"
     if license_path.exists():

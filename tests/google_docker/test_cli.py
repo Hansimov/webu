@@ -56,8 +56,10 @@ def test_prepare_space_bundle_excludes_configs(tmp_path):
     assert (bundle_root / "Dockerfile").exists()
     assert (bundle_root / "README.md").exists()
     pyproject_text = (bundle_root / "pyproject.toml").read_text(encoding="utf-8")
+    requirements_text = (bundle_root / "requirements.txt").read_text(encoding="utf-8")
     assert "Hansimov" not in pyproject_text
     assert "github.com/Hansimov" not in pyproject_text
+    assert requirements_text == ""
     assert not (bundle_root / "configs").exists()
     assert not (bundle_root / "src" / "webu" / "gemini").exists()
     assert not (bundle_root / "src" / "webu" / "warp_api").exists()
@@ -94,9 +96,11 @@ ggdk = \"webu.google_docker.cli:main\"
 
     bundle_root = prepare_space_bundle(source_root, tmp_path / "out", 18200, "owner/demo")
     pyproject_text = (bundle_root / "pyproject.toml").read_text(encoding="utf-8")
+    requirements_text = (bundle_root / "requirements.txt").read_text(encoding="utf-8")
 
     assert 'dependencies = [' in pyproject_text
     assert '"requests"' in pyproject_text
+    assert requirements_text == "requests\nfastapi\n"
     assert '[project.scripts]' in pyproject_text
     assert 'ggdk = "webu.google_docker.cli:main"' in pyproject_text
     assert 'authors' not in pyproject_text
@@ -203,6 +207,7 @@ def test_prepare_local_docker_build_context_includes_shared_bootstrap(tmp_path, 
     restored_dir = tmp_path / "restored-local-docker"
     restore_encrypted_profile_archive(archive_path, restored_dir, "webu")
     assert (bundle_root / "Dockerfile").exists()
+    assert (bundle_root / "requirements.txt").read_text(encoding="utf-8") == ""
     assert (bundle_root / "src" / "webu" / "google_api").exists()
     assert (restored_dir / "google_cookies.json").exists()
 

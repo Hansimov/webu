@@ -52,13 +52,17 @@ ENV HOME=/home/user \
     WEBU_GOOGLE_PROFILE_BOOTSTRAP_ARCHIVE=/home/user/app/bootstrap/google_api_profile.bin
 WORKDIR /home/user/app
 
+COPY --chown=user requirements.txt ./requirements.txt
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && if [ -s requirements.txt ]; then pip install --no-cache-dir -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} -r requirements.txt; fi \
+    && python -m playwright install chromium
+
 COPY --chown=user pyproject.toml LICENSE ./
 COPY --chown=user src ./src
 COPY --chown=user bootstrap ./bootstrap
 
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} . \
-    && python -m playwright install chromium
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} --no-deps .
 
 EXPOSE 18100 18200
 

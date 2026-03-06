@@ -6,11 +6,10 @@ import os
 import uvicorn
 
 from contextlib import asynccontextmanager
-from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from webu.fastapis.request_metrics import resolve_server_identity
+from webu.fastapis.request_metrics import format_dashboard_timestamp, resolve_server_identity
 from webu.fastapis.styles import setup_root_redirect_page
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_HUB_PORT
 
@@ -102,7 +101,7 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
 
     def build_snapshot_payload(metrics: dict) -> dict:
         return {
-            "updated_at_human": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "updated_at_human": format_dashboard_timestamp(),
             "strategy": metrics.get("strategy", "least-inflight"),
             "node": resolve_server_identity(os.getenv("WEBU_RUNTIME_ENV", "local").strip().lower() or "local"),
             "health": {

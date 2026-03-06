@@ -276,7 +276,12 @@ class GoogleHubManager:
             try:
                 await self.refresh_all_health()
             finally:
-                await asyncio.sleep(self.settings.health_interval_sec)
+                has_unhealthy = any(
+                    s.backend.enabled and not s.healthy
+                    for s in self.states.values()
+                )
+                interval = min(10, self.settings.health_interval_sec) if has_unhealthy else self.settings.health_interval_sec
+                await asyncio.sleep(interval)
 
     async def refresh_all_health(self):
         for state in self.states.values():
@@ -375,7 +380,12 @@ class GoogleHubManager:
                 state.last_error = ""
                 success = True
                 state.record_request((time.perf_counter() - started) * 1000.0, True)
-                self.request_metrics.record((time.perf_counter() - overall_started) * 1000.0, True)
+                self.request_metrics.record(
+                    (time.perf_counter() - overall_started) * 1000.0,
+                    True,
+                    query=query,
+                    backend=state.backend.name,
+                )
                 return {
                     "backend": state.backend.name,
                     "backend_kind": state.backend.kind,
@@ -392,7 +402,13 @@ class GoogleHubManager:
             finally:
                 state.inflight = max(0, state.inflight - 1)
 
-            self.request_metrics.record((time.perf_counter() - overall_started) * 1000.0, False)
+            self.request_metrics.record(
+                (time.perf_counter() - overall_started) * 1000.0,
+                False,
+                query=query,
+                backend=state.backend.name,
+                error=str(last_error) if last_error else "",
+            )
         raise RuntimeError(f"all hub backends failed: {last_error}")
 
     async def backend_snapshot(self) -> list[dict[str, Any]]:

@@ -194,7 +194,7 @@ class TestGoogleSearchServerUnit:
 
                     panel_resp = client.get(DEFAULT_GOOGLE_API_PANEL_PATH)
                     assert panel_resp.status_code == 200
-                    assert "<title>Google API Panel</title>" in panel_resp.text
+                    assert "<title>Google Instance Panel</title>" in panel_resp.text
                     assert "_dash-config" in panel_resp.text
                     assert "/panel/_dash-component-suites/" in panel_resp.text
 
