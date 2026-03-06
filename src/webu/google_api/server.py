@@ -18,9 +18,10 @@ from pydantic import BaseModel, Field
 from tclogger import logger, logstr
 from typing import Optional
 
+from webu.fastapis.request_metrics import RequestMetrics, resolve_server_identity
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_API_PORT, GoogleApiSettings, resolve_google_api_settings
 
-from .panel import build_process_snapshot, mount_google_api_panel
+from .panel import mount_google_api_panel
 from .profile_assets import DEFAULT_SHARED_PROFILE_SECRET
 from .profile_bootstrap import create_encrypted_profile_archive
 from .proxy_manager import ProxyManager, DEFAULT_PROXIES
@@ -161,10 +162,9 @@ def create_google_search_server(
 
     resolved_settings = settings or resolve_google_api_settings(headless=headless)
     resolved_proxies = proxies if proxies is not None else resolved_settings.proxies
-    started_at = time.time()
-
     proxy_manager: ProxyManager = None
     scraper: GoogleScraper = None
+    request_metrics = RequestMetrics()
 
     def _proxy_stats() -> dict:
         if not proxy_manager:
@@ -227,48 +227,25 @@ def create_google_search_server(
     else:
         setup_swagger_ui(app)
     app.state.google_api_settings = resolved_settings
+    app.state.google_api_request_metrics = request_metrics
 
     def _panel_snapshot() -> dict:
         proxy_stats = _proxy_stats()
-        profile_status = _profile_status(resolved_settings.profile_dir)
+        request_snapshot = request_metrics.snapshot().to_dict()
+        node = resolve_server_identity(resolved_settings.runtime_env)
+        has_proxies = bool(proxy_stats.get("total_proxies", 0))
         return {
             "updated_at_human": datetime.now().isoformat(sep=" ", timespec="seconds"),
-            "health": {
-                "scraper_ready": scraper is not None,
+            "runtime_env": resolved_settings.runtime_env,
+            "node": node,
+            "service": {
+                "status_label": "healthy" if scraper is not None else "starting",
+                "status_note": f"{resolved_settings.service_type} on {resolved_settings.host}:{resolved_settings.port}",
+                "tone": "accent" if scraper is not None else "warn",
             },
-            "runtime": {
-                "runtime_env": resolved_settings.runtime_env,
-                "host": resolved_settings.host,
-                "port": resolved_settings.port,
-                "service_url": resolved_settings.service_url,
-                "service_type": resolved_settings.service_type,
-                "headless": resolved_settings.headless,
-                "proxy_mode": resolved_settings.proxy_mode,
-                "proxy_count": len(resolved_settings.proxies),
-                "api_token_configured": bool(resolved_settings.api_token),
-                "admin_token_configured": bool(_resolve_admin_token()),
-                "panel_root_enabled": home_mode == "panel",
-                "profile_dir": str(resolved_settings.profile_dir),
-                "screenshot_dir": str(resolved_settings.screenshot_dir),
-                "data_dir": str(resolved_settings.data_dir),
-            },
-            "process": build_process_snapshot(started_at),
-            "profile": {
-                "profile_dir": profile_status.profile_dir,
-                "exists": profile_status.exists,
-                "file_count": profile_status.file_count,
-                "archive_available": profile_status.archive_available,
-                "last_modified_human": _format_timestamp(profile_status.last_modified_ts),
-            },
+            "requests": request_snapshot,
+            "has_proxies": has_proxies,
             "proxy_stats": proxy_stats,
-            "links": {
-                "Health API": "/health",
-                "Search API": "/docs#/default/search_get_search_get",
-                "Proxy Status": "/proxy/status",
-                "Profile Status": "/admin/profile/status",
-                "Profile Archive": "/admin/profile/archive",
-                "Swagger UI": "/docs",
-            },
         }
 
     mount_google_api_panel(app, _panel_snapshot)
@@ -287,6 +264,32 @@ def create_google_search_server(
     def _ensure_ready():
         if not scraper:
             raise HTTPException(status_code=503, detail="Server not ready")
+
+    async def _execute_search(req: SearchRequest) -> SearchResponse:
+        started = time.perf_counter()
+        success = False
+        try:
+            result = await scraper.search(
+                query=req.query,
+                num=req.num,
+                lang=req.lang,
+                proxy_url=req.proxy_url,
+            )
+            success = bool(result.results) and not result.has_captcha
+            return SearchResponse(
+                success=success,
+                query=result.query,
+                results=[SearchResultItem(**r.to_dict()) for r in result.results],
+                result_count=len(result.results),
+                total_results_text=result.total_results_text,
+                has_captcha=result.has_captcha,
+                error=result.error,
+            )
+        except Exception as e:
+            logger.err(f"  × Search error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            request_metrics.record((time.perf_counter() - started) * 1000.0, success)
 
     # ── 系统接口 ──────────────────────────────────────────────
 
@@ -332,27 +335,7 @@ def create_google_search_server(
         """执行 Google 搜索并返回解析后的结果。"""
         _ensure_ready()
         _require_search_token(x_api_token, api_token)
-        try:
-            result = await scraper.search(
-                query=req.query,
-                num=req.num,
-                lang=req.lang,
-                proxy_url=req.proxy_url,
-            )
-            return SearchResponse(
-                success=bool(result.results) and not result.has_captcha,
-                query=result.query,
-                results=[
-                    SearchResultItem(**r.to_dict()) for r in result.results
-                ],
-                result_count=len(result.results),
-                total_results_text=result.total_results_text,
-                has_captcha=result.has_captcha,
-                error=result.error,
-            )
-        except Exception as e:
-            logger.err(f"  × Search error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+        return await _execute_search(req)
 
     @app.get("/search", response_model=SearchResponse, tags=["搜索"])
     async def search_get(

@@ -9,6 +9,7 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import requests
 
+from webu.fastapis.request_metrics import RequestMetrics
 from webu.runtime_settings import (
     DEFAULT_GOOGLE_API_PORT,
     DEFAULT_GOOGLE_HUB_PORT,
@@ -58,10 +59,34 @@ class BackendRuntimeState:
     consecutive_failures: int = 0
     total_successes: int = 0
     total_failures: int = 0
+    request_count: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    total_request_latency_ms: float = 0.0
+    min_request_latency_ms: float = 0.0
+    max_request_latency_ms: float = 0.0
+    last_request_latency_ms: float = 0.0
     last_checked_ts: float = 0.0
     last_selected_ts: float = 0.0
 
+    def record_request(self, duration_ms: float, success: bool):
+        latency_ms = max(0.0, float(duration_ms))
+        self.request_count += 1
+        if success:
+            self.successful_requests += 1
+        else:
+            self.failed_requests += 1
+        self.total_request_latency_ms += latency_ms
+        self.last_request_latency_ms = latency_ms
+        if self.min_request_latency_ms <= 0:
+            self.min_request_latency_ms = latency_ms
+        else:
+            self.min_request_latency_ms = min(self.min_request_latency_ms, latency_ms)
+        self.max_request_latency_ms = max(self.max_request_latency_ms, latency_ms)
+
     def to_dict(self) -> dict[str, Any]:
+        success_rate = (self.successful_requests / self.request_count * 100.0) if self.request_count else 0.0
+        avg_request_latency_ms = (self.total_request_latency_ms / self.request_count) if self.request_count else 0.0
         return {
             "name": self.backend.name,
             "kind": self.backend.kind,
@@ -77,6 +102,14 @@ class BackendRuntimeState:
             "consecutive_failures": self.consecutive_failures,
             "total_successes": self.total_successes,
             "total_failures": self.total_failures,
+            "request_count": self.request_count,
+            "successful_requests": self.successful_requests,
+            "failed_requests": self.failed_requests,
+            "success_rate": success_rate,
+            "avg_request_latency_ms": avg_request_latency_ms,
+            "min_request_latency_ms": self.min_request_latency_ms,
+            "max_request_latency_ms": self.max_request_latency_ms,
+            "last_request_latency_ms": self.last_request_latency_ms,
             "last_checked_ts": self.last_checked_ts,
             "last_selected_ts": self.last_selected_ts,
         }
@@ -224,6 +257,7 @@ class GoogleHubManager:
         self.settings = settings
         self.states = {backend.name: BackendRuntimeState(backend=backend) for backend in settings.backends}
         self._health_task: asyncio.Task | None = None
+        self.request_metrics = RequestMetrics()
 
     async def start(self):
         await self.refresh_all_health()
@@ -316,10 +350,13 @@ class GoogleHubManager:
         if not ordered:
             raise RuntimeError("no hub backends available")
 
+        overall_started = time.perf_counter()
         last_error = None
         for state in ordered:
             state.last_selected_ts = time.time()
             state.inflight += 1
+            started = time.perf_counter()
+            success = False
             try:
                 headers = {}
                 if state.backend.search_api_token:
@@ -336,6 +373,9 @@ class GoogleHubManager:
                 state.total_successes += 1
                 state.healthy = True
                 state.last_error = ""
+                success = True
+                state.record_request((time.perf_counter() - started) * 1000.0, True)
+                self.request_metrics.record((time.perf_counter() - overall_started) * 1000.0, True)
                 return {
                     "backend": state.backend.name,
                     "backend_kind": state.backend.kind,
@@ -348,9 +388,11 @@ class GoogleHubManager:
                 state.consecutive_failures += 1
                 state.healthy = False
                 state.last_error = str(exc)
+                state.record_request((time.perf_counter() - started) * 1000.0, success)
             finally:
                 state.inflight = max(0, state.inflight - 1)
 
+            self.request_metrics.record((time.perf_counter() - overall_started) * 1000.0, False)
         raise RuntimeError(f"all hub backends failed: {last_error}")
 
     async def backend_snapshot(self) -> list[dict[str, Any]]:
@@ -362,5 +404,6 @@ class GoogleHubManager:
             "strategy": self.settings.strategy,
             "healthy_backends": sum(1 for item in states if item["healthy"]),
             "enabled_backends": sum(1 for item in states if item["enabled"]),
+            "request_stats": self.request_metrics.snapshot().to_dict(),
             "backends": states,
         }

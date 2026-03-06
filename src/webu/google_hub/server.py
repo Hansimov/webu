@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import argparse
 import os
 import uvicorn
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from webu.fastapis.styles import setup_swagger_ui
-from webu.runtime_settings import DEFAULT_GOOGLE_HUB_PORT
+from webu.fastapis.request_metrics import resolve_server_identity
+from webu.fastapis.styles import setup_root_redirect_page
+from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_HUB_PORT
 
 from .manager import GoogleHubManager, GoogleHubSettings, resolve_google_hub_settings
+from .panel import mount_google_hub_panel
 
 
 class HubHealthResponse(BaseModel):
@@ -57,7 +61,7 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         version="0.1.0",
         lifespan=lifespan,
     )
-    setup_swagger_ui(app)
+    setup_root_redirect_page(app, DEFAULT_GOOGLE_API_PANEL_PATH)
     app.state.google_hub_settings = resolved_settings
     app.state.google_hub_manager = manager
 
@@ -95,6 +99,21 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         require_admin(x_admin_token)
         await manager.refresh_all_health()
         return HubBackendsResponse(**(await manager.metrics()))
+
+    def build_snapshot_payload(metrics: dict) -> dict:
+        return {
+            "updated_at_human": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "strategy": metrics.get("strategy", "least-inflight"),
+            "node": resolve_server_identity(os.getenv("WEBU_RUNTIME_ENV", "local").strip().lower() or "local"),
+            "health": {
+                "backend_count": len(metrics.get("backends", [])),
+                "healthy_backends": metrics.get("healthy_backends", 0),
+            },
+            "requests": metrics.get("request_stats", {}),
+            "backends": metrics.get("backends", []),
+        }
+
+    mount_google_hub_panel(app, lambda: build_snapshot_payload(asyncio.run(manager.metrics())))
 
     return app
 

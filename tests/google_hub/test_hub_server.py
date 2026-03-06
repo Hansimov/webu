@@ -2,6 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
+from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH
 from webu.google_hub.server import create_google_hub_server
 
 
@@ -112,12 +113,16 @@ def test_hub_search_routes_to_best_backend(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
     monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
 
-    with TestClient(create_google_hub_server()) as client:
+    app = create_google_hub_server()
+    with TestClient(app) as client:
         resp = client.get("/search", params={"q": "OpenAI news", "num": 5, "lang": "en"})
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["backend"] == "local-google-api"
         assert payload["query"] == "OpenAI news"
+        metrics = app.state.google_hub_manager.request_metrics.snapshot()
+        assert metrics.accepted_requests == 1
+        assert metrics.successful_requests == 1
 
 
 def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
@@ -168,3 +173,39 @@ def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
         payload = resp.json()
         assert payload["backend"] == "space1"
         assert payload["query"] == "OpenAI news"
+
+
+def test_hub_panel_root_redirect_and_page(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    _write_base_configs(config_dir)
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "backends": [
+                    {"name": "local-google-api", "kind": "local-google-api", "base_url": "http://127.0.0.1:18200", "weight": 2}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/health"):
+            return _Response(200, {"status": "ok"})
+        raise AssertionError(url)
+
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    app = create_google_hub_server()
+    with TestClient(app) as client:
+        root_resp = client.get("/", follow_redirects=False)
+        assert root_resp.status_code == 307
+        assert root_resp.headers["location"] == DEFAULT_GOOGLE_API_PANEL_PATH
+
+        panel_resp = client.get(DEFAULT_GOOGLE_API_PANEL_PATH)
+        assert panel_resp.status_code == 200
+        assert "<title>Google Hub Panel</title>" in panel_resp.text
+        assert "/panel/_dash-component-suites/" in panel_resp.text

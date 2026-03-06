@@ -198,6 +198,17 @@ class TestGoogleSearchServerUnit:
                     assert "_dash-config" in panel_resp.text
                     assert "/panel/_dash-component-suites/" in panel_resp.text
 
+    def test_search_updates_request_metrics(self):
+        with patch("webu.google_api.server.ProxyManager", _FakeProxyManager):
+            with patch("webu.google_api.server.GoogleScraper", _FakeGoogleScraper):
+                app = create_google_search_server(headless=True)
+                with TestClient(app) as client:
+                    response = client.get("/search?q=OpenAI+news&num=3")
+                    assert response.status_code == 200
+                    metrics = app.state.google_api_request_metrics.snapshot()
+                    assert metrics.accepted_requests == 1
+                    assert metrics.successful_requests == 0
+
 
 @pytest.mark.integration
 class TestGoogleSearchServerIntegration:
