@@ -123,6 +123,7 @@ def _add_command_parser(subparsers, command_name: str, help_text: str):
 
 def _space_readme(repo_id: str, app_port: int) -> str:
     title = repo_id.split("/")[-1]
+    startup_timeout = os.getenv("WEBU_HF_STARTUP_TIMEOUT", "1h").strip() or "1h"
     return (
         "---\n"
         f"title: {title}\n"
@@ -131,6 +132,9 @@ def _space_readme(repo_id: str, app_port: int) -> str:
         "colorTo: gray\n"
         "sdk: docker\n"
         f"app_port: {app_port}\n"
+        "base_path: /panel/\n"
+        f"startup_duration_timeout: {startup_timeout}\n"
+        "fullWidth: true\n"
         "pinned: false\n"
         "---\n\n"
         "# WebU Google Docker\n\n"
@@ -692,7 +696,13 @@ def _is_public_http_endpoint(endpoint: str) -> bool:
     return not (ip_addr.is_loopback or ip_addr.is_private or ip_addr.is_link_local)
 
 
-def _sync_space_runtime_config(api: HfApi, space_name: str, admin_token: str | None):
+def _sync_space_runtime_config(
+    api: HfApi,
+    space_name: str,
+    admin_token: str | None,
+    *,
+    app_port: int,
+):
     captcha = resolve_captcha_vlm_settings()
     google_service = resolve_google_api_service_profile(
         runtime_env="hf-space", service_type="hf-space"
@@ -707,6 +717,8 @@ def _sync_space_runtime_config(api: HfApi, space_name: str, admin_token: str | N
 
     variable_map = {
         "WEBU_RUNTIME_ENV": "hf-space",
+        "WEBU_DOCKER_PORT": str(app_port),
+        "WEBU_DOCKER_APP_PORT": str(app_port),
         "WEBU_GOOGLE_PROXY_MODE": os.getenv("WEBU_GOOGLE_PROXY_MODE", "disabled"),
         "WEBU_GOOGLE_HEADLESS": "true",
         "WEBU_SERVICE_LOG": "/tmp/webu-google-docker.log",
@@ -1187,7 +1199,10 @@ def cmd_hf_sync(args):
         )
 
     _sync_space_runtime_config(
-        api, repo_id, args.admin_token or docker_settings.admin_token
+        api,
+        repo_id,
+        args.admin_token or docker_settings.admin_token,
+        app_port=args.port,
     )
     if args.restart:
         try:

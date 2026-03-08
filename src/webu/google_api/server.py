@@ -37,6 +37,7 @@ from .profile_bootstrap import create_encrypted_profile_archive
 from .proxy_manager import ProxyManager, DEFAULT_PROXIES
 from .scraper import GoogleScraper
 from ..fastapis.styles import (
+    setup_root_client_redirect_page,
     setup_root_landing_page,
     setup_root_redirect_page,
     setup_swagger_ui,
@@ -247,7 +248,11 @@ def create_google_search_server(
             message="Static workspace content is available. Interactive routes are not published from this path.",
         )
     elif home_mode == "panel":
-        setup_root_redirect_page(app, DEFAULT_GOOGLE_API_PANEL_PATH)
+        setup_root_client_redirect_page(
+            app,
+            title="Google Instance Panel",
+            target_path=DEFAULT_GOOGLE_API_PANEL_PATH,
+        )
     else:
         setup_swagger_ui(app)
     app.state.google_api_settings = resolved_settings
@@ -278,7 +283,7 @@ def create_google_search_server(
             "proxy_stats": proxy_stats,
         }
 
-    mount_google_api_panel(app, _panel_snapshot)
+    mount_google_api_panel(app, _panel_snapshot, admin_token=_resolve_admin_token())
 
     def _require_search_token(
         header_token: str | None,

@@ -113,3 +113,63 @@ def setup_root_redirect_page(app: FastAPI, target_path: str):
     @app.get("/", include_in_schema=False)
     async def root_redirect():
         return RedirectResponse(url=target_path, status_code=307)
+
+
+def setup_root_client_redirect_page(app: FastAPI, title: str, target_path: str):
+    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
+    async def root_client_redirect():
+        return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    <meta name=\"robots\" content=\"noindex,nofollow\">
+    <meta http-equiv=\"refresh\" content=\"0; url={target_path}\">
+    <title>{title}</title>
+    <style>
+        body {{
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #0b1120;
+            color: #f1f5f9;
+            font-family: \"Inter\", \"SF Pro Display\", -apple-system, \"Segoe UI\", sans-serif;
+        }}
+        main {{
+            width: min(560px, calc(100vw - 40px));
+            padding: 28px 32px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 16px;
+            background: rgba(15, 23, 42, 0.86);
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.28);
+        }}
+        h1 {{
+            margin: 0 0 10px;
+            font-size: 18px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }}
+        p {{
+            margin: 0;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #94a3b8;
+        }}
+        a {{
+            color: #34d399;
+        }}
+    </style>
+    <script>
+        window.location.replace({target_path!r});
+    </script>
+</head>
+<body>
+    <main>
+        <h1>{title}</h1>
+        <p>Redirecting to <a href=\"{target_path}\">{target_path}</a> ...</p>
+    </main>
+</body>
+</html>
+"""

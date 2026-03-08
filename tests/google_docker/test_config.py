@@ -77,6 +77,44 @@ def test_google_api_service_profile_resolves_by_type(monkeypatch, tmp_path):
     assert profile["api_token"] == "hf-token"
 
 
+def test_google_api_service_profile_resolves_current_space_from_space_host(
+    monkeypatch, tmp_path
+):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps(
+            {
+                "services": [
+                    {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
+                    {"type": "hf-space", "api_token": "hf-token"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "hf_spaces.json").write_text(
+        json.dumps(
+            [
+                {"space": "owner/space1", "hf_token": "hf_demo"},
+                {"space": "owner/space3", "hf_token": "hf_demo"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("SPACE_HOST", "owner-space3.hf.space")
+
+    profile = resolve_google_api_service_profile(
+        runtime_env="hf-space", service_type="hf-space"
+    )
+
+    assert profile["url"] == "https://owner-space3.hf.space"
+    assert profile["type"] == "hf-space"
+    assert profile["api_token"] == "hf-token"
+
+
 def test_proxy_helpers_read_local_proxy_config(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()

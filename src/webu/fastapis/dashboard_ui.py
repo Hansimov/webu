@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from dash import Dash, html
+from dash import Dash, dcc, html
 
 
 THEME = {
@@ -85,6 +85,23 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-card-note {{ margin-top: 6px; font-size: 12px; color: var(--muted); }}
             .dash-section {{ margin-top: 24px; }}
             .dash-section-title {{ font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; font-weight: 600; }}
+            .dash-controls {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }}
+            .dash-controls-group {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }}
+            .dash-controls-label {{ font-size: 11px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; }}
+            .dash-page-size .dash-radioitems {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+            .dash-page-size label {{ display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; cursor: pointer; }}
+            .dash-page-size input {{ margin: 0; accent-color: var(--accent); }}
+            .dash-page-input {{ width: 72px; padding: 7px 9px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; }}
+            .dash-button {{ padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }}
+            .dash-button:hover {{ border-color: rgba(52,211,153,0.45); background: rgba(52,211,153,0.08); }}
+            .dash-button:disabled {{ opacity: 0.45; cursor: default; }}
+            .dash-auth-card {{ display: flex; flex-direction: column; gap: 14px; }}
+            .dash-auth-form {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }}
+            .dash-auth-input {{ flex: 1 1 240px; min-width: 200px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; }}
+            .dash-auth-note {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
+            .dash-auth-status {{ font-size: 12px; color: var(--muted); }}
+            .dash-auth-status.ok {{ color: var(--accent); }}
+            .dash-auth-status.fail {{ color: var(--danger); }}
             .dash-meta-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
             .dash-meta-chip {{ padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; line-height: 1; }}
             .dash-inst {{ padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }}
@@ -96,7 +113,7 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-stat-label {{ font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }}
             .dash-stat-value {{ margin-top: 4px; font-size: 16px; font-weight: 600; }}
             .dash-tag {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }}
-            .dash-table-wrap {{ overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); max-height: 340px; overflow-y: auto; }}
+            .dash-table-wrap {{ width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }}
             .dash-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
             .dash-table th {{ position: sticky; top: 0; z-index: 1; background: var(--surface-alt); color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-light); }}
             .dash-table td {{ padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text); white-space: nowrap; }}
@@ -141,6 +158,10 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             @media (max-width: 768px) {{
                 .dash-shell {{ padding: 16px; }}
                 .dash-grid.chart {{ grid-template-columns: 1fr; }}
+                .dash-controls {{ align-items: stretch; }}
+                .dash-controls-group {{ width: 100%; }}
+                .dash-auth-form {{ align-items: stretch; }}
+                .dash-auth-input {{ width: 100%; }}
                 .dash-inst-stats {{ grid-template-columns: repeat(2, 1fr); }}
                 .dash-strip-wrap {{ gap: 6px; padding-left: 8px; padding-right: 8px; }}
                     .dash-table .col-result {{ min-width: 240px; max-width: 320px; }}
@@ -417,12 +438,94 @@ def _request_result_cell(record: dict):
     )
 
 
-def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
+def mask_private_value(label: str, value: str, unlocked: bool) -> str:
+    if unlocked:
+        return value
+    if str(label).strip().lower() != "server ip":
+        return value
+    return "**.**.**.**"
+
+
+def privacy_gate_card(
+    *,
+    component_prefix: str,
+    unlocked: bool,
+    message: str = "",
+    token_configured: bool = True,
+) -> html.Div:
+    status_class = "dash-auth-status"
+    if unlocked:
+        status_text = "Admin access unlocked for this browser session."
+        status_class += " ok"
+    elif message:
+        status_text = message
+        status_class += " fail"
+    elif token_configured:
+        status_text = "Server IP and request history stay hidden until a valid admin token is entered."
+    else:
+        status_text = (
+            "No admin token configured. Private sections are already available."
+        )
+
+    controls = []
+    if token_configured:
+        controls.append(
+            html.Div(
+                [
+                    dcc.Input(
+                        id=f"{component_prefix}-auth-token",
+                        type="password",
+                        placeholder="Enter admin token",
+                        className="dash-auth-input",
+                    ),
+                    html.Button(
+                        "Unlock",
+                        id=f"{component_prefix}-auth-submit",
+                        n_clicks=0,
+                        className="dash-button",
+                    ),
+                ],
+                className="dash-auth-form",
+            )
+        )
+
+    return html.Div(
+        [
+            html.Div("Access", className="dash-card-label"),
+            html.Div(
+                "Use the same admin token as the management APIs. The unlock only applies to the current browser session.",
+                className="dash-auth-note",
+            ),
+            *controls,
+            html.Div(status_text, className=status_class),
+        ],
+        className="dash-card dash-auth-card",
+    )
+
+
+def request_table(
+    records: list[dict],
+    show_backend: bool = False,
+    *,
+    page: int = 1,
+    page_size: int = 10,
+    component_prefix: str = "",
+) -> html.Div:
     if not records:
         return html.Div(
             html.Div("No requests recorded yet", className="dash-empty"),
             className="dash-table-wrap",
         )
+
+    page_size = max(1, int(page_size or 10))
+    total_records = len(records)
+    total_pages = max(1, (total_records + page_size - 1) // page_size)
+    page = max(1, min(int(page or 1), total_pages))
+
+    ordered_records = list(reversed(records))
+    start = (page - 1) * page_size
+    end = start + page_size
+    current_records = ordered_records[start:end]
 
     headers = ["Time", "Query", "Status", "Latency", "Top result"]
     if show_backend:
@@ -430,7 +533,7 @@ def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
     headers.append("Error")
 
     rows = []
-    for record in reversed(records[-50:]):
+    for record in current_records:
         success = record.get("success", False)
         tag_style = {
             "background": THEME["accent_soft"] if success else THEME["danger_soft"],
@@ -461,12 +564,81 @@ def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
         )
         rows.append(html.Tr(cells))
 
+    controls = None
+    if component_prefix:
+        controls = (
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Div("Items per page", className="dash-controls-label"),
+                            dcc.RadioItems(
+                                id=f"{component_prefix}-history-page-size",
+                                options=[
+                                    {"label": str(value), "value": value}
+                                    for value in [5, 10, 20, 50, 100]
+                                ],
+                                value=page_size,
+                                inline=True,
+                                className="dash-radioitems",
+                                inputClassName="dash-radioinput",
+                                labelClassName="dash-radiolabel",
+                            ),
+                        ],
+                        className="dash-controls-group dash-page-size",
+                    ),
+                    html.Div(
+                        [
+                            html.Button(
+                                "Previous",
+                                id=f"{component_prefix}-history-prev",
+                                n_clicks=0,
+                                className="dash-button",
+                                disabled=page <= 1,
+                            ),
+                            html.Button(
+                                "Next",
+                                id=f"{component_prefix}-history-next",
+                                n_clicks=0,
+                                className="dash-button",
+                                disabled=page >= total_pages,
+                            ),
+                            html.Div("Page", className="dash-controls-label"),
+                            dcc.Input(
+                                id=f"{component_prefix}-history-page",
+                                type="number",
+                                min=1,
+                                max=total_pages,
+                                step=1,
+                                value=page,
+                                className="dash-page-input",
+                            ),
+                            html.Div(
+                                f"of {total_pages} · {total_records} items",
+                                className="dash-auth-status",
+                            ),
+                        ],
+                        className="dash-controls-group",
+                    ),
+                ],
+                className="dash-controls",
+            ),
+        )
+
     return html.Div(
-        html.Table(
-            [html.Thead(html.Tr([html.Th(h) for h in headers])), html.Tbody(rows)],
-            className="dash-table",
-        ),
-        className="dash-table-wrap",
+        [
+            controls,
+            html.Div(
+                html.Table(
+                    [
+                        html.Thead(html.Tr([html.Th(h) for h in headers])),
+                        html.Tbody(rows),
+                    ],
+                    className="dash-table",
+                ),
+                className="dash-table-wrap",
+            ),
+        ]
     )
 
 

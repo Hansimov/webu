@@ -86,6 +86,20 @@ def _collect_text(component):
     return values
 
 
+def _collect_ids(component):
+    ids = []
+    component_id = getattr(component, "id", None)
+    if component_id:
+        ids.append(str(component_id))
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            ids.extend(_collect_ids(child))
+    elif children is not None:
+        ids.extend(_collect_ids(children))
+    return ids
+
+
 def test_hub_admin_backends_requires_token(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
@@ -443,7 +457,14 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
         ],
     }
 
-    body = build_google_hub_panel_body(snapshot)
+    body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=True,
+        auth_message="",
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+    )
     class_names = _collect_class_names(body)
     text_values = _collect_text(body)
     assert any("dash-strip-card" in value for value in class_names)
@@ -451,6 +472,58 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "1h 0m 0s" in text_values
     assert "disabled" in text_values
     assert "OpenAI news headline | short snippet | example.com" in text_values
+
+
+def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
+    snapshot = {
+        "updated_at_human": "2026-03-09 09:00:00",
+        "current_time_human": "2026-03-09 09:00:00",
+        "timezone_human": "UTC+08 Shanghai",
+        "started_at_human": "2026-03-09 08:00:00",
+        "uptime_human": "1h 0m 0s",
+        "strategy": "adaptive",
+        "node": {"label": "Server IP", "value": "1.2.3.4"},
+        "health": {"healthy_backends": 1, "backend_count": 1, "enabled_backends": 1},
+        "requests": {
+            "accepted_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "success_rate": 100.0,
+            "avg_latency_ms": 100.0,
+            "median_latency_ms": 100.0,
+            "recent_latency_ms": 100.0,
+            "last_latency_ms": 100.0,
+            "history": [],
+            "request_log": [
+                {
+                    "ts_label": "09:00:01",
+                    "query": "secret query",
+                    "backend": "space1",
+                    "success": True,
+                    "latency_ms": 100.0,
+                    "error": "",
+                    "result_preview": "secret preview",
+                    "result_detail": "secret detail",
+                }
+            ],
+        },
+        "backends": [],
+    }
+
+    body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=False,
+        auth_message="",
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+    )
+    text_values = _collect_text(body)
+    ids = _collect_ids(body)
+
+    assert "**.**.**.**" in text_values
+    assert "secret preview" not in text_values
+    assert "google-hub-panel-auth-submit" in ids
 
 
 def test_hub_panel_root_redirect_and_page(monkeypatch, tmp_path):

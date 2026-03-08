@@ -167,6 +167,21 @@ def _resolve_default_hf_space_name(selected: dict[str, Any] | None = None) -> st
     if explicit:
         return str(explicit).strip()
 
+    space_host = str(os.getenv("SPACE_HOST", "")).strip().lower()
+    if space_host:
+        raw_entries = load_json_config("hf_spaces") or []
+        normalized_host = space_host.removeprefix("https://").removeprefix("http://")
+        normalized_host = normalized_host.rstrip("/")
+        for entry in raw_entries:
+            if not isinstance(entry, dict):
+                continue
+            space_name = str(entry.get("space", "")).strip()
+            if not space_name:
+                continue
+            expected_host = f"{space_name.replace('/', '-')}.hf.space"
+            if normalized_host == expected_host:
+                return space_name
+
     if selected:
         selected_space = str(selected.get("space", "")).strip()
         if selected_space:

@@ -142,7 +142,9 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         }
 
     mount_google_hub_panel(
-        app, lambda: build_snapshot_payload(asyncio.run(manager.metrics()))
+        app,
+        lambda: build_snapshot_payload(asyncio.run(manager.metrics())),
+        admin_token=resolved_settings.admin_token,
     )
 
     return app

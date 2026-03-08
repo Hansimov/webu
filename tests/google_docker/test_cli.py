@@ -26,6 +26,8 @@ from webu.runtime_settings.schema import (
 )
 
 from webu.google_docker.cli import (
+    _space_readme,
+    _sync_space_runtime_config,
     _resolve_default_space_name,
     build_parser,
     cmd_config_init,
@@ -113,6 +115,10 @@ def test_prepare_space_bundle_excludes_configs(tmp_path):
     assert (bundle_root / "src" / "webu" / "__init__.py").read_text(
         encoding="utf-8"
     ) == "__all__ = []\n"
+    readme_text = (bundle_root / "README.md").read_text(encoding="utf-8")
+    assert "app_port: 18200" in readme_text
+    assert "base_path: /panel/" in readme_text
+    assert "startup_duration_timeout: 1h" in readme_text
 
 
 def test_prepare_space_bundle_preserves_dependencies_and_scripts(tmp_path):
@@ -157,6 +163,49 @@ ggdk = \"webu.google_docker.cli:main\"
     assert 'ggdk = "webu.google_docker.cli:main"' in pyproject_text
     assert "authors" not in pyproject_text
     assert "project.urls" not in pyproject_text
+
+
+def test_space_readme_sets_startup_timeout(monkeypatch):
+    monkeypatch.setenv("WEBU_HF_STARTUP_TIMEOUT", "45m")
+    readme = _space_readme("owner/demo", 18200)
+    assert "app_port: 18200" in readme
+    assert "base_path: /panel/" in readme
+    assert "startup_duration_timeout: 45m" in readme
+    assert "fullWidth: true" in readme
+
+
+def test_sync_space_runtime_config_sets_aligned_ports(monkeypatch):
+    class _Api:
+        def __init__(self):
+            self.variables = {}
+            self.secrets = {}
+
+        def add_space_variable(self, repo_id, key, value):
+            self.variables[(repo_id, key)] = value
+
+        def add_space_secret(self, repo_id, key, value):
+            self.secrets[(repo_id, key)] = value
+
+    monkeypatch.setattr(
+        "webu.google_docker.cli.resolve_captcha_vlm_settings",
+        lambda: SimpleNamespace(endpoint="", model="", api_format="", api_key=""),
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.resolve_google_api_service_profile",
+        lambda runtime_env=None, service_type=None, host=None, port=None: {
+            "url": "https://example.invalid",
+            "type": "hf-space",
+            "api_token": "search-secret",
+        },
+    )
+    monkeypatch.setattr("webu.google_docker.cli.load_json_config", lambda name: {})
+
+    api = _Api()
+    _sync_space_runtime_config(api, "owner/demo", "admin-secret", app_port=18200)
+
+    assert api.variables[("owner/demo", "WEBU_DOCKER_PORT")] == "18200"
+    assert api.variables[("owner/demo", "WEBU_DOCKER_APP_PORT")] == "18200"
+    assert api.secrets[("owner/demo", "WEBU_ADMIN_TOKEN")] == "admin-secret"
 
 
 def test_prepare_space_bundle_includes_encrypted_profile_bootstrap(
@@ -485,7 +534,7 @@ def test_cmd_hf_sync_deletes_stale_remote_files(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "webu.google_docker.cli._sync_space_runtime_config",
-        lambda api, space_name, admin_token: None,
+        lambda api, space_name, admin_token, app_port: None,
     )
 
     args = SimpleNamespace(
