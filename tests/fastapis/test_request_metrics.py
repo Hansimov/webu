@@ -9,7 +9,21 @@ def test_request_metrics_snapshot_keeps_history():
     metrics = RequestMetrics(history_limit=4)
 
     metrics.record(120.0, True)
-    metrics.record(240.0, False)
+    metrics.record(
+        240.0,
+        False,
+        response_payload={
+            "success": False,
+            "error": "timeout",
+            "results": [
+                {
+                    "title": "OpenAI launches a new model",
+                    "url": "https://example.com/openai",
+                    "snippet": "A short snippet for the top result.",
+                }
+            ],
+        },
+    )
 
     snapshot = metrics.snapshot()
 
@@ -20,6 +34,8 @@ def test_request_metrics_snapshot_keeps_history():
     assert snapshot.history[-1]["accepted_requests"] == 2
     assert snapshot.history[-1]["successful_requests"] == 1
     assert snapshot.history[-1]["last_latency_ms"] == 240.0
+    assert "OpenAI launches a new model" in snapshot.request_log[-1]["result_preview"]
+    assert '"results"' in snapshot.request_log[-1]["result_detail"]
 
 
 def test_dashboard_timestamp_uses_shanghai_timezone():

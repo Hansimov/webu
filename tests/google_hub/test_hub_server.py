@@ -317,6 +317,7 @@ def test_adaptive_strategy_prefers_fast_and_stable_backend():
         request_timeout_sec=30,
         health_timeout_sec=5,
         health_interval_sec=30,
+        excluded_nodes=[],
         backends=[
             GoogleHubBackend(
                 name="fast-stable",
@@ -356,13 +357,12 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     snapshot = {
         "updated_at_human": "2026-03-09 09:00:00",
         "current_time_human": "2026-03-09 09:00:00",
-        "timezone_human": "UTC+08 · Asia/Shanghai",
         "timezone_human": "UTC+08 Shanghai",
         "started_at_human": "2026-03-09 08:00:00",
         "uptime_human": "1h 0m 0s",
         "strategy": "adaptive",
         "node": {"value": "hub-node"},
-        "health": {"healthy_backends": 1, "backend_count": 2},
+        "health": {"healthy_backends": 1, "backend_count": 2, "enabled_backends": 1},
         "requests": {
             "accepted_requests": 8,
             "successful_requests": 7,
@@ -406,13 +406,26 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
                     "last_latency_ms": 130.0,
                 },
             ],
-            "request_log": [],
+            "request_log": [
+                {
+                    "ts_label": "09:00:01",
+                    "query": "OpenAI news",
+                    "backend": "space1",
+                    "success": True,
+                    "latency_ms": 210.0,
+                    "error": "",
+                    "result_preview": "OpenAI news headline | short snippet | example.com",
+                    "result_detail": '{\n  "results": [{"title": "OpenAI news headline"}]\n}',
+                }
+            ],
         },
         "backends": [
             {
                 "name": "local",
                 "kind": "google-api",
-                "healthy": True,
+                "healthy": False,
+                "enabled": False,
+                "disabled_reason": "excluded by hub settings",
                 "request_count": 5,
                 "success_rate": 100.0,
                 "avg_request_latency_ms": 110.0,
@@ -420,7 +433,9 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
             {
                 "name": "remote",
                 "space_name": "owner/space",
-                "healthy": False,
+                "healthy": True,
+                "enabled": True,
+                "disabled_reason": "",
                 "request_count": 3,
                 "success_rate": 66.7,
                 "avg_request_latency_ms": 260.0,
@@ -434,6 +449,8 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert any("dash-strip-card" in value for value in class_names)
     assert "UPTIME" in text_values
     assert "1h 0m 0s" in text_values
+    assert "disabled" in text_values
+    assert "OpenAI news headline | short snippet | example.com" in text_values
 
 
 def test_hub_panel_root_redirect_and_page(monkeypatch, tmp_path):

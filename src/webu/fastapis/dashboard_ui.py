@@ -103,16 +103,19 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-table tr:last-child td {{ border-bottom: none; }}
             .dash-table tr:hover td {{ background: rgba(255,255,255,0.02); }}
             .dash-table .col-query {{ max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+            .dash-table .col-result {{ min-width: 280px; max-width: 420px; white-space: normal; }}
             .dash-empty {{ padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }}
             .dash-strip-card {{ display: flex; flex-direction: column; gap: 14px; min-height: 230px; }}
             .dash-strip-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }}
             .dash-strip-summary {{ font-size: 12px; color: var(--muted); }}
+            .dash-strip-scroll {{ overflow-x: auto; overflow-y: hidden; cursor: grab; padding-bottom: 4px; scrollbar-width: thin; }}
+            .dash-strip-scroll.is-dragging {{ cursor: grabbing; }}
             .dash-strip-wrap {{
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(18px, 1fr));
+                display: flex;
                 align-items: end;
                 gap: 8px;
                 min-height: 150px;
+                min-width: max-content;
                 padding: 14px 12px 10px;
                 border-radius: 14px;
                 background:
@@ -126,15 +129,21 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                     );
                 border: 1px solid rgba(148,163,184,0.10);
             }}
-            .dash-strip-col {{ display: flex; flex-direction: column; align-items: stretch; justify-content: flex-end; gap: 8px; min-width: 0; }}
-            .dash-strip-bar {{ width: 100%; min-height: 14px; border-radius: 10px 10px 4px 4px; background: var(--info); box-shadow: 0 10px 24px rgba(15,23,42,0.32), inset 0 -1px 0 rgba(255,255,255,0.12); }}
+                .dash-strip-col {{ display: flex; flex: 0 0 32px; flex-direction: column; align-items: stretch; justify-content: flex-end; gap: 8px; min-width: 32px; }}
+                .dash-strip-bar-slot {{ display: flex; align-items: end; height: 132px; }}
+                .dash-strip-bar {{ width: 100%; min-height: 14px; border-radius: 10px 10px 4px 4px; background: var(--info); box-shadow: 0 10px 24px rgba(15,23,42,0.32), inset 0 -1px 0 rgba(255,255,255,0.12); }}
             .dash-strip-label {{ font-size: 10px; color: var(--muted); line-height: 1; letter-spacing: 0.03em; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
             .dash-strip-foot {{ display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }}
+                .dash-result-toggle {{ border: 1px solid var(--border-light); border-radius: 10px; background: rgba(255,255,255,0.02); overflow: hidden; }}
+                .dash-result-summary {{ list-style: none; cursor: pointer; padding: 8px 10px; color: var(--text); font-size: 12px; line-height: 1.45; }}
+                .dash-result-summary::-webkit-details-marker {{ display: none; }}
+                .dash-result-detail {{ margin: 0; padding: 10px; border-top: 1px solid var(--border); background: rgba(15,23,42,0.45); color: var(--muted); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; }}
             @media (max-width: 768px) {{
                 .dash-shell {{ padding: 16px; }}
                 .dash-grid.chart {{ grid-template-columns: 1fr; }}
                 .dash-inst-stats {{ grid-template-columns: repeat(2, 1fr); }}
                 .dash-strip-wrap {{ gap: 6px; padding-left: 8px; padding-right: 8px; }}
+                    .dash-table .col-result {{ min-width: 240px; max-width: 320px; }}
             }}
         </style>
     </head>
@@ -144,6 +153,37 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             {{%config%}}
             {{%scripts%}}
             {{%renderer%}}
+            <script>
+                document.addEventListener("DOMContentLoaded", function () {{
+                    document.querySelectorAll(".dash-strip-scroll").forEach(function (node) {{
+                        let dragging = false;
+                        let startX = 0;
+                        let startScroll = 0;
+                        node.addEventListener("pointerdown", function (event) {{
+                            dragging = true;
+                            startX = event.clientX;
+                            startScroll = node.scrollLeft;
+                            node.classList.add("is-dragging");
+                            node.setPointerCapture(event.pointerId);
+                        }});
+                        node.addEventListener("pointermove", function (event) {{
+                            if (!dragging) return;
+                            node.scrollLeft = startScroll - (event.clientX - startX);
+                        }});
+                        function stopDrag(event) {{
+                            if (!dragging) return;
+                            dragging = false;
+                            node.classList.remove("is-dragging");
+                            if (event && event.pointerId !== undefined) {{
+                                try {{ node.releasePointerCapture(event.pointerId); }} catch (_err) {{}}
+                            }}
+                        }}
+                        node.addEventListener("pointerup", stopDrag);
+                        node.addEventListener("pointercancel", stopDrag);
+                        node.addEventListener("pointerleave", stopDrag);
+                    }});
+                }});
+            </script>
         </footer>
     </body>
 </html>
@@ -230,21 +270,24 @@ def status_bar_strip_card(
         bars = [{"label": "00:00", "height": 0.2, "color": THEME["border_light"]}]
 
     columns = []
-    for item in bars[-24:]:
+    for item in bars:
         height_ratio = max(0.12, min(1.0, float(item.get("height", 0.0))))
         columns.append(
             html.Div(
                 [
                     html.Div(
-                        className="dash-strip-bar",
-                        style={
-                            "height": f"{int(height_ratio * 100)}%",
-                            "background": item.get("color", THEME["info"]),
-                            "opacity": max(
-                                0.45, min(1.0, float(item.get("opacity", 1.0)))
-                            ),
-                        },
-                        title=str(item.get("title", item.get("label", ""))),
+                        html.Div(
+                            className="dash-strip-bar",
+                            style={
+                                "height": f"{int(height_ratio * 100)}%",
+                                "background": item.get("color", THEME["info"]),
+                                "opacity": max(
+                                    0.45, min(1.0, float(item.get("opacity", 1.0)))
+                                ),
+                            },
+                            title=str(item.get("title", item.get("label", ""))),
+                        ),
+                        className="dash-strip-bar-slot",
                     ),
                     html.Div(str(item.get("label", "")), className="dash-strip-label"),
                 ],
@@ -261,7 +304,10 @@ def status_bar_strip_card(
                 ],
                 className="dash-strip-head",
             ),
-            html.Div(columns, className="dash-strip-wrap"),
+            html.Div(
+                html.Div(columns, className="dash-strip-wrap"),
+                className="dash-strip-scroll",
+            ),
             html.Div(
                 [
                     html.Span(footer_left or "", className="dash-strip-summary"),
@@ -275,11 +321,54 @@ def status_bar_strip_card(
 
 
 def instance_card(
-    *, name: str, caption: str, healthy: bool, stats: list[tuple[str, str]]
+    *,
+    name: str,
+    caption: str,
+    healthy: bool,
+    stats: list[tuple[str, str]],
+    status_label: str | None = None,
+    status_tone: str | None = None,
+    note: str = "",
 ):
+    tone = status_tone or ("accent" if healthy else "danger")
+    soft_map = {
+        "accent": THEME["accent_soft"],
+        "warn": THEME["warn_soft"],
+        "danger": THEME["danger_soft"],
+        "info": THEME["info_soft"],
+        "neutral": "rgba(148,163,184,0.12)",
+    }
+    color_map = {
+        "accent": THEME["accent"],
+        "warn": THEME["warn"],
+        "danger": THEME["danger"],
+        "info": THEME["info"],
+        "neutral": THEME["muted"],
+    }
+    border_map = {
+        "accent": "rgba(52,211,153,0.32)",
+        "warn": "rgba(251,191,36,0.28)",
+        "danger": "rgba(248,113,113,0.30)",
+        "info": "rgba(96,165,250,0.28)",
+        "neutral": "rgba(148,163,184,0.22)",
+    }
+    glow_map = {
+        "accent": "0 14px 28px rgba(16,185,129,0.10)",
+        "warn": "0 14px 28px rgba(245,158,11,0.10)",
+        "danger": "0 14px 28px rgba(239,68,68,0.12)",
+        "info": "0 14px 28px rgba(59,130,246,0.10)",
+        "neutral": "0 14px 28px rgba(15,23,42,0.22)",
+    }
     tag_style = {
-        "background": THEME["accent_soft"] if healthy else THEME["danger_soft"],
-        "color": THEME["accent"] if healthy else THEME["danger"],
+        "background": soft_map.get(tone, THEME["accent_soft"]),
+        "color": color_map.get(tone, THEME["accent"]),
+    }
+    card_style = {
+        "border": f"1px solid {border_map.get(tone, THEME['border'])}",
+        "background": (
+            f"linear-gradient(180deg, {soft_map.get(tone, THEME['accent_soft'])}, rgba(15,23,42,0.94))"
+        ),
+        "boxShadow": glow_map.get(tone, glow_map["accent"]),
     }
     stat_items = [
         html.Div(
@@ -297,7 +386,7 @@ def instance_card(
                 [
                     html.Div(name, className="dash-inst-name"),
                     html.Span(
-                        "healthy" if healthy else "unhealthy",
+                        status_label or ("healthy" if healthy else "unhealthy"),
                         className="dash-tag",
                         style=tag_style,
                     ),
@@ -306,8 +395,25 @@ def instance_card(
             ),
             html.Div(caption, className="dash-inst-meta"),
             html.Div(stat_items, className="dash-inst-stats"),
+            html.Div(note, className="dash-inst-meta") if note else None,
         ],
         className="dash-inst",
+        style=card_style,
+    )
+
+
+def _request_result_cell(record: dict):
+    preview = str(record.get("result_preview", "")).strip()
+    detail = str(record.get("result_detail", "")).strip()
+    if not preview and not detail:
+        return html.Td("\u2014", className="col-result")
+
+    summary_text = preview or "View response"
+    children = [html.Summary(summary_text, className="dash-result-summary")]
+    if detail:
+        children.append(html.Pre(detail, className="dash-result-detail"))
+    return html.Td(
+        html.Details(children, className="dash-result-toggle"), className="col-result"
     )
 
 
@@ -318,7 +424,7 @@ def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
             className="dash-table-wrap",
         )
 
-    headers = ["Time", "Query", "Status", "Latency"]
+    headers = ["Time", "Query", "Status", "Latency", "Top result"]
     if show_backend:
         headers.insert(2, "Instance")
     headers.append("Error")
@@ -346,6 +452,7 @@ def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
                     )
                 ),
                 html.Td(format_ms(float(record.get("latency_ms", 0)))),
+                _request_result_cell(record),
                 html.Td(
                     record.get("error", "") or "\u2014",
                     style={"color": THEME["muted"], "fontSize": "12px"},

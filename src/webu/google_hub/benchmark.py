@@ -172,7 +172,7 @@ async def run_http_benchmark(
     num: int = 10,
     lang: str = "en",
     api_token: str = "",
-    timeout_sec: int = 90,
+    timeout_sec: int = 60,
 ) -> BenchmarkSummary:
     semaphore = asyncio.Semaphore(max(1, int(concurrency)))
     samples: list[BenchmarkSample] = []
@@ -244,7 +244,7 @@ def main():
     parser.add_argument("--num", type=int, default=5)
     parser.add_argument("--lang", default="en")
     parser.add_argument("--api-token", default="")
-    parser.add_argument("--timeout-sec", type=int, default=90)
+    parser.add_argument("--timeout-sec", type=int, default=60)
     args = parser.parse_args()
 
     summary = asyncio.run(

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import platform
 import socket
 import statistics
 
 from collections import deque
+from typing import Any
 from datetime import datetime
 from dataclasses import dataclass
 from threading import Lock
@@ -63,6 +65,56 @@ def format_uptime_human(started_ts: float | None, now_ts: float | None = None) -
     return " ".join(parts)
 
 
+def _truncate_text(value: str, *, limit: int = 120) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _serialize_response_payload(response_payload: dict[str, Any] | None) -> str:
+    if not isinstance(response_payload, dict) or not response_payload:
+        return ""
+    try:
+        return json.dumps(response_payload, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return str(response_payload)
+
+
+def _build_result_preview(response_payload: dict[str, Any] | None) -> str:
+    if not isinstance(response_payload, dict):
+        return ""
+
+    results = response_payload.get("results")
+    if isinstance(results, list) and results:
+        first = results[0]
+        if isinstance(first, dict):
+            title = _truncate_text(str(first.get("title", "")).strip(), limit=72)
+            snippet = _truncate_text(str(first.get("snippet", "")).strip(), limit=100)
+            displayed_url = _truncate_text(
+                str(first.get("displayed_url", first.get("url", "")).strip()),
+                limit=56,
+            )
+            parts = [part for part in [title, snippet, displayed_url] if part]
+            if parts:
+                return " | ".join(parts)
+
+    error = _truncate_text(str(response_payload.get("error", "")).strip(), limit=120)
+    if error:
+        return error
+
+    total_results_text = _truncate_text(
+        str(response_payload.get("total_results_text", "")).strip(), limit=80
+    )
+    if total_results_text:
+        return total_results_text
+
+    result_count = int(response_payload.get("result_count", 0) or 0)
+    if result_count > 0:
+        return f"{result_count} results"
+    return ""
+
+
 @dataclass(frozen=True)
 class RequestRecord:
     ts: float
@@ -72,6 +124,8 @@ class RequestRecord:
     query: str = ""
     backend: str = ""
     error: str = ""
+    result_preview: str = ""
+    result_detail: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -82,6 +136,8 @@ class RequestRecord:
             "query": self.query,
             "backend": self.backend,
             "error": self.error,
+            "result_preview": self.result_preview,
+            "result_detail": self.result_detail,
         }
 
 
@@ -239,11 +295,14 @@ class RequestMetrics:
         query: str = "",
         backend: str = "",
         error: str = "",
+        response_payload: dict[str, Any] | None = None,
         sample_ts: float | None = None,
     ):
         latency_ms = max(0.0, float(duration_ms))
         sample_ts = float(sample_ts or datetime.now(tz=SHANGHAI_TZ).timestamp())
         now = datetime.fromtimestamp(sample_ts, tz=SHANGHAI_TZ)
+        result_preview = _build_result_preview(response_payload)
+        result_detail = _serialize_response_payload(response_payload)
         with self._lock:
             self._advance_windows_locked(sample_ts)
             self._accepted_requests += 1
@@ -269,6 +328,8 @@ class RequestMetrics:
                     query=query,
                     backend=backend,
                     error=error,
+                    result_preview=result_preview,
+                    result_detail=result_detail,
                 )
             )
 

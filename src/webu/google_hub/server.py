@@ -47,6 +47,7 @@ class HubBackendsResponse(BaseModel):
     strategy: str = "adaptive"
     healthy_backends: int = 0
     enabled_backends: int = 0
+    excluded_nodes: list[str] = Field(default_factory=list)
     started_ts: float = 0.0
     started_at_human: str = ""
     uptime_seconds: int = 0
@@ -133,8 +134,10 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
             "health": {
                 "backend_count": len(metrics.get("backends", [])),
                 "healthy_backends": metrics.get("healthy_backends", 0),
+                "enabled_backends": metrics.get("enabled_backends", 0),
             },
             "requests": metrics.get("request_stats", {}),
+            "excluded_nodes": metrics.get("excluded_nodes", []),
             "backends": metrics.get("backends", []),
         }
 
@@ -157,7 +160,18 @@ def main():
         type=int,
         default=int(os.getenv("WEBU_HUB_PORT", str(DEFAULT_GOOGLE_HUB_PORT))),
     )
+    parser.add_argument(
+        "--exclude-nodes",
+        default=os.getenv("WEBU_HUB_EXCLUDE_NODES", "local-google-api"),
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=int,
+        default=int(os.getenv("WEBU_HUB_REQUEST_TIMEOUT_SEC", "60")),
+    )
     args = parser.parse_args()
+    os.environ["WEBU_HUB_EXCLUDE_NODES"] = str(args.exclude_nodes).strip()
+    os.environ["WEBU_HUB_REQUEST_TIMEOUT_SEC"] = str(max(1, int(args.request_timeout)))
     uvicorn.run(
         "webu.google_hub.server:app_instance",
         host=args.host,

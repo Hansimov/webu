@@ -39,6 +39,28 @@ SERVICE_SPEC = LocalServiceSpec(
 )
 
 
+def _normalize_exclude_nodes(raw_value: str | None) -> str:
+    parts = [str(item).strip() for item in str(raw_value or "").split(",")]
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in parts:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return ",".join(unique)
+
+
+def _hub_runtime_env(args) -> dict[str, str]:
+    env: dict[str, str] = {}
+    exclude_nodes = _normalize_exclude_nodes(getattr(args, "exclude_nodes", ""))
+    if exclude_nodes:
+        env["WEBU_HUB_EXCLUDE_NODES"] = exclude_nodes
+    request_timeout = int(getattr(args, "request_timeout", 60) or 60)
+    env["WEBU_HUB_REQUEST_TIMEOUT_SEC"] = str(max(1, request_timeout))
+    return env
+
+
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -82,7 +104,12 @@ def cmd_start(args):
         return
 
     logger.note(f"> Starting Google Hub on {args.host}:{args.port} ...")
-    pid = start_service(SERVICE_SPEC, host=args.host, port=args.port)
+    pid = start_service(
+        SERVICE_SPEC,
+        host=args.host,
+        port=args.port,
+        extra_env=_hub_runtime_env(args),
+    )
     logger.okay(f"  ✓ Hub started (PID: {pid})")
     logger.mesg(f"  Log: {logstr.file(LOG_FILE)}")
 
@@ -135,7 +162,19 @@ def cmd_serve(args):
 
     import sys
 
-    sys.argv = [sys.argv[0], "--host", args.host, "--port", str(args.port)]
+    for key, value in _hub_runtime_env(args).items():
+        os.environ[key] = value
+    sys.argv = [
+        sys.argv[0],
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+        "--exclude-nodes",
+        _normalize_exclude_nodes(args.exclude_nodes),
+        "--request-timeout",
+        str(max(1, int(args.request_timeout))),
+    ]
     hub_server_main()
 
 
@@ -266,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--port", type=int, default=DEFAULT_PORT)
     search.add_argument("--num", type=int, default=10)
     search.add_argument("--lang", default="en")
-    search.add_argument("--timeout", type=int, default=90)
+    search.add_argument("--timeout", type=int, default=60)
     search.set_defaults(func=cmd_search)
 
     benchmark = subparsers.add_parser("benchmark", help="对本地 hub 执行并发 benchmark")
@@ -276,8 +315,12 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--concurrency", type=int, default=4)
     benchmark.add_argument("--num", type=int, default=5)
     benchmark.add_argument("--lang", default="en")
-    benchmark.add_argument("--timeout", type=int, default=90)
+    benchmark.add_argument("--timeout", type=int, default=60)
     benchmark.set_defaults(func=cmd_benchmark)
+
+    for subparser in (start, restart, serve):
+        subparser.add_argument("--exclude-nodes", default="local-google-api")
+        subparser.add_argument("--request-timeout", type=int, default=60)
 
     return parser
 

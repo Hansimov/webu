@@ -258,7 +258,6 @@ class TestGoogleSearchServerUnit:
         snapshot = {
             "updated_at_human": "2026-03-09 09:00:00",
             "current_time_human": "2026-03-09 09:00:00",
-            "timezone_human": "UTC+08 · Asia/Shanghai",
             "timezone_human": "UTC+08 Shanghai",
             "started_at_human": "2026-03-09 08:30:00",
             "uptime_human": "30m 0s",
@@ -311,7 +310,17 @@ class TestGoogleSearchServerUnit:
                         "last_latency_ms": 180.0,
                     },
                 ],
-                "request_log": [],
+                "request_log": [
+                    {
+                        "ts_label": "09:00:01",
+                        "query": "OpenAI news",
+                        "success": True,
+                        "latency_ms": 180.0,
+                        "error": "",
+                        "result_preview": "OpenAI news headline | short snippet | example.com",
+                        "result_detail": '{\n  "results": [{"title": "OpenAI news headline"}]\n}',
+                    }
+                ],
             },
         }
 
@@ -321,6 +330,7 @@ class TestGoogleSearchServerUnit:
         assert any("dash-strip-card" in value for value in class_names)
         assert "UPTIME" in text_values
         assert "30m 0s" in text_values
+        assert "OpenAI news headline | short snippet | example.com" in text_values
 
 
 @pytest.mark.integration

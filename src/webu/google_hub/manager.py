@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ class GoogleHubBackend:
     admin_token: str = ""
     space_name: str = ""
     tags: list[str] = field(default_factory=list)
+    disabled_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class GoogleHubSettings:
     request_timeout_sec: int
     health_timeout_sec: int
     health_interval_sec: int
+    excluded_nodes: list[str]
     backends: list[GoogleHubBackend]
     project_root: str
     config_dir: str
@@ -152,6 +155,7 @@ class BackendRuntimeState:
             "base_url": self.backend.base_url,
             "space_name": self.backend.space_name,
             "enabled": self.backend.enabled,
+            "disabled_reason": self.backend.disabled_reason,
             "weight": self.backend.weight,
             "tags": self.backend.tags,
             "healthy": self.healthy,
@@ -206,6 +210,7 @@ def _normalize_backend(
     default_search_token: str,
     default_admin_token: str,
     runtime_env: str,
+    excluded_nodes: set[str],
 ) -> GoogleHubBackend:
     kind = str(entry.get("kind", "")).strip().lower()
     name = str(entry.get("name", "")).strip()
@@ -228,12 +233,19 @@ def _normalize_backend(
         raise ValueError(f"unsupported hub backend kind: {kind!r}")
 
     base_url = _normalize_backend_base_url(base_url, runtime_env)
+    configured_enabled = bool(entry.get("enabled", True))
+    disabled_reason = ""
+    if not configured_enabled:
+        disabled_reason = "disabled in config"
+    elif name in excluded_nodes or (space_name and space_name in excluded_nodes):
+        configured_enabled = False
+        disabled_reason = "excluded by hub settings"
 
     return GoogleHubBackend(
         name=name,
         kind=kind,
         base_url=base_url,
-        enabled=bool(entry.get("enabled", True)),
+        enabled=configured_enabled,
         weight=max(1, int(entry.get("weight", 1))),
         search_api_token=str(
             entry.get("search_api_token", default_search_token)
@@ -241,7 +253,26 @@ def _normalize_backend(
         admin_token=str(entry.get("admin_token", default_admin_token)).strip(),
         space_name=space_name,
         tags=[str(tag).strip() for tag in entry.get("tags", []) if str(tag).strip()],
+        disabled_reason=disabled_reason,
     )
+
+
+def _parse_excluded_nodes(raw_value: Any) -> list[str]:
+    if isinstance(raw_value, str):
+        items = raw_value.split(",")
+    elif isinstance(raw_value, list):
+        items = raw_value
+    else:
+        items = []
+    seen: set[str] = set()
+    values: list[str] = []
+    for item in items:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        values.append(name)
+    return values
 
 
 def resolve_google_hub_settings() -> GoogleHubSettings:
@@ -255,6 +286,10 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
         runtime_env="hf-space", service_type="hf-space"
     )
     default_admin_token = resolve_google_docker_settings().admin_token
+    env_excluded_nodes = _parse_excluded_nodes(os.getenv("WEBU_HUB_EXCLUDE_NODES", ""))
+    config_excluded_nodes = _parse_excluded_nodes(config.get("exclude_nodes", []))
+    excluded_nodes = list(dict.fromkeys([*config_excluded_nodes, *env_excluded_nodes]))
+    excluded_node_set = set(excluded_nodes)
 
     backends: list[GoogleHubBackend] = []
     for entry in config.get("backends", []):
@@ -279,6 +314,7 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
                 default_admin_token=str(normalized.get("admin_token", "")).strip()
                 or str(default_admin_token).strip(),
                 runtime_env=runtime_env,
+                excluded_nodes=excluded_node_set,
             )
         )
 
@@ -334,9 +370,15 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
         port=int(config.get("port", DEFAULT_GOOGLE_HUB_PORT)),
         admin_token=str(config.get("admin_token", default_admin_token)).strip(),
         strategy=str(config.get("strategy", "adaptive")).strip().lower(),
-        request_timeout_sec=int(config.get("request_timeout_sec", 90)),
+        request_timeout_sec=int(
+            os.getenv(
+                "WEBU_HUB_REQUEST_TIMEOUT_SEC",
+                str(config.get("request_timeout_sec", 60)),
+            )
+        ),
         health_timeout_sec=int(config.get("health_timeout_sec", 10)),
         health_interval_sec=int(config.get("health_interval_sec", 30)),
+        excluded_nodes=excluded_nodes,
         backends=backends,
         project_root=str(paths.root),
         config_dir=str(paths.config_dir),
@@ -497,6 +539,7 @@ class GoogleHubManager:
                     True,
                     query=query,
                     backend=state.backend.name,
+                    response_payload=payload,
                 )
                 return {
                     "backend": state.backend.name,
@@ -519,6 +562,10 @@ class GoogleHubManager:
             query=query,
             backend=last_backend_name,
             error=str(last_error) if last_error else "",
+            response_payload={
+                "success": False,
+                "error": str(last_error) if last_error else "",
+            },
         )
         raise RuntimeError(f"all hub backends failed: {last_error}")
 
@@ -532,6 +579,7 @@ class GoogleHubManager:
             "started_ts": self.started_ts,
             "healthy_backends": sum(1 for item in states if item["healthy"]),
             "enabled_backends": sum(1 for item in states if item["enabled"]),
+            "excluded_nodes": list(self.settings.excluded_nodes),
             "request_stats": self.request_metrics.snapshot().to_dict(),
             "backends": states,
         }

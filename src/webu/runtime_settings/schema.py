@@ -107,6 +107,7 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "kind 只允许 local-google-api、google-api、hf-space。",
             "hf-space 后端可以只写 space，不写 base_url。",
             "search_api_token 和 admin_token 为空时，会回退到现有 google_api/google_docker 配置中的默认 token。",
+            "exclude_nodes 支持按后端 name 或 space 名称禁用节点。",
         ],
         "sample": {
             "host": "0.0.0.0",
@@ -114,7 +115,8 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "strategy": "adaptive",
             "health_interval_sec": 30,
             "health_timeout_sec": 10,
-            "request_timeout_sec": 90,
+            "request_timeout_sec": 60,
+            "exclude_nodes": ["local-google-api"],
             "backends": [
                 {
                     "name": "local-google-api",
@@ -155,6 +157,10 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                 "health_interval_sec": {"type": "integer"},
                 "health_timeout_sec": {"type": "integer"},
                 "request_timeout_sec": {"type": "integer"},
+                "exclude_nodes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
                 "backends": {
                     "type": "array",
                     "items": {

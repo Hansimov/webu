@@ -159,6 +159,12 @@ def _resolve_search_api_token(
     return (header_token or query_token or "").strip()
 
 
+def _response_model_to_dict(response_model: BaseModel) -> dict:
+    if hasattr(response_model, "model_dump"):
+        return response_model.model_dump()
+    return response_model.dict()
+
+
 # ═══════════════════════════════════════════════════════════════
 # 应用工厂
 # ═══════════════════════════════════════════════════════════════
@@ -292,6 +298,8 @@ def create_google_search_server(
     async def _execute_search(req: SearchRequest) -> SearchResponse:
         started = time.perf_counter()
         success = False
+        response_payload: dict | None = None
+        error_message = ""
         try:
             result = await scraper.search(
                 query=req.query,
@@ -300,7 +308,7 @@ def create_google_search_server(
                 proxy_url=req.proxy_url,
             )
             success = bool(result.results) and not result.has_captcha
-            return SearchResponse(
+            response_model = SearchResponse(
                 success=success,
                 query=result.query,
                 results=[SearchResultItem(**r.to_dict()) for r in result.results],
@@ -309,14 +317,19 @@ def create_google_search_server(
                 has_captcha=result.has_captcha,
                 error=result.error,
             )
+            response_payload = _response_model_to_dict(response_model)
+            return response_model
         except Exception as e:
             logger.err(f"  × Search error: {e}")
+            error_message = str(e)
             raise HTTPException(status_code=500, detail=str(e))
         finally:
             request_metrics.record(
                 (time.perf_counter() - started) * 1000.0,
                 success,
                 query=req.query,
+                error=error_message,
+                response_payload=response_payload,
             )
 
     # ── 系统接口 ──────────────────────────────────────────────

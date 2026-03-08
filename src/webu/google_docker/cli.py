@@ -1045,7 +1045,11 @@ def cmd_hub_docker_up(args):
         "WEBU_RUNTIME_ENV": "docker",
         "WEBU_HUB_HOST": "0.0.0.0",
         "WEBU_HUB_PORT": str(args.port),
+        "WEBU_HUB_REQUEST_TIMEOUT_SEC": str(max(1, int(args.request_timeout))),
     }
+    exclude_nodes = str(args.exclude_nodes or "").strip()
+    if exclude_nodes:
+        env_map["WEBU_HUB_EXCLUDE_NODES"] = exclude_nodes
     if admin_token:
         env_map["WEBU_HUB_ADMIN_TOKEN"] = admin_token
         env_map["WEBU_ADMIN_TOKEN"] = admin_token
@@ -1709,6 +1713,8 @@ def build_parser() -> argparse.ArgumentParser:
     hub_docker_up.add_argument("--bind-source", action="store_true")
     hub_docker_up.add_argument("--mount-configs", action="store_true")
     hub_docker_up.add_argument("--replace", action="store_true")
+    hub_docker_up.add_argument("--exclude-nodes", default="local-google-api")
+    hub_docker_up.add_argument("--request-timeout", type=int, default=60)
     hub_docker_up.add_argument("--admin-token", default="")
     hub_docker_up.set_defaults(func=cmd_hub_docker_up)
 

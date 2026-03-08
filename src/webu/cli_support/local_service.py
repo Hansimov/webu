@@ -51,7 +51,13 @@ def is_process_running(pid: int) -> bool:
         return False
 
 
-def start_service(spec: LocalServiceSpec, *, host: str, port: int) -> int:
+def start_service(
+    spec: LocalServiceSpec,
+    *,
+    host: str,
+    port: int,
+    extra_env: dict[str, str] | None = None,
+) -> int:
     command = [
         sys.executable,
         "-m",
@@ -65,11 +71,14 @@ def start_service(spec: LocalServiceSpec, *, host: str, port: int) -> int:
     ]
     _ensure_parent_dir(spec.log_file)
     log_fp = open(spec.log_file, "a", encoding="utf-8")
+    env = dict(os.environ)
+    env.update({key: str(value) for key, value in (extra_env or {}).items()})
     proc = subprocess.Popen(
         command,
         stdout=log_fp,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        env=env,
     )
     write_pid(spec.pid_file, proc.pid)
     return proc.pid

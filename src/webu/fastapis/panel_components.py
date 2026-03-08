@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import statistics
-
 from webu.fastapis.dashboard_ui import (
     THEME,
     format_ms,
@@ -12,29 +10,19 @@ from webu.fastapis.dashboard_ui import (
 )
 
 
-def _quantile_triplet(values: list[float]) -> tuple[float, float, float]:
-    clean = [max(0.0, float(value)) for value in values]
-    if not clean:
-        return (0.0, 0.0, 0.0)
-    low = min(clean)
-    mid = float(statistics.median(clean))
-    high = max(clean)
-    return (low, mid, high)
-
-
-def _normalize_height(value: float, low: float, mid: float, high: float) -> float:
+def _normalize_height(value: float, peak: float) -> float:
     value = max(0.0, float(value))
-    if high <= 0:
+    peak = max(0.0, float(peak))
+    if peak <= 0:
         return 0.22
-    if high == low:
+    if value <= 0:
+        return 0.12
+    if peak <= value:
+        return 1.0
+    if peak <= 1e-6:
         return 0.62
-    if value <= mid:
-        if mid <= low:
-            return 0.58
-        ratio = (value - low) / max(1e-6, mid - low)
-        return 0.18 + ratio * 0.40
-    ratio = (value - mid) / max(1e-6, high - mid)
-    return 0.58 + ratio * 0.42
+    ratio = value / peak
+    return 0.12 + ratio * 0.88
 
 
 def _request_color(rate: float, accepted: float) -> str:
@@ -124,20 +112,21 @@ def build_instances_metric_card(snapshot: dict):
     health = snapshot.get("health", {})
     healthy_count = int(health.get("healthy_backends", 0))
     total_count = int(health.get("backend_count", 0))
+    enabled_count = int(health.get("enabled_backends", total_count))
     tone = (
         "accent"
-        if healthy_count == total_count and total_count > 0
+        if healthy_count == enabled_count and enabled_count > 0
         else ("warn" if healthy_count > 0 else "danger")
     )
     return metric_card(
         "Instances",
-        f"{healthy_count}/{max(total_count, 1)}",
-        f"Strategy {snapshot.get('strategy', 'adaptive')}",
+        f"{healthy_count}/{max(enabled_count, 1)}",
+        "",
         tone,
     )
 
 
-def build_request_trend_cards(requests: dict, *, history_limit: int = 24) -> list:
+def build_request_trend_cards(requests: dict, *, history_limit: int = 60) -> list:
     history = list(requests.get("history", []))[-history_limit:]
     request_bars = build_request_trend_bars(history)
     latency_bars = build_latency_trend_bars(history)
@@ -151,15 +140,17 @@ def build_request_trend_cards(requests: dict, *, history_limit: int = 24) -> lis
         )
         for item in history
     ]
-    request_mid = int(statistics.median(request_values)) if request_values else 0
     request_peak = max(request_values) if request_values else 0
     latency_peak = max(latency_values) if latency_values else 0.0
     return [
         status_bar_strip_card(
             title="Request trend",
             bars=request_bars,
-            summary=f"1m windows · {int(requests.get('accepted_requests', 0))} total requests",
-            footer_left=f"Mid {request_mid} req/min",
+            summary=(
+                f"1m windows · {int(requests.get('accepted_requests', 0))} total requests"
+                f" · drag to pan"
+            ),
+            footer_left=f"{len(history)} windows loaded",
             footer_right=f"Peak {request_peak} req/min",
         ),
         status_bar_strip_card(
@@ -168,8 +159,9 @@ def build_request_trend_cards(requests: dict, *, history_limit: int = 24) -> lis
             summary=(
                 f"recent {format_ms(float(requests.get('recent_latency_ms', requests.get('last_latency_ms', 0.0))))}"
                 f" / mid {format_ms(float(requests.get('median_latency_ms', requests.get('avg_latency_ms', 0.0))))}"
+                f" · drag to pan"
             ),
-            footer_left=">3s warn · >6s danger",
+            footer_left=f"{len(history)} windows loaded",
             footer_right=f"Peak {format_ms(latency_peak)}",
         ),
     ]
@@ -177,7 +169,7 @@ def build_request_trend_cards(requests: dict, *, history_limit: int = 24) -> lis
 
 def build_request_trend_bars(history: list[dict]) -> list[dict]:
     values = [float(item.get("accepted_requests", 0.0)) for item in history]
-    low, mid, high = _quantile_triplet(values)
+    peak = max(values) if values else 0.0
     bars: list[dict] = []
     for item in history:
         accepted = float(item.get("accepted_requests", 0.0))
@@ -187,7 +179,7 @@ def build_request_trend_bars(history: list[dict]) -> list[dict]:
         bars.append(
             {
                 "label": str(item.get("label", "")),
-                "height": _normalize_height(accepted, low, mid, high),
+                "height": _normalize_height(accepted, peak),
                 "color": _request_color(rate, accepted),
                 "title": (
                     f"{item.get('label', '')}: {int(accepted)} req/min, "
@@ -206,7 +198,7 @@ def build_latency_trend_bars(history: list[dict]) -> list[dict]:
         )
         for item in history
     ]
-    low, mid, high = _quantile_triplet(values)
+    peak = max(values) if values else 0.0
     bars: list[dict] = []
     for item in history:
         recent_latency_ms = float(
@@ -219,7 +211,7 @@ def build_latency_trend_bars(history: list[dict]) -> list[dict]:
         bars.append(
             {
                 "label": str(item.get("label", "")),
-                "height": _normalize_height(display_latency_ms, low, mid, high),
+                "height": _normalize_height(display_latency_ms, peak),
                 "color": _latency_color(display_latency_ms),
                 "title": (
                     f"{item.get('label', '')}: recent {format_ms(recent_latency_ms)}, "
@@ -231,26 +223,39 @@ def build_latency_trend_bars(history: list[dict]) -> list[dict]:
 
 
 def build_backend_instance_cards(instances: list[dict]) -> list:
-    return [
-        instance_card(
-            name=item.get("name", "instance"),
-            caption=item.get("space_name") or item.get("kind", ""),
-            healthy=bool(item.get("healthy")),
-            stats=[
-                ("Requests", str(item.get("request_count", 0))),
-                (
-                    "Recent",
-                    format_ms(
-                        float(
-                            item.get(
-                                "last_request_latency_ms",
-                                item.get("avg_request_latency_ms", 0.0),
+    cards = []
+    for item in instances:
+        enabled = bool(item.get("enabled", True))
+        healthy = bool(item.get("healthy")) and enabled
+        if not enabled:
+            status_label = "disabled"
+            status_tone = "neutral"
+        else:
+            status_label = "healthy" if healthy else "unhealthy"
+            status_tone = "accent" if healthy else "danger"
+        cards.append(
+            instance_card(
+                name=item.get("name", "instance"),
+                caption=item.get("space_name") or item.get("kind", ""),
+                healthy=healthy,
+                status_label=status_label,
+                status_tone=status_tone,
+                note=str(item.get("disabled_reason", "")).strip(),
+                stats=[
+                    ("Requests", str(item.get("request_count", 0))),
+                    (
+                        "Recent",
+                        format_ms(
+                            float(
+                                item.get(
+                                    "last_request_latency_ms",
+                                    item.get("avg_request_latency_ms", 0.0),
+                                )
                             )
-                        )
+                        ),
                     ),
-                ),
-                ("Success", format_rate(float(item.get("success_rate", 0.0)))),
-            ],
+                    ("Success", format_rate(float(item.get("success_rate", 0.0)))),
+                ],
+            )
         )
-        for item in instances
-    ]
+    return cards
