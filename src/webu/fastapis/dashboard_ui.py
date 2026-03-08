@@ -5,6 +5,10 @@ from typing import Iterable
 from dash import Dash, dcc, html
 
 
+SHARED_ACCESS_STATE_ID = "webu-panel-access-state"
+SHARED_ACCESS_COOKIE = "webu_panel_access_state"
+
+
 THEME = {
     "bg": "#0b1120",
     "surface": "#111827",
@@ -40,6 +44,51 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
         <title>{{%title%}}</title>
         {{%favicon%}}
         {{%css%}}
+        <script>
+            (function () {{
+                const accessKey = {SHARED_ACCESS_STATE_ID!r};
+                const cookieKey = {SHARED_ACCESS_COOKIE!r};
+                function readCookie() {{
+                    const prefix = cookieKey + "=";
+                    const parts = document.cookie ? document.cookie.split("; ") : [];
+                    for (const part of parts) {{
+                        if (part.startsWith(prefix)) {{
+                            return decodeURIComponent(part.slice(prefix.length));
+                        }}
+                    }}
+                    return "";
+                }}
+                function canShareAcrossSpaces() {{
+                    return window.location.protocol === "https:" && window.location.hostname.endsWith(".hf.space");
+                }}
+                function writeCookie(value) {{
+                    if (!canShareAcrossSpaces() || !value) {{
+                        return;
+                    }}
+                    document.cookie =
+                        cookieKey +
+                        "=" +
+                        encodeURIComponent(value) +
+                        "; path=/; domain=.hf.space; max-age=2592000; SameSite=Lax; Secure";
+                }}
+                try {{
+                    const localValue = window.localStorage.getItem(accessKey) || "";
+                    const cookieValue = readCookie();
+                    if (cookieValue && cookieValue !== localValue) {{
+                        window.localStorage.setItem(accessKey, cookieValue);
+                    }} else if (!cookieValue && localValue) {{
+                        writeCookie(localValue);
+                    }}
+                    window.__webuAccessBridge = {{
+                        accessKey,
+                        cookieKey,
+                        readCookie,
+                        writeCookie,
+                        canShareAcrossSpaces,
+                    }};
+                }} catch (_err) {{}}
+            }})();
+        </script>
         <style>
             :root {{
                 color-scheme: dark;
@@ -102,6 +151,67 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-auth-status {{ font-size: 12px; color: var(--muted); }}
             .dash-auth-status.ok {{ color: var(--accent); }}
             .dash-auth-status.fail {{ color: var(--danger); }}
+            .dash-access-fab {{
+                position: fixed;
+                right: 24px;
+                bottom: 24px;
+                z-index: 1200;
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 11px 14px;
+                border-radius: 999px;
+                border: 1px solid var(--border-light);
+                background: rgba(15,23,42,0.88);
+                color: var(--text);
+                box-shadow: 0 16px 32px rgba(2,6,23,0.38);
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                cursor: pointer;
+                backdrop-filter: blur(12px);
+            }}
+            .dash-access-fab:hover {{ border-color: rgba(96,165,250,0.42); background: rgba(15,23,42,0.96); }}
+            .dash-access-fab-state {{ width: 9px; height: 9px; border-radius: 999px; }}
+            .dash-access-overlay {{
+                position: fixed;
+                inset: 0;
+                z-index: 1250;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+                background: rgba(2,6,23,0.56);
+                backdrop-filter: blur(10px);
+            }}
+            .dash-access-modal {{
+                width: min(440px, 100%);
+                padding: 18px;
+                border-radius: 20px;
+                border: 1px solid rgba(148,163,184,0.18);
+                background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(15,23,42,0.92));
+                box-shadow: 0 30px 60px rgba(2,6,23,0.48);
+            }}
+            .dash-access-head {{ display: flex; align-items: start; justify-content: space-between; gap: 14px; }}
+            .dash-access-title {{ font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }}
+            .dash-access-kicker {{ margin-top: 6px; font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; }}
+            .dash-access-close {{
+                padding: 7px 10px;
+                border-radius: 999px;
+                border: 1px solid var(--border-light);
+                background: rgba(255,255,255,0.03);
+                color: var(--muted);
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+            }}
+            .dash-access-copy {{ margin-top: 14px; color: var(--muted); font-size: 13px; line-height: 1.6; }}
+            .dash-access-points {{ margin-top: 14px; display: grid; gap: 10px; }}
+            .dash-access-point {{ padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(148,163,184,0.14); background: rgba(255,255,255,0.03); }}
+            .dash-access-point-title {{ font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; }}
+            .dash-access-point-copy {{ margin-top: 5px; font-size: 13px; line-height: 1.5; color: var(--text); }}
+            .dash-access-actions {{ margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
             .dash-meta-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
             .dash-meta-chip {{ padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; line-height: 1; }}
             .dash-inst {{ padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }}
@@ -158,6 +268,9 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             @media (max-width: 768px) {{
                 .dash-shell {{ padding: 16px; }}
                 .dash-grid.chart {{ grid-template-columns: 1fr; }}
+                .dash-access-overlay {{ padding: 16px; align-items: end; }}
+                .dash-access-modal {{ width: 100%; }}
+                .dash-access-fab {{ right: 16px; bottom: 16px; }}
                 .dash-controls {{ align-items: stretch; }}
                 .dash-controls-group {{ width: 100%; }}
                 .dash-auth-form {{ align-items: stretch; }}
@@ -175,7 +288,65 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             {{%scripts%}}
             {{%renderer%}}
             <script>
+                function formatWebuUptime(startedTs) {{
+                    const startedMs = Number(startedTs || 0) * 1000;
+                    if (!startedMs || Number.isNaN(startedMs)) {{
+                        return "0s";
+                    }}
+                    const elapsedSec = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+                    const days = Math.floor(elapsedSec / 86400);
+                    const hours = Math.floor((elapsedSec % 86400) / 3600);
+                    const minutes = Math.floor((elapsedSec % 3600) / 60);
+                    const seconds = elapsedSec % 60;
+                    const parts = [];
+                    if (days) parts.push(days + "d");
+                    if (hours || parts.length) parts.push(hours + "h");
+                    if (minutes || parts.length) parts.push(minutes + "m");
+                    parts.push(seconds + "s");
+                    return parts.join(" ");
+                }}
+                function formatWebuShanghaiNow() {{
+                    try {{
+                        const dtf = new Intl.DateTimeFormat("sv-SE", {{
+                            timeZone: "Asia/Shanghai",
+                            hour12: false,
+                            year: "numeric",
+                            month: "2-digit",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                        }});
+                        return dtf.format(new Date()).replace("T", " ");
+                    }} catch (_err) {{
+                        return new Date().toISOString().slice(0, 19).replace("T", " ");
+                    }}
+                }}
+                function refreshWebuLiveUptime() {{
+                    document.querySelectorAll("[data-uptime-value='1']").forEach(function (node) {{
+                        node.textContent = formatWebuUptime(node.dataset.uptimeStartedTs || "0");
+                    }});
+                    document.querySelectorAll("[data-uptime-note='1']").forEach(function (node) {{
+                        node.textContent = formatWebuShanghaiNow();
+                    }});
+                }}
                 document.addEventListener("DOMContentLoaded", function () {{
+                    let lastSharedAccessState = null;
+                    window.setInterval(function () {{
+                        try {{
+                            const bridge = window.__webuAccessBridge;
+                            if (!bridge) {{
+                                return;
+                            }}
+                            const current = window.localStorage.getItem(bridge.accessKey) || "";
+                            if (current && current !== lastSharedAccessState) {{
+                                bridge.writeCookie(current);
+                                lastSharedAccessState = current;
+                            }}
+                        }} catch (_err) {{}}
+                    }}, 1000);
+                    refreshWebuLiveUptime();
+                    window.setInterval(refreshWebuLiveUptime, 1000);
                     document.querySelectorAll(".dash-strip-scroll").forEach(function (node) {{
                         let dragging = false;
                         let startX = 0;
@@ -259,13 +430,32 @@ def meta_row(items: Iterable[str]):
 
 
 def metric_card(label: str, value: str, note: str = "", tone: str = "accent"):
+    return metric_card_with_meta(label, value, note, tone)
+
+
+def metric_card_with_meta(
+    label: str,
+    value: str,
+    note: str = "",
+    tone: str = "accent",
+    *,
+    value_props: dict | None = None,
+    note_props: dict | None = None,
+):
     color = THEME.get(tone, THEME["accent"])
     children = [
         html.Div(label, className="dash-card-label"),
-        html.Div(value, className="dash-card-value", style={"color": color}),
+        html.Div(
+            value,
+            className="dash-card-value",
+            style={"color": color},
+            **(value_props or {}),
+        ),
     ]
     if note:
-        children.append(html.Div(note, className="dash-card-note"))
+        children.append(
+            html.Div(note, className="dash-card-note", **(note_props or {}))
+        )
     return html.Div(children, className="dash-card")
 
 
@@ -501,6 +691,136 @@ def privacy_gate_card(
         ],
         className="dash-card dash-auth-card",
     )
+
+
+def privacy_gate_popup(
+    *,
+    component_prefix: str,
+    unlocked: bool,
+    open_modal: bool,
+    message: str = "",
+    token_configured: bool = True,
+):
+    dot_color = (
+        THEME["accent"]
+        if unlocked or not token_configured
+        else (THEME["danger"] if message else THEME["warn"])
+    )
+    fab_label = (
+        "Access open"
+        if not token_configured
+        else ("Access unlocked" if unlocked else "Unlock access")
+    )
+    launcher = html.Button(
+        [
+            html.Span(
+                className="dash-access-fab-state",
+                style={"background": dot_color},
+            ),
+            html.Span(fab_label),
+        ],
+        id=f"{component_prefix}-access-open",
+        n_clicks=0,
+        className="dash-access-fab",
+        title="Open access controls",
+    )
+
+    status_class = "dash-auth-status"
+    if unlocked or not token_configured:
+        status_text = "Private sections are available in this browser."
+        status_class += " ok"
+    elif message:
+        status_text = message
+        status_class += " fail"
+    else:
+        status_text = "Server IP and request history stay hidden until a valid admin token is entered."
+
+    controls = html.Div(
+        [
+            dcc.Input(
+                id=f"{component_prefix}-auth-token",
+                type="password",
+                placeholder="Enter admin token",
+                className="dash-auth-input",
+            ),
+            html.Button(
+                "Unlock",
+                id=f"{component_prefix}-auth-submit",
+                n_clicks=0,
+                className="dash-button",
+                disabled=not token_configured,
+                style=None if token_configured else {"display": "none"},
+            ),
+        ],
+        className="dash-auth-form",
+        style=None if token_configured else {"display": "none"},
+    )
+
+    overlay = html.Div(
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Div("Panel access", className="dash-access-title"),
+                                html.Div("Hints", className="dash-access-kicker"),
+                            ]
+                        ),
+                        html.Button(
+                            "Hide",
+                            id=f"{component_prefix}-access-close",
+                            n_clicks=0,
+                            className="dash-access-close",
+                        ),
+                    ],
+                    className="dash-access-head",
+                ),
+                html.Div(
+                    "Unlock is now a popup so the dashboard itself stays focused. You can reopen it any time from the floating button.",
+                    className="dash-access-copy",
+                ),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Div(
+                                    "Protected areas",
+                                    className="dash-access-point-title",
+                                ),
+                                html.Div(
+                                    "Server IP and request history remain hidden until access is unlocked.",
+                                    className="dash-access-point-copy",
+                                ),
+                            ],
+                            className="dash-access-point",
+                        ),
+                        html.Div(
+                            [
+                                html.Div(
+                                    "Browser memory",
+                                    className="dash-access-point-title",
+                                ),
+                                html.Div(
+                                    "This browser remembers the state for later visits. On Hugging Face Spaces it is also mirrored across hf.space subdomains.",
+                                    className="dash-access-point-copy",
+                                ),
+                            ],
+                            className="dash-access-point",
+                        ),
+                    ],
+                    className="dash-access-points",
+                ),
+                html.Div(status_text, className=status_class),
+                html.Div(controls, className="dash-access-actions"),
+            ],
+            className="dash-access-modal",
+        ),
+        className="dash-access-overlay",
+        style=None if open_modal else {"display": "none"},
+    )
+
+    return html.Div([launcher, overlay])
 
 
 def request_table(

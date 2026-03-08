@@ -6,6 +6,7 @@ from webu.fastapis.dashboard_ui import (
     format_rate,
     instance_card,
     metric_card,
+    metric_card_with_meta,
     status_bar_strip_card,
 )
 
@@ -49,11 +50,19 @@ def _latency_color(latency_ms: float) -> str:
 
 def build_time_metric_cards(snapshot: dict) -> list:
     return [
-        metric_card(
+        metric_card_with_meta(
             "UPTIME",
             str(snapshot.get("uptime_human", "0s")),
             str(snapshot.get("current_time_human", "")),
             "accent",
+            value_props={
+                "data-uptime-value": "1",
+                "data-uptime-started-ts": str(snapshot.get("started_ts", 0.0) or 0.0),
+            },
+            note_props={
+                "data-uptime-note": "1",
+                "data-uptime-started-ts": str(snapshot.get("started_ts", 0.0) or 0.0),
+            },
         )
     ]
 
