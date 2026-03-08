@@ -113,17 +113,19 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                 -webkit-font-smoothing: antialiased;
             }}
             a {{ color: var(--accent); text-decoration: none; }}
-            .dash-shell {{ max-width: 1200px; margin: 0 auto; padding: 28px 24px; }}
+            .dash-shell {{ max-width: 1200px; margin: 0 auto; padding: 28px 24px; overflow-x: clip; }}
             .dash-header {{ margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }}
             .dash-title-row {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
             .dash-title {{ font-size: 24px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2; }}
             .dash-badge {{ display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }}
             .dash-subtitle {{ margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.5; }}
             .dash-grid {{ display: grid; gap: 14px; }}
+            .dash-grid > * {{ min-width: 0; }}
             .dash-grid.metric {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }}
             .dash-grid.chart {{ grid-template-columns: repeat(2, 1fr); }}
             .dash-grid.instance {{ grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }}
             .dash-card {{
+                min-width: 0;
                 padding: 16px;
                 border-radius: 12px;
                 background: var(--surface);
@@ -232,10 +234,10 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-table .col-query {{ max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
             .dash-table .col-result {{ min-width: 280px; max-width: 420px; white-space: normal; }}
             .dash-empty {{ padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }}
-            .dash-strip-card {{ display: flex; flex-direction: column; gap: 14px; min-height: 230px; }}
+            .dash-strip-card {{ display: flex; flex-direction: column; gap: 14px; min-height: 230px; min-width: 0; overflow: hidden; }}
             .dash-strip-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }}
             .dash-strip-summary {{ font-size: 12px; color: var(--muted); }}
-            .dash-strip-scroll {{ overflow-x: auto; overflow-y: hidden; cursor: grab; padding-bottom: 4px; scrollbar-width: thin; }}
+            .dash-strip-scroll {{ width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden; cursor: grab; padding-bottom: 4px; scrollbar-width: thin; }}
             .dash-strip-scroll.is-dragging {{ cursor: grabbing; }}
             .dash-strip-wrap {{
                 display: flex;
@@ -540,6 +542,7 @@ def instance_card(
     status_label: str | None = None,
     status_tone: str | None = None,
     note: str = "",
+    style: dict | None = None,
 ):
     tone = status_tone or ("accent" if healthy else "danger")
     soft_map = {
@@ -581,6 +584,8 @@ def instance_card(
         ),
         "boxShadow": glow_map.get(tone, glow_map["accent"]),
     }
+    if style:
+        card_style.update(style)
     stat_items = [
         html.Div(
             [

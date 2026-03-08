@@ -4,6 +4,7 @@ import time
 from fastapi.testclient import TestClient
 
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH
+from webu.fastapis.panel_components import build_backend_instance_cards
 from webu.google_hub.manager import (
     GoogleHubBackend,
     GoogleHubManager,
@@ -98,6 +99,19 @@ def _collect_ids(component):
     elif children is not None:
         ids.extend(_collect_ids(children))
     return ids
+
+
+def _collect_components_by_class(component, class_name: str):
+    matches = []
+    if getattr(component, "className", None) == class_name:
+        matches.append(component)
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            matches.extend(_collect_components_by_class(child, class_name))
+    elif children is not None:
+        matches.extend(_collect_components_by_class(children, class_name))
+    return matches
 
 
 def test_hub_admin_backends_requires_token(monkeypatch, tmp_path):
@@ -460,7 +474,6 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     body = build_google_hub_panel_body(
         snapshot,
         auth_unlocked=True,
-        auth_message="",
         admin_token_configured=True,
         page=1,
         page_size=10,
@@ -472,6 +485,7 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "1h 0m 0s" in text_values
     assert "disabled" in text_values
     assert "OpenAI news headline | short snippet | example.com" in text_values
+    assert "1/1 HEALTHY" in text_values
 
 
 def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
@@ -513,17 +527,59 @@ def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
     body = build_google_hub_panel_body(
         snapshot,
         auth_unlocked=False,
-        auth_message="",
         admin_token_configured=True,
         page=1,
         page_size=10,
     )
     text_values = _collect_text(body)
-    ids = _collect_ids(body)
 
     assert "**.**.**.**" in text_values
     assert "secret preview" not in text_values
-    assert "google-hub-panel-auth-submit" in ids
+
+
+def test_hub_instance_cards_place_disabled_last_and_dim_them():
+    cards = build_backend_instance_cards(
+        [
+            {
+                "name": "local",
+                "kind": "google-api",
+                "healthy": False,
+                "enabled": False,
+                "disabled_reason": "excluded by hub settings",
+                "request_count": 5,
+                "success_rate": 100.0,
+                "avg_request_latency_ms": 110.0,
+            },
+            {
+                "name": "space2",
+                "space_name": "owner/space2",
+                "healthy": False,
+                "enabled": True,
+                "disabled_reason": "",
+                "request_count": 1,
+                "success_rate": 0.0,
+                "avg_request_latency_ms": 420.0,
+            },
+            {
+                "name": "space1",
+                "space_name": "owner/space1",
+                "healthy": True,
+                "enabled": True,
+                "disabled_reason": "",
+                "request_count": 3,
+                "success_rate": 66.7,
+                "avg_request_latency_ms": 260.0,
+            },
+        ]
+    )
+
+    instance_names = []
+    for card in cards:
+        name_nodes = _collect_components_by_class(card, "dash-inst-name")
+        instance_names.append(name_nodes[0].children)
+
+    assert instance_names == ["space1", "space2", "local"]
+    assert cards[-1].style["opacity"] == 0.58
 
 
 def test_hub_panel_root_redirect_and_page(monkeypatch, tmp_path):

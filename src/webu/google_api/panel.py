@@ -53,6 +53,7 @@ def _build_body(
     snapshot: dict,
     *,
     auth_unlocked: bool,
+    admin_token_configured: bool,
     page: int,
     page_size: int,
 ):
@@ -297,6 +298,7 @@ def mount_google_api_panel(
         return _build_body(
             snapshot_provider(),
             auth_unlocked=bool(state.get("unlocked")) or not bool(admin_token),
+            admin_token_configured=bool(admin_token),
             page=max(1, int(page or 1)),
             page_size=max(1, int(page_size or 10)),
         )

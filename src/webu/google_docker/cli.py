@@ -715,17 +715,18 @@ def _sync_space_runtime_config(
     hf_captcha_model = os.getenv("WEBU_HF_CAPTCHA_VLM_MODEL", "").strip()
     hf_captcha_api_format = os.getenv("WEBU_HF_CAPTCHA_VLM_API_FORMAT", "").strip()
 
+    space_host = resolve_hf_space_settings(space_name).space_host
     variable_map = {
         "WEBU_RUNTIME_ENV": "hf-space",
+        "WEBU_HF_SPACE_NAME": space_name,
         "WEBU_DOCKER_PORT": str(app_port),
         "WEBU_DOCKER_APP_PORT": str(app_port),
         "WEBU_GOOGLE_PROXY_MODE": os.getenv("WEBU_GOOGLE_PROXY_MODE", "disabled"),
         "WEBU_GOOGLE_HEADLESS": "true",
         "WEBU_SERVICE_LOG": "/tmp/webu-google-docker.log",
         "WEBU_GOOGLE_SERVICE_TYPE": google_service["type"],
+        "WEBU_GOOGLE_SERVICE_URL": space_host,
     }
-    if google_service["url"]:
-        variable_map["WEBU_GOOGLE_SERVICE_URL"] = google_service["url"]
 
     selected_endpoint = hf_captcha_endpoint
     if not selected_endpoint:

@@ -129,7 +129,7 @@ def build_instances_metric_card(snapshot: dict):
     )
     return metric_card(
         "Instances",
-        f"{healthy_count}/{max(enabled_count, 1)}",
+        f"{healthy_count}/{enabled_count if enabled_count > 0 else 0}",
         "",
         tone,
     )
@@ -233,7 +233,15 @@ def build_latency_trend_bars(history: list[dict]) -> list[dict]:
 
 def build_backend_instance_cards(instances: list[dict]) -> list:
     cards = []
-    for item in instances:
+    ordered_instances = sorted(
+        instances,
+        key=lambda item: (
+            not bool(item.get("enabled", True)),
+            not bool(item.get("healthy", False)),
+            str(item.get("name", "")),
+        ),
+    )
+    for item in ordered_instances:
         enabled = bool(item.get("enabled", True))
         healthy = bool(item.get("healthy")) and enabled
         if not enabled:
@@ -250,6 +258,7 @@ def build_backend_instance_cards(instances: list[dict]) -> list:
                 status_label=status_label,
                 status_tone=status_tone,
                 note=str(item.get("disabled_reason", "")).strip(),
+                style={"opacity": 0.58} if not enabled else None,
                 stats=[
                     ("Requests", str(item.get("request_count", 0))),
                     (

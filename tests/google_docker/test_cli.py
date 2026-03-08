@@ -198,13 +198,24 @@ def test_sync_space_runtime_config_sets_aligned_ports(monkeypatch):
             "api_token": "search-secret",
         },
     )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.resolve_hf_space_settings",
+        lambda space_name: SimpleNamespace(
+            space_host=f"https://{space_name.replace('/', '-')}.hf.space"
+        ),
+    )
     monkeypatch.setattr("webu.google_docker.cli.load_json_config", lambda name: {})
 
     api = _Api()
     _sync_space_runtime_config(api, "owner/demo", "admin-secret", app_port=18200)
 
+    assert api.variables[("owner/demo", "WEBU_HF_SPACE_NAME")] == "owner/demo"
     assert api.variables[("owner/demo", "WEBU_DOCKER_PORT")] == "18200"
     assert api.variables[("owner/demo", "WEBU_DOCKER_APP_PORT")] == "18200"
+    assert (
+        api.variables[("owner/demo", "WEBU_GOOGLE_SERVICE_URL")]
+        == "https://owner-demo.hf.space"
+    )
     assert api.secrets[("owner/demo", "WEBU_ADMIN_TOKEN")] == "admin-secret"
 
 

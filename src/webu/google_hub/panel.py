@@ -55,6 +55,7 @@ def _build_body(
     snapshot: dict,
     *,
     auth_unlocked: bool,
+    admin_token_configured: bool,
     page: int,
     page_size: int,
 ):
@@ -71,7 +72,7 @@ def _build_body(
     )
 
     healthy_count = int(health.get("healthy_backends", 0))
-    total_count = int(health.get("backend_count", len(instances)))
+    total_count = int(health.get("enabled_backends", len(instances)))
     badge_tone = (
         "accent"
         if healthy_count == total_count and total_count > 0
@@ -312,6 +313,7 @@ def mount_google_hub_panel(
         return _build_body(
             snapshot_provider(),
             auth_unlocked=bool(state.get("unlocked")) or not bool(admin_token),
+            admin_token_configured=bool(admin_token),
             page=max(1, int(page or 1)),
             page_size=max(1, int(page_size or 10)),
         )
