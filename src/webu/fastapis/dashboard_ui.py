@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from dash import Dash, dcc, html
-from plotly import graph_objects as go
+from dash import Dash, html
 
 
 THEME = {
@@ -105,19 +104,37 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-table tr:hover td {{ background: rgba(255,255,255,0.02); }}
             .dash-table .col-query {{ max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
             .dash-empty {{ padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }}
-            .dash-strip-card {{ display: flex; flex-direction: column; gap: 12px; min-height: 190px; }}
+            .dash-strip-card {{ display: flex; flex-direction: column; gap: 14px; min-height: 230px; }}
             .dash-strip-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }}
             .dash-strip-summary {{ font-size: 12px; color: var(--muted); }}
-            .dash-strip-wrap {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(8px, 1fr)); align-items: end; gap: 6px; min-height: 118px; padding-top: 8px; }}
-            .dash-strip-col {{ display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }}
-            .dash-strip-bar {{ width: 100%; min-height: 10px; border-radius: 999px; background: var(--info); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.12); }}
-            .dash-strip-label {{ font-size: 10px; color: var(--muted); writing-mode: vertical-rl; transform: rotate(180deg); line-height: 1; letter-spacing: 0.03em; }}
+            .dash-strip-wrap {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(18px, 1fr));
+                align-items: end;
+                gap: 8px;
+                min-height: 150px;
+                padding: 14px 12px 10px;
+                border-radius: 14px;
+                background:
+                    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.00)),
+                    repeating-linear-gradient(
+                        to top,
+                        rgba(148,163,184,0.08) 0,
+                        rgba(148,163,184,0.08) 1px,
+                        transparent 1px,
+                        transparent 24%
+                    );
+                border: 1px solid rgba(148,163,184,0.10);
+            }}
+            .dash-strip-col {{ display: flex; flex-direction: column; align-items: stretch; justify-content: flex-end; gap: 8px; min-width: 0; }}
+            .dash-strip-bar {{ width: 100%; min-height: 14px; border-radius: 10px 10px 4px 4px; background: var(--info); box-shadow: 0 10px 24px rgba(15,23,42,0.32), inset 0 -1px 0 rgba(255,255,255,0.12); }}
+            .dash-strip-label {{ font-size: 10px; color: var(--muted); line-height: 1; letter-spacing: 0.03em; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
             .dash-strip-foot {{ display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }}
             @media (max-width: 768px) {{
                 .dash-shell {{ padding: 16px; }}
                 .dash-grid.chart {{ grid-template-columns: 1fr; }}
                 .dash-inst-stats {{ grid-template-columns: repeat(2, 1fr); }}
-                .dash-strip-wrap {{ gap: 4px; }}
+                .dash-strip-wrap {{ gap: 6px; padding-left: 8px; padding-right: 8px; }}
             }}
         </style>
     </head>
@@ -201,20 +218,6 @@ def section(title: str, children, kind: str = "chart"):
     )
 
 
-def graph_card(title: str, figure: go.Figure):
-    return html.Div(
-        [
-            html.Div(title, className="dash-card-label"),
-            dcc.Graph(
-                figure=figure,
-                config={"displayModeBar": False},
-                style={"height": "200px", "marginTop": "8px"},
-            ),
-        ],
-        className="dash-card",
-    )
-
-
 def status_bar_strip_card(
     *,
     title: str,
@@ -224,7 +227,7 @@ def status_bar_strip_card(
     footer_right: str = "",
 ):
     if not bars:
-        bars = [{"label": "00:00:00", "height": 0.2, "color": THEME["border_light"]}]
+        bars = [{"label": "00:00", "height": 0.2, "color": THEME["border_light"]}]
 
     columns = []
     for item in bars[-24:]:
@@ -358,112 +361,6 @@ def request_table(records: list[dict], show_backend: bool = False) -> html.Div:
         ),
         className="dash-table-wrap",
     )
-
-
-def base_figure() -> go.Figure:
-    figure = go.Figure()
-    figure.update_layout(
-        margin={"l": 12, "r": 12, "t": 12, "b": 12},
-        paper_bgcolor=THEME["surface"],
-        plot_bgcolor=THEME["surface_alt"],
-        font={
-            "family": '"Inter", "SF Pro Display", -apple-system, "Segoe UI", sans-serif',
-            "color": THEME["text"],
-        },
-    )
-    return figure
-
-
-def donut_figure(
-    *, labels: list[str], values: list[float], colors: list[str]
-) -> go.Figure:
-    figure = base_figure()
-    figure.add_trace(
-        go.Pie(
-            labels=labels,
-            values=values,
-            hole=0.68,
-            textinfo="label+value",
-            marker={"colors": colors},
-            sort=False,
-        )
-    )
-    figure.update_layout(showlegend=False)
-    return figure
-
-
-def gauge_figure(
-    *, value: float, maximum: float, color: str, suffix: str = ""
-) -> go.Figure:
-    figure = base_figure()
-    figure.add_trace(
-        go.Indicator(
-            mode="gauge+number",
-            value=max(0.0, float(value)),
-            number={"suffix": suffix},
-            gauge={
-                "axis": {
-                    "range": [0, max(1.0, float(maximum))],
-                    "tickcolor": THEME["muted"],
-                },
-                "bar": {"color": color},
-                "bgcolor": THEME["surface_alt"],
-                "borderwidth": 0,
-                "steps": [
-                    {
-                        "range": [0, max(1.0, float(maximum))],
-                        "color": THEME["surface_alt"],
-                    }
-                ],
-            },
-        )
-    )
-    return figure
-
-
-def bar_figure(
-    *,
-    labels: list[str],
-    values: list[float],
-    colors: list[str],
-    horizontal: bool = False,
-    axis_title: str = "",
-) -> go.Figure:
-    figure = base_figure()
-    if horizontal:
-        figure.add_trace(
-            go.Bar(x=values, y=labels, orientation="h", marker={"color": colors})
-        )
-        figure.update_layout(xaxis_title=axis_title, yaxis_title="")
-    else:
-        figure.add_trace(go.Bar(x=labels, y=values, marker={"color": colors}))
-        figure.update_layout(yaxis_title=axis_title, xaxis_title="")
-    return figure
-
-
-def line_figure(
-    *, labels: list[str], series: list[dict], axis_title: str = ""
-) -> go.Figure:
-    figure = base_figure()
-    for item in series:
-        figure.add_trace(
-            go.Scatter(
-                x=labels,
-                y=item.get("values", []),
-                mode="lines+markers",
-                name=item.get("name", "series"),
-                line={"color": item.get("color", THEME["accent"]), "width": 2.5},
-                marker={"size": 6},
-                fill=item.get("fill", None),
-            )
-        )
-    figure.update_layout(
-        yaxis_title=axis_title,
-        xaxis_title="",
-        legend={"orientation": "h", "y": 1.12, "x": 0},
-        margin={"l": 12, "r": 12, "t": 24, "b": 12},
-    )
-    return figure
 
 
 def format_ms(value: float) -> str:

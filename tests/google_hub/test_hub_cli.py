@@ -28,6 +28,6 @@ def test_hub_cli_help_lists_benchmark_and_backends():
     )
     assert result.returncode == 0
     output = result.stdout.lower()
-    assert "gghu" in output
+    assert "gghb" in output
     assert "benchmark" in output
     assert "backends" in output

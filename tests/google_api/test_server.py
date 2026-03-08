@@ -256,8 +256,11 @@ class TestGoogleSearchServerUnit:
 
     def test_panel_body_includes_uptime_and_status_bars(self):
         snapshot = {
-            "updated_at_human": "2026-03-09 09:00:00 +08 Asia/Shanghai",
-            "started_at_human": "2026-03-09 08:30:00 +08 Asia/Shanghai",
+            "updated_at_human": "2026-03-09 09:00:00",
+            "current_time_human": "2026-03-09 09:00:00",
+            "timezone_human": "UTC+08 · Asia/Shanghai",
+            "timezone_human": "UTC+08 Shanghai",
+            "started_at_human": "2026-03-09 08:30:00",
             "uptime_human": "30m 0s",
             "runtime_env": "hf-space",
             "node": {"value": "space-node"},
@@ -271,6 +274,8 @@ class TestGoogleSearchServerUnit:
                 "failed_requests": 1,
                 "success_rate": 83.3,
                 "avg_latency_ms": 210.0,
+                "median_latency_ms": 180.0,
+                "recent_latency_ms": 180.0,
                 "min_latency_ms": 100.0,
                 "max_latency_ms": 480.0,
                 "last_latency_ms": 180.0,
@@ -281,6 +286,8 @@ class TestGoogleSearchServerUnit:
                         "successful_requests": 2,
                         "success_rate": 100.0,
                         "avg_latency_ms": 120.0,
+                        "median_latency_ms": 100.0,
+                        "recent_latency_ms": 100.0,
                         "last_latency_ms": 100.0,
                     },
                     {
@@ -289,6 +296,8 @@ class TestGoogleSearchServerUnit:
                         "successful_requests": 3,
                         "success_rate": 75.0,
                         "avg_latency_ms": 240.0,
+                        "median_latency_ms": 220.0,
+                        "recent_latency_ms": 260.0,
                         "last_latency_ms": 260.0,
                     },
                     {
@@ -297,6 +306,8 @@ class TestGoogleSearchServerUnit:
                         "successful_requests": 5,
                         "success_rate": 83.3,
                         "avg_latency_ms": 210.0,
+                        "median_latency_ms": 180.0,
+                        "recent_latency_ms": 180.0,
                         "last_latency_ms": 180.0,
                     },
                 ],
@@ -308,7 +319,7 @@ class TestGoogleSearchServerUnit:
         class_names = _collect_class_names(body)
         text_values = _collect_text(body)
         assert any("dash-strip-card" in value for value in class_names)
-        assert "Uptime" in text_values
+        assert "UPTIME" in text_values
         assert "30m 0s" in text_values
 
 

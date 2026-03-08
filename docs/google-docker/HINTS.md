@@ -6,17 +6,17 @@
 
 优先顺序：
 
-1. 单实例 google_api 用 `ggsc`；hub 本身用 `gghu`；容器和 HF 部署用 `ggdk`。
-2. Docker 本地联调用 `ggdk docker-up`、`ggdk hub-docker-up`、`gghu check`。
+1. 单实例 google_api 用 `ggsc`；hub 本身用 `gghb`；容器和 HF 部署用 `ggdk`。
+2. Docker 本地联调用 `ggdk api-docker-up`、`ggdk hub-docker-up`、`gghb check`。
 3. Space 仓库排查用 `ggdk hf-files --space owner/space1 --prefix bootstrap/`。
 4. 配置排查用 `ggdk config-init` 和 `ggdk config-check`。
 
 ## 常见排查动作
 
 ```bash
-gghu check
-gghu backends
-gghu benchmark --query "OpenAI news" --requests 12 --concurrency 4
+gghb check
+gghb backends
+gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4
 ggdk hf-logs --space owner/space1 --lines 80
 ggdk hf-files --space owner/space2 --prefix bootstrap/
 ```
@@ -24,8 +24,8 @@ ggdk hf-files --space owner/space2 --prefix bootstrap/
 ## 推荐诊断顺序
 
 1. `ggdk config-init --name google_hub` 或 `ggdk config-check`
-2. `gghu check`
-3. `gghu benchmark --query "OpenAI news" --requests 12 --concurrency 4`
+2. `gghb check`
+3. `gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4`
 4. `ggdk hf-doctor --space owner/space1 --check-auth`
 5. `ggdk hf-doctor --space owner/space2 --check-auth`
 

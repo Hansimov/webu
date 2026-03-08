@@ -218,8 +218,8 @@ def cmd_benchmark(args):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gghu",
-        description="gghu (GooGle-HUb) — 管理本地 google_hub 服务并执行基准测试",
+        prog="gghb",
+        description="gghb (GooGle-HuB) — 管理本地 google_hub 服务并执行基准测试",
     )
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 

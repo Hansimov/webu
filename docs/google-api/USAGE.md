@@ -6,7 +6,7 @@
 2. 直接执行单实例搜索调试。
 3. 查看和检查本地代理状态。
 
-如果你要管理中心化 hub，请改用 `gghu`。
+如果你要管理中心化 hub，请改用 `gghb`。
 
 如果你要管理本地 Docker、HF Spaces、配置模板和部署诊断，请改用 `ggdk`。
 
@@ -42,12 +42,12 @@ ggsc stop
 
 ```bash
 # 本地 hub 调试、查询、benchmark
-gghu check
-gghu search "OpenAI news"
-gghu benchmark --query "OpenAI news" --requests 20 --concurrency 5
+gghb check
+gghb search "OpenAI news"
+gghb benchmark --query "OpenAI news" --requests 20 --concurrency 5
 
 # Docker / HF / 配置管理
-ggdk docker-up --mount-configs --replace
+ggdk api-docker-up --mount-configs --replace
 ggdk hub-docker-up --mount-configs --replace
 ggdk hf-sync-all --restart
 ```

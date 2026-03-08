@@ -60,7 +60,7 @@ CLI 在同步 HF Space 时会：
 当前 CLI 责任边界如下：
 
 1. `ggsc`：只管理单实例 `google_api` 本地进程、单实例搜索和代理检查。
-2. `gghu`：只管理本地 `google_hub` 进程、hub 查询、后端状态和 benchmark。
+2. `gghb`：只管理本地 `google_hub` 进程、hub 查询、后端状态和 benchmark。
 3. `ggdk`：只管理 Docker、本地容器化运行、HF Space 同步、远端诊断、配置模板和文档生成。
 
 这样拆分的原因：
@@ -81,17 +81,17 @@ CLI 在同步 HF Space 时会：
 
 本地 Docker 工作流也做了同样的简化：
 
-1. `ggdk docker-up` 用默认参数完成 build + run。
+1. `ggdk api-docker-up` 用默认参数完成 build + run。
 2. `ggdk docker-down` 统一 stop/remove。
 3. `ggdk docker-check` 聚合容器运行状态、本地 `/health` 和 `/admin/runtime` 检查。
 4. `ggdk hub-docker-up` / `ggdk hub-docker-down` 只负责 hub 容器生命周期。
 
-hub 本身的本地交互则由 `gghu` 负责：
+hub 本身的本地交互则由 `gghb` 负责：
 
-1. `gghu check` 聚合 `/health` 和 `/admin/backends`。
-2. `gghu backends` 查看当前路由候选状态。
-3. `gghu search` 用真实查询穿过 hub。
-4. `gghu benchmark` 做顺序/并发压测，验证路由优化和负载均衡表现。
+1. `gghb check` 聚合 `/health` 和 `/admin/backends`。
+2. `gghb backends` 查看当前路由候选状态。
+3. `gghb search` 用真实查询穿过 hub。
+4. `gghb benchmark` 做顺序/并发压测，验证路由优化和负载均衡表现。
 
 ## 管理接口
 

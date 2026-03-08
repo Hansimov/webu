@@ -325,9 +325,9 @@ def test_cli_parser_supports_hf_search():
 def test_cli_parser_supports_hf_check_and_docker_up():
     parser = build_parser()
     hf_args = parser.parse_args(["hf-check", "--check-auth"])
-    docker_args = parser.parse_args(["docker-up", "--skip-build"])
+    docker_args = parser.parse_args(["api-docker-up", "--skip-build"])
     explicit_args = parser.parse_args(
-        ["docker-up", "--mount-configs", "--replace", "--bind-source"]
+        ["api-docker-up", "--mount-configs", "--replace", "--bind-source"]
     )
     assert hf_args.check_auth is True
     assert docker_args.skip_build is True
@@ -375,8 +375,8 @@ def test_root_help_contains_quick_start_examples():
     parser = build_parser()
     help_text = parser.format_help()
     assert "Quick Start:" in help_text
-    assert "ggdk docker-up --mount-configs --replace" in help_text
-    assert "gghu check" in help_text
+    assert "ggdk api-docker-up --mount-configs --replace" in help_text
+    assert "gghb check" in help_text
 
 
 def test_subcommand_help_contains_examples():

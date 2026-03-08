@@ -1,6 +1,6 @@
-# gghu 使用说明
+# gghb 使用说明
 
-`gghu` 是本地 `google_hub` 的专用 CLI。
+`gghb` 是本地 `google_hub` 的专用 CLI。
 
 它负责：
 
@@ -12,15 +12,15 @@
 ## 常用命令
 
 ```bash
-gghu start --host 0.0.0.0 --port 18100
-gghu status
-gghu logs --lines 80
-gghu check
-gghu backends
-gghu search "OpenAI news" --num 5
-gghu benchmark --query "OpenAI news" --requests 24 --concurrency 6
-gghu restart
-gghu stop
+gghb start --host 0.0.0.0 --port 18100
+gghb status
+gghb logs --lines 80
+gghb check
+gghb backends
+gghb search "OpenAI news" --num 5
+gghb benchmark --query "OpenAI news" --requests 24 --concurrency 6
+gghb restart
+gghb stop
 ```
 
 ## 与其他 CLI 的关系
@@ -30,7 +30,7 @@ gghu stop
 ggsc search "OpenAI news"
 
 # 本地 / 远端部署
-ggdk docker-up --mount-configs --replace
+ggdk api-docker-up --mount-configs --replace
 ggdk hub-docker-up --mount-configs --replace
 ggdk hf-sync-all --restart
 ```
@@ -39,8 +39,8 @@ ggdk hf-sync-all --restart
 
 ```bash
 ggdk config-check
-ggdk docker-up --mount-configs --replace
+ggdk api-docker-up --mount-configs --replace
 ggdk hub-docker-up --mount-configs --replace
-gghu check
-gghu benchmark --query "OpenAI news" --requests 12 --concurrency 4
+gghb check
+gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4
 ```

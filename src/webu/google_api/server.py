@@ -20,6 +20,7 @@ from typing import Optional
 from webu.fastapis.request_metrics import (
     RequestMetrics,
     format_dashboard_timestamp,
+    format_dashboard_timezone,
     format_uptime_human,
     resolve_server_identity,
 )
@@ -253,6 +254,8 @@ def create_google_search_server(
         has_proxies = bool(proxy_stats.get("total_proxies", 0))
         return {
             "updated_at_human": format_dashboard_timestamp(),
+            "current_time_human": format_dashboard_timestamp(),
+            "timezone_human": format_dashboard_timezone(),
             "started_at_human": format_dashboard_timestamp(started_ts),
             "started_ts": started_ts,
             "uptime_seconds": max(0, int(time.time() - started_ts)),

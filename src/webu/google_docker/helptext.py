@@ -30,10 +30,10 @@ OVERVIEW_SECTIONS = [
     (
         "推荐最短路径",
         [
-            "ggdk docker-up --mount-configs --replace",
+            "ggdk api-docker-up --mount-configs --replace",
             "ggdk hub-docker-up --mount-configs --replace",
-            "gghu check",
-            'gghu benchmark --query "OpenAI news" --requests 24 --concurrency 6',
+            "gghb check",
+            'gghb benchmark --query "OpenAI news" --requests 24 --concurrency 6',
             "ggdk hf-sync-all --restart",
         ],
     ),
@@ -60,12 +60,12 @@ COMMAND_HELP = {
             "ggdk docker-run --proxy-mode disabled --replace",
         ],
     },
-    "docker-up": {
+    "api-docker-up": {
         "summary": "按默认建议完成本地 build + run。",
         "examples": [
-            "ggdk docker-up",
-            "ggdk docker-up --skip-build",
-            "ggdk docker-up --proxy-mode disabled",
+            "ggdk api-docker-up",
+            "ggdk api-docker-up --skip-build",
+            "ggdk api-docker-up --proxy-mode disabled",
         ],
     },
     "docker-check": {
@@ -204,7 +204,7 @@ COMMAND_ORDER = [
     "print-config",
     "docker-build",
     "docker-run",
-    "docker-up",
+    "api-docker-up",
     "docker-check",
     "docker-logs",
     "docker-down",
@@ -250,9 +250,9 @@ def root_epilog() -> str:
             break
     lines.append("")
     lines.append("Examples:")
-    lines.append("  ggdk docker-up --mount-configs --replace")
+    lines.append("  ggdk api-docker-up --mount-configs --replace")
     lines.append("  ggdk hub-docker-up --mount-configs --replace")
-    lines.append("  gghu check")
+    lines.append("  gghb check")
     lines.append("  ggdk hf-sync-all --restart")
     return assert_public_text_safe("\n".join(lines))
 
@@ -312,7 +312,7 @@ def render_usage_markdown() -> str:
     lines.append(
         "5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。"
     )
-    lines.append("6. 本地 hub 的检查、查询和 benchmark 统一改用 `gghu`。")
+    lines.append("6. 本地 hub 的检查、查询和 benchmark 统一改用 `gghb`。")
     lines.append("7. 配置有疑问时，先运行 `ggdk config-check`。")
     lines.append("8. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。")
     lines.append("")
@@ -346,13 +346,13 @@ def render_setup_markdown() -> str:
         "## 2. 本地中心服务启动",
         "",
         "```bash",
-        "ggdk docker-up --mount-configs --replace",
+        "ggdk api-docker-up --mount-configs --replace",
         "ggdk hub-docker-up --mount-configs --replace",
-        "gghu check",
-        'gghu benchmark --query "OpenAI news" --requests 24 --concurrency 6',
+        "gghb check",
+        'gghb benchmark --query "OpenAI news" --requests 24 --concurrency 6',
         "```",
         "",
-        "其中 `ggdk` 负责容器生命周期，`gghu` 负责 hub 本身的检查、查询和 benchmark。",
+        "其中 `ggdk` 负责容器生命周期，`gghb` 负责 hub 本身的检查、查询和 benchmark。",
         "",
         "## 3. 同步到 HF Space",
         "",
@@ -373,7 +373,7 @@ def render_setup_markdown() -> str:
         "1. 切换 Space：为相关命令追加 `--space owner/other-space`。",
         "2. 切换管理 token：追加 `--admin-token ...`。",
         "3. 切换搜索 token：对 `hf-search` 追加 `--api-token ...`。",
-        "4. 本地 hub 直接调试：使用 `gghu serve` 或 `gghu search`。",
+        "4. 本地 hub 直接调试：使用 `gghb serve` 或 `gghb search`。",
         "5. 修改共享说明源后，执行 `ggdk docs-sync`。",
         "",
     ]
@@ -390,17 +390,17 @@ def render_hints_markdown() -> str:
         "",
         "优先顺序：",
         "",
-        "1. 单实例 google_api 用 `ggsc`；hub 本身用 `gghu`；容器和 HF 部署用 `ggdk`。",
-        "2. Docker 本地联调用 `ggdk docker-up`、`ggdk hub-docker-up`、`gghu check`。",
+        "1. 单实例 google_api 用 `ggsc`；hub 本身用 `gghb`；容器和 HF 部署用 `ggdk`。",
+        "2. Docker 本地联调用 `ggdk api-docker-up`、`ggdk hub-docker-up`、`gghb check`。",
         "3. Space 仓库排查用 `ggdk hf-files --space owner/space1 --prefix bootstrap/`。",
         "4. 配置排查用 `ggdk config-init` 和 `ggdk config-check`。",
         "",
         "## 常见排查动作",
         "",
         "```bash",
-        "gghu check",
-        "gghu backends",
-        'gghu benchmark --query "OpenAI news" --requests 12 --concurrency 4',
+        "gghb check",
+        "gghb backends",
+        'gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4',
         "ggdk hf-logs --space owner/space1 --lines 80",
         "ggdk hf-files --space owner/space2 --prefix bootstrap/",
         "```",
@@ -408,8 +408,8 @@ def render_hints_markdown() -> str:
         "## 推荐诊断顺序",
         "",
         "1. `ggdk config-init --name google_hub` 或 `ggdk config-check`",
-        "2. `gghu check`",
-        '3. `gghu benchmark --query "OpenAI news" --requests 12 --concurrency 4`',
+        "2. `gghb check`",
+        '3. `gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4`',
         "4. `ggdk hf-doctor --space owner/space1 --check-auth`",
         "5. `ggdk hf-doctor --space owner/space2 --check-auth`",
         "",

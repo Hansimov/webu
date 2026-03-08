@@ -1,4 +1,8 @@
-from webu.fastapis.request_metrics import RequestMetrics, format_dashboard_timestamp
+from webu.fastapis.request_metrics import (
+    RequestMetrics,
+    format_dashboard_timestamp,
+    format_dashboard_timezone,
+)
 
 
 def test_request_metrics_snapshot_keeps_history():
@@ -19,4 +23,5 @@ def test_request_metrics_snapshot_keeps_history():
 
 
 def test_dashboard_timestamp_uses_shanghai_timezone():
-    assert format_dashboard_timestamp(0) == "1970-01-01 08:00:00 +08 Asia/Shanghai"
+    assert format_dashboard_timestamp(0) == "1970-01-01 08:00:00"
+    assert format_dashboard_timezone() == "UTC+08 Shanghai"

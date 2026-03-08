@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from webu.fastapis.request_metrics import (
     format_dashboard_timestamp,
+    format_dashboard_timezone,
     format_uptime_human,
     resolve_server_identity,
 )
@@ -114,6 +115,8 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
     def build_snapshot_payload(metrics: dict) -> dict:
         return {
             "updated_at_human": format_dashboard_timestamp(),
+            "current_time_human": format_dashboard_timestamp(),
+            "timezone_human": format_dashboard_timezone(),
             "strategy": metrics.get("strategy", "adaptive"),
             "started_at_human": format_dashboard_timestamp(
                 metrics.get("started_ts", 0.0)

@@ -1658,7 +1658,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     docker_up = _add_command_parser(
         subparsers,
-        "docker-up",
+        "api-docker-up",
         "Build and run the local docker service with practical defaults",
     )
     docker_up.add_argument("--image", default="")

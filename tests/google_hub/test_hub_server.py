@@ -354,8 +354,11 @@ def test_adaptive_strategy_prefers_fast_and_stable_backend():
 
 def test_hub_panel_body_includes_uptime_and_status_bars():
     snapshot = {
-        "updated_at_human": "2026-03-09 09:00:00 +08 Asia/Shanghai",
-        "started_at_human": "2026-03-09 08:00:00 +08 Asia/Shanghai",
+        "updated_at_human": "2026-03-09 09:00:00",
+        "current_time_human": "2026-03-09 09:00:00",
+        "timezone_human": "UTC+08 · Asia/Shanghai",
+        "timezone_human": "UTC+08 Shanghai",
+        "started_at_human": "2026-03-09 08:00:00",
         "uptime_human": "1h 0m 0s",
         "strategy": "adaptive",
         "node": {"value": "hub-node"},
@@ -366,6 +369,8 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
             "failed_requests": 1,
             "success_rate": 87.5,
             "avg_latency_ms": 180.0,
+            "median_latency_ms": 130.0,
+            "recent_latency_ms": 130.0,
             "min_latency_ms": 90.0,
             "max_latency_ms": 420.0,
             "last_latency_ms": 130.0,
@@ -376,6 +381,8 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
                     "successful_requests": 4,
                     "success_rate": 100.0,
                     "avg_latency_ms": 120.0,
+                    "median_latency_ms": 110.0,
+                    "recent_latency_ms": 110.0,
                     "last_latency_ms": 110.0,
                 },
                 {
@@ -384,6 +391,8 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
                     "successful_requests": 5,
                     "success_rate": 83.3,
                     "avg_latency_ms": 190.0,
+                    "median_latency_ms": 180.0,
+                    "recent_latency_ms": 210.0,
                     "last_latency_ms": 210.0,
                 },
                 {
@@ -392,6 +401,8 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
                     "successful_requests": 7,
                     "success_rate": 87.5,
                     "avg_latency_ms": 180.0,
+                    "median_latency_ms": 130.0,
+                    "recent_latency_ms": 130.0,
                     "last_latency_ms": 130.0,
                 },
             ],
@@ -421,7 +432,7 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     class_names = _collect_class_names(body)
     text_values = _collect_text(body)
     assert any("dash-strip-card" in value for value in class_names)
-    assert "Uptime" in text_values
+    assert "UPTIME" in text_values
     assert "1h 0m 0s" in text_values
 
 

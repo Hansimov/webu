@@ -13,13 +13,13 @@
 ## 推荐最短路径
 
 ```bash
-ggdk docker-up --mount-configs --replace
+ggdk api-docker-up --mount-configs --replace
 ```
 ```bash
 ggdk hub-docker-up --mount-configs --replace
 ```
-3. gghu check
-4. gghu benchmark --query "OpenAI news" --requests 24 --concurrency 6
+3. gghb check
+4. gghb benchmark --query "OpenAI news" --requests 24 --concurrency 6
 ```bash
 ggdk hf-sync-all --restart
 ```
@@ -52,14 +52,14 @@ ggdk docker-run --bind-source --mount-configs --replace
 ggdk docker-run --proxy-mode disabled --replace
 ```
 
-### `docker-up`
+### `api-docker-up`
 
 按默认建议完成本地 build + run。
 
 ```bash
-ggdk docker-up
-ggdk docker-up --skip-build
-ggdk docker-up --proxy-mode disabled
+ggdk api-docker-up
+ggdk api-docker-up --skip-build
+ggdk api-docker-up --proxy-mode disabled
 ```
 
 ### `docker-check`
@@ -295,6 +295,6 @@ ggdk docs-sync
 3. 临时覆盖搜索 token：加 `--api-token ...`。
 4. 验证匿名行为：对 `hf-search` 使用 `--no-auth`。
 5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。
-6. 本地 hub 的检查、查询和 benchmark 统一改用 `gghu`。
+6. 本地 hub 的检查、查询和 benchmark 统一改用 `gghb`。
 7. 配置有疑问时，先运行 `ggdk config-check`。
 8. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。
