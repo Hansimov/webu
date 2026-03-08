@@ -13,16 +13,15 @@
 ## 推荐最短路径
 
 ```bash
+ggdk docker-up --mount-configs --replace
+```
+```bash
 ggdk hub-docker-up --mount-configs --replace
 ```
+3. gghu check
+4. gghu benchmark --query "OpenAI news" --requests 24 --concurrency 6
 ```bash
-ggdk hub-check
-```
-```bash
-ggdk hf-sync-all
-```
-```bash
-ggdk hub-search "OpenAI news"
+ggdk hf-sync-all --restart
 ```
 
 ## 命令速查
@@ -33,14 +32,6 @@ ggdk hub-search "OpenAI news"
 
 ```bash
 ggdk print-config
-```
-
-### `hub-serve`
-
-以前台方式直接启动中心化 google_hub 服务。
-
-```bash
-python -m webu.google_docker hub-serve --host 0.0.0.0 --port 18100
 ```
 
 ### `docker-build`
@@ -114,30 +105,13 @@ ggdk hub-docker-up --skip-build --port 18100
 ggdk hub-docker-down
 ```
 
-### `hub-check`
+### `hub-docker-logs`
 
-检查本地 hub 服务和所有后端状态。
-
-```bash
-ggdk hub-check
-ggdk hub-check --port 18100
-```
-
-### `hub-backends`
-
-列出 hub 当前维护的后端状态和指标。
+查看本地 hub Docker 日志。
 
 ```bash
-ggdk hub-backends
-```
-
-### `hub-search`
-
-通过中心化 hub 路由搜索请求。
-
-```bash
-ggdk hub-search "OpenAI news"
-ggdk hub-search "OpenAI news" --num 20
+ggdk hub-docker-logs --follow
+ggdk hub-docker-logs --lines 50
 ```
 
 ### `hf-create-space`
@@ -321,5 +295,6 @@ ggdk docs-sync
 3. 临时覆盖搜索 token：加 `--api-token ...`。
 4. 验证匿名行为：对 `hf-search` 使用 `--no-auth`。
 5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。
-6. 配置有疑问时，先运行 `ggdk config-check`。
-7. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。
+6. 本地 hub 的检查、查询和 benchmark 统一改用 `gghu`。
+7. 配置有疑问时，先运行 `ggdk config-check`。
+8. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。

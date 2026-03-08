@@ -94,7 +94,7 @@
 {
   "host": "0.0.0.0",
   "port": 18100,
-  "strategy": "least-inflight",
+  "strategy": "adaptive",
   "health_interval_sec": 30,
   "health_timeout_sec": 10,
   "request_timeout_sec": 90,

@@ -1,8 +1,15 @@
 import json
+import time
 
 from fastapi.testclient import TestClient
 
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH
+from webu.google_hub.manager import (
+    GoogleHubBackend,
+    GoogleHubManager,
+    GoogleHubSettings,
+)
+from webu.google_hub.panel import _build_body as build_google_hub_panel_body
 from webu.google_hub.server import create_google_hub_server
 
 
@@ -50,6 +57,33 @@ def _write_base_configs(config_dir):
         ),
         encoding="utf-8",
     )
+
+
+def _collect_class_names(component):
+    names = []
+    class_name = getattr(component, "className", None)
+    if class_name:
+        names.append(str(class_name))
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            names.extend(_collect_class_names(child))
+    elif children is not None:
+        names.extend(_collect_class_names(children))
+    return names
+
+
+def _collect_text(component):
+    if isinstance(component, str):
+        return [component]
+    values = []
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            values.extend(_collect_text(child))
+    elif children is not None:
+        values.extend(_collect_text(children))
+    return values
 
 
 def test_hub_admin_backends_requires_token(monkeypatch, tmp_path):
@@ -212,6 +246,183 @@ def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
         payload = resp.json()
         assert payload["backend"] == "space1"
         assert payload["query"] == "OpenAI news"
+
+
+def test_hub_fallback_counts_single_request_metric(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    _write_base_configs(config_dir)
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "backends": [
+                    {
+                        "name": "local-google-api",
+                        "kind": "local-google-api",
+                        "base_url": "http://127.0.0.1:18200",
+                        "weight": 2,
+                    },
+                    {
+                        "name": "space1",
+                        "kind": "hf-space",
+                        "space": "owner/space1",
+                        "weight": 1,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/health"):
+            return _Response(200, {"status": "ok"})
+        if url == "http://127.0.0.1:18200/search":
+            raise RuntimeError("local timeout")
+        if url == "https://owner-space1.hf.space/search":
+            return _Response(
+                200,
+                {
+                    "success": True,
+                    "query": params["q"],
+                    "results": [{"title": "B", "url": "https://example.org"}],
+                    "result_count": 1,
+                    "total_results_text": "1 result",
+                    "has_captcha": False,
+                    "error": "",
+                },
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    app = create_google_hub_server()
+    with TestClient(app) as client:
+        resp = client.get("/search", params={"q": "fallback", "num": 5, "lang": "en"})
+        assert resp.status_code == 200
+        metrics = app.state.google_hub_manager.request_metrics.snapshot()
+        assert metrics.accepted_requests == 1
+        assert metrics.successful_requests == 1
+        assert metrics.failed_requests == 0
+
+
+def test_adaptive_strategy_prefers_fast_and_stable_backend():
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        backends=[
+            GoogleHubBackend(
+                name="fast-stable",
+                kind="google-api",
+                base_url="http://fast",
+                enabled=True,
+                weight=1,
+            ),
+            GoogleHubBackend(
+                name="slow-flaky",
+                kind="google-api",
+                base_url="http://slow",
+                enabled=True,
+                weight=1,
+            ),
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+    manager = GoogleHubManager(settings)
+    fast = manager.states["fast-stable"]
+    slow = manager.states["slow-flaky"]
+    fast.healthy = True
+    slow.healthy = True
+
+    for _ in range(4):
+        fast.record_request(45.0, True)
+        slow.record_request(320.0, False)
+    slow.record_request(280.0, True)
+
+    ordered = manager.ordered_backends()
+    assert ordered[0].backend.name == "fast-stable"
+    assert ordered[0].compute_selection_score() < ordered[1].compute_selection_score()
+
+
+def test_hub_panel_body_includes_uptime_and_status_bars():
+    snapshot = {
+        "updated_at_human": "2026-03-09 09:00:00 +08 Asia/Shanghai",
+        "started_at_human": "2026-03-09 08:00:00 +08 Asia/Shanghai",
+        "uptime_human": "1h 0m 0s",
+        "strategy": "adaptive",
+        "node": {"value": "hub-node"},
+        "health": {"healthy_backends": 1, "backend_count": 2},
+        "requests": {
+            "accepted_requests": 8,
+            "successful_requests": 7,
+            "failed_requests": 1,
+            "success_rate": 87.5,
+            "avg_latency_ms": 180.0,
+            "min_latency_ms": 90.0,
+            "max_latency_ms": 420.0,
+            "last_latency_ms": 130.0,
+            "history": [
+                {
+                    "label": "08:57",
+                    "accepted_requests": 4,
+                    "successful_requests": 4,
+                    "success_rate": 100.0,
+                    "avg_latency_ms": 120.0,
+                    "last_latency_ms": 110.0,
+                },
+                {
+                    "label": "08:58",
+                    "accepted_requests": 6,
+                    "successful_requests": 5,
+                    "success_rate": 83.3,
+                    "avg_latency_ms": 190.0,
+                    "last_latency_ms": 210.0,
+                },
+                {
+                    "label": "08:59",
+                    "accepted_requests": 8,
+                    "successful_requests": 7,
+                    "success_rate": 87.5,
+                    "avg_latency_ms": 180.0,
+                    "last_latency_ms": 130.0,
+                },
+            ],
+            "request_log": [],
+        },
+        "backends": [
+            {
+                "name": "local",
+                "kind": "google-api",
+                "healthy": True,
+                "request_count": 5,
+                "success_rate": 100.0,
+                "avg_request_latency_ms": 110.0,
+            },
+            {
+                "name": "remote",
+                "space_name": "owner/space",
+                "healthy": False,
+                "request_count": 3,
+                "success_rate": 66.7,
+                "avg_request_latency_ms": 260.0,
+            },
+        ],
+    }
+
+    body = build_google_hub_panel_body(snapshot)
+    class_names = _collect_class_names(body)
+    text_values = _collect_text(body)
+    assert any("dash-strip-card" in value for value in class_names)
+    assert "Uptime" in text_values
+    assert "1h 0m 0s" in text_values
 
 
 def test_hub_panel_root_redirect_and_page(monkeypatch, tmp_path):

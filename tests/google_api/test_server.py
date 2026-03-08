@@ -8,11 +8,39 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from webu.google_api.server import create_google_search_server
+from webu.google_api.panel import _build_body as build_google_api_panel_body
 from webu.google_api.proxy_manager import DEFAULT_PROXIES
 from webu.runtime_settings import (
     DEFAULT_GOOGLE_API_PANEL_PATH,
     resolve_google_api_settings,
 )
+
+
+def _collect_class_names(component):
+    names = []
+    class_name = getattr(component, "className", None)
+    if class_name:
+        names.append(str(class_name))
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            names.extend(_collect_class_names(child))
+    elif children is not None:
+        names.extend(_collect_class_names(children))
+    return names
+
+
+def _collect_text(component):
+    if isinstance(component, str):
+        return [component]
+    values = []
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            values.extend(_collect_text(child))
+    elif children is not None:
+        values.extend(_collect_text(children))
+    return values
 
 
 class _FakeProxyManager:
@@ -225,6 +253,63 @@ class TestGoogleSearchServerUnit:
                     metrics = app.state.google_api_request_metrics.snapshot()
                     assert metrics.accepted_requests == 1
                     assert metrics.successful_requests == 0
+
+    def test_panel_body_includes_uptime_and_status_bars(self):
+        snapshot = {
+            "updated_at_human": "2026-03-09 09:00:00 +08 Asia/Shanghai",
+            "started_at_human": "2026-03-09 08:30:00 +08 Asia/Shanghai",
+            "uptime_human": "30m 0s",
+            "runtime_env": "hf-space",
+            "node": {"value": "space-node"},
+            "service": {
+                "status_label": "healthy",
+                "status_note": "hf-space on 0.0.0.0:8000",
+            },
+            "requests": {
+                "accepted_requests": 6,
+                "successful_requests": 5,
+                "failed_requests": 1,
+                "success_rate": 83.3,
+                "avg_latency_ms": 210.0,
+                "min_latency_ms": 100.0,
+                "max_latency_ms": 480.0,
+                "last_latency_ms": 180.0,
+                "history": [
+                    {
+                        "label": "08:57",
+                        "accepted_requests": 2,
+                        "successful_requests": 2,
+                        "success_rate": 100.0,
+                        "avg_latency_ms": 120.0,
+                        "last_latency_ms": 100.0,
+                    },
+                    {
+                        "label": "08:58",
+                        "accepted_requests": 4,
+                        "successful_requests": 3,
+                        "success_rate": 75.0,
+                        "avg_latency_ms": 240.0,
+                        "last_latency_ms": 260.0,
+                    },
+                    {
+                        "label": "08:59",
+                        "accepted_requests": 6,
+                        "successful_requests": 5,
+                        "success_rate": 83.3,
+                        "avg_latency_ms": 210.0,
+                        "last_latency_ms": 180.0,
+                    },
+                ],
+                "request_log": [],
+            },
+        }
+
+        body = build_google_api_panel_body(snapshot)
+        class_names = _collect_class_names(body)
+        text_values = _collect_text(body)
+        assert any("dash-strip-card" in value for value in class_names)
+        assert "Uptime" in text_values
+        assert "30m 0s" in text_values
 
 
 @pytest.mark.integration

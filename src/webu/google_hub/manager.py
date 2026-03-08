@@ -66,23 +66,74 @@ class BackendRuntimeState:
     min_request_latency_ms: float = 0.0
     max_request_latency_ms: float = 0.0
     last_request_latency_ms: float = 0.0
+    latency_ewma_ms: float = 0.0
+    selection_score: float = 0.0
     last_checked_ts: float = 0.0
     last_selected_ts: float = 0.0
+    last_success_ts: float = 0.0
+    last_failure_ts: float = 0.0
 
     def record_request(self, duration_ms: float, success: bool):
         latency_ms = max(0.0, float(duration_ms))
         self.request_count += 1
         if success:
             self.successful_requests += 1
+            self.consecutive_failures = 0
+            self.last_success_ts = time.time()
         else:
             self.failed_requests += 1
+            self.consecutive_failures += 1
+            self.last_failure_ts = time.time()
         self.total_request_latency_ms += latency_ms
         self.last_request_latency_ms = latency_ms
+        if self.latency_ewma_ms <= 0:
+            self.latency_ewma_ms = latency_ms
+        else:
+            self.latency_ewma_ms = self.latency_ewma_ms * 0.65 + latency_ms * 0.35
         if self.min_request_latency_ms <= 0:
             self.min_request_latency_ms = latency_ms
         else:
             self.min_request_latency_ms = min(self.min_request_latency_ms, latency_ms)
         self.max_request_latency_ms = max(self.max_request_latency_ms, latency_ms)
+        self.selection_score = self.compute_selection_score()
+
+    def success_rate_ratio(self) -> float:
+        if self.request_count <= 0:
+            return 1.0 if self.healthy else 0.0
+        return self.successful_requests / self.request_count
+
+    def avg_request_latency_ms(self) -> float:
+        if self.request_count <= 0:
+            return float(self.latency_ms)
+        return self.total_request_latency_ms / self.request_count
+
+    def estimated_latency_ms(self) -> float:
+        candidates = [
+            value
+            for value in [
+                self.latency_ewma_ms,
+                self.avg_request_latency_ms(),
+                float(self.latency_ms),
+            ]
+            if value > 0
+        ]
+        if not candidates:
+            return 500.0
+        return min(candidates)
+
+    def compute_selection_score(self) -> float:
+        success_penalty = (1.0 - self.success_rate_ratio()) * 800.0
+        failure_penalty = min(6, self.consecutive_failures) * 180.0
+        health_penalty = 0.0 if self.healthy else 320.0
+        inflight_penalty = self.inflight * 140.0 / max(1, self.backend.weight)
+        latency_component = self.estimated_latency_ms() / max(1, self.backend.weight)
+        return (
+            latency_component
+            + success_penalty
+            + failure_penalty
+            + health_penalty
+            + inflight_penalty
+        )
 
     def to_dict(self) -> dict[str, Any]:
         success_rate = (
@@ -118,8 +169,12 @@ class BackendRuntimeState:
             "min_request_latency_ms": self.min_request_latency_ms,
             "max_request_latency_ms": self.max_request_latency_ms,
             "last_request_latency_ms": self.last_request_latency_ms,
+            "latency_ewma_ms": self.latency_ewma_ms,
+            "selection_score": self.compute_selection_score(),
             "last_checked_ts": self.last_checked_ts,
             "last_selected_ts": self.last_selected_ts,
+            "last_success_ts": self.last_success_ts,
+            "last_failure_ts": self.last_failure_ts,
         }
 
 
@@ -278,7 +333,7 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
         host=str(config.get("host", "0.0.0.0")),
         port=int(config.get("port", DEFAULT_GOOGLE_HUB_PORT)),
         admin_token=str(config.get("admin_token", default_admin_token)).strip(),
-        strategy=str(config.get("strategy", "least-inflight")).strip().lower(),
+        strategy=str(config.get("strategy", "adaptive")).strip().lower(),
         request_timeout_sec=int(config.get("request_timeout_sec", 90)),
         health_timeout_sec=int(config.get("health_timeout_sec", 10)),
         health_interval_sec=int(config.get("health_interval_sec", 30)),
@@ -291,6 +346,7 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
 class GoogleHubManager:
     def __init__(self, settings: GoogleHubSettings):
         self.settings = settings
+        self.started_ts = time.time()
         self.states = {
             backend.name: BackendRuntimeState(backend=backend)
             for backend in settings.backends
@@ -354,8 +410,10 @@ class GoogleHubManager:
             state.healthy = False
             state.last_error = str(exc)
             state.consecutive_failures += 1
+            state.last_failure_ts = time.time()
             state.latency_ms = int((time.perf_counter() - started) * 1000)
         state.last_checked_ts = time.time()
+        state.selection_score = state.compute_selection_score()
         return state.to_dict()
 
     def _eligible_states(self) -> list[BackendRuntimeState]:
@@ -368,37 +426,41 @@ class GoogleHubManager:
             return states
         return [state for state in self.states.values() if state.backend.enabled]
 
-    def choose_backend(self) -> BackendRuntimeState:
-        candidates = self._eligible_states()
-        if not candidates:
-            raise RuntimeError("no enabled hub backends configured")
-        candidates.sort(
-            key=lambda state: (
+    def _state_rank(self, state: BackendRuntimeState) -> tuple:
+        strategy = (self.settings.strategy or "adaptive").strip().lower()
+        if strategy == "least-inflight":
+            return (
                 state.inflight / max(1, state.backend.weight),
                 state.consecutive_failures,
                 state.last_selected_ts,
                 state.latency_ms,
                 state.backend.name,
             )
+
+        score = state.compute_selection_score()
+        return (
+            score,
+            state.inflight / max(1, state.backend.weight),
+            state.consecutive_failures,
+            state.last_selected_ts,
+            state.backend.name,
         )
+
+    def choose_backend(self) -> BackendRuntimeState:
+        candidates = self._eligible_states()
+        if not candidates:
+            raise RuntimeError("no enabled hub backends configured")
+        candidates.sort(key=self._state_rank)
         selected = candidates[0]
         selected.last_selected_ts = time.time()
+        selected.selection_score = selected.compute_selection_score()
         return selected
 
     def ordered_backends(self) -> list[BackendRuntimeState]:
         candidates = self._eligible_states()
         if not candidates:
             return []
-        return sorted(
-            candidates,
-            key=lambda state: (
-                state.inflight / max(1, state.backend.weight),
-                state.consecutive_failures,
-                state.last_selected_ts,
-                state.latency_ms,
-                state.backend.name,
-            ),
-        )
+        return sorted(candidates, key=self._state_rank)
 
     async def search(self, *, query: str, num: int, lang: str) -> dict[str, Any]:
         ordered = self.ordered_backends()
@@ -407,11 +469,12 @@ class GoogleHubManager:
 
         overall_started = time.perf_counter()
         last_error = None
+        last_backend_name = ""
         for state in ordered:
             state.last_selected_ts = time.time()
+            last_backend_name = state.backend.name
             state.inflight += 1
             started = time.perf_counter()
-            success = False
             try:
                 headers = {}
                 if state.backend.search_api_token:
@@ -428,7 +491,6 @@ class GoogleHubManager:
                 state.total_successes += 1
                 state.healthy = True
                 state.last_error = ""
-                success = True
                 state.record_request((time.perf_counter() - started) * 1000.0, True)
                 self.request_metrics.record(
                     (time.perf_counter() - overall_started) * 1000.0,
@@ -445,20 +507,19 @@ class GoogleHubManager:
             except Exception as exc:
                 last_error = exc
                 state.total_failures += 1
-                state.consecutive_failures += 1
                 state.healthy = False
                 state.last_error = str(exc)
-                state.record_request((time.perf_counter() - started) * 1000.0, success)
+                state.record_request((time.perf_counter() - started) * 1000.0, False)
             finally:
                 state.inflight = max(0, state.inflight - 1)
 
-            self.request_metrics.record(
-                (time.perf_counter() - overall_started) * 1000.0,
-                False,
-                query=query,
-                backend=state.backend.name,
-                error=str(last_error) if last_error else "",
-            )
+        self.request_metrics.record(
+            (time.perf_counter() - overall_started) * 1000.0,
+            False,
+            query=query,
+            backend=last_backend_name,
+            error=str(last_error) if last_error else "",
+        )
         raise RuntimeError(f"all hub backends failed: {last_error}")
 
     async def backend_snapshot(self) -> list[dict[str, Any]]:
@@ -468,6 +529,7 @@ class GoogleHubManager:
         states = await self.backend_snapshot()
         return {
             "strategy": self.settings.strategy,
+            "started_ts": self.started_ts,
             "healthy_backends": sum(1 for item in states if item["healthy"]),
             "enabled_backends": sum(1 for item in states if item["enabled"]),
             "request_stats": self.request_metrics.snapshot().to_dict(),

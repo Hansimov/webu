@@ -950,9 +950,9 @@ def cmd_docker_up(args):
         name=args.name,
         port=args.port,
         proxy_mode=args.proxy_mode,
-        bind_source=not args.no_bind_source,
-        mount_configs=not args.no_mount_configs,
-        replace=True,
+        bind_source=args.bind_source,
+        mount_configs=args.mount_configs,
+        replace=args.replace,
         admin_token=args.admin_token,
     )
     if not args.skip_build:
@@ -1085,6 +1085,15 @@ def cmd_hub_docker_up(args):
 def cmd_hub_docker_down(args):
     container_name = args.name or "webu-google-hub"
     _run_command(["docker", "rm", "-f", container_name], check=False)
+
+
+def cmd_hub_docker_logs(args):
+    container_name = args.name or "webu-google-hub"
+    command = ["docker", "logs", "--tail", str(args.lines)]
+    if args.follow:
+        command.append("-f")
+    command.append(container_name)
+    _run_command(command, check=False)
 
 
 def cmd_hub_check(args):
@@ -1611,13 +1620,6 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
     serve.set_defaults(func=cmd_serve)
 
-    hub_serve = _add_command_parser(
-        subparsers, "hub-serve", "Run the centralized google_hub service in foreground"
-    )
-    hub_serve.add_argument("--host", default="0.0.0.0")
-    hub_serve.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
-    hub_serve.set_defaults(func=cmd_hub_serve)
-
     docker_build = _add_command_parser(
         subparsers, "docker-build", "Build local docker image"
     )
@@ -1667,8 +1669,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     docker_up.add_argument("--skip-build", action="store_true")
     docker_up.add_argument("--no-cache", action="store_true")
-    docker_up.add_argument("--no-bind-source", action="store_true")
-    docker_up.add_argument("--no-mount-configs", action="store_true")
+    docker_up.set_defaults(bind_source=True, mount_configs=True, replace=True)
+    docker_up.add_argument("--bind-source", dest="bind_source", action="store_true")
+    docker_up.add_argument("--no-bind-source", dest="bind_source", action="store_false")
+    docker_up.add_argument("--mount-configs", dest="mount_configs", action="store_true")
+    docker_up.add_argument(
+        "--no-mount-configs", dest="mount_configs", action="store_false"
+    )
+    docker_up.add_argument("--replace", dest="replace", action="store_true")
+    docker_up.add_argument("--no-replace", dest="replace", action="store_false")
     docker_up.add_argument("--admin-token", default="")
     docker_up.set_defaults(func=cmd_docker_up)
 
@@ -1709,33 +1718,13 @@ def build_parser() -> argparse.ArgumentParser:
     hub_docker_down.add_argument("--name", default="")
     hub_docker_down.set_defaults(func=cmd_hub_docker_down)
 
-    hub_check = _add_command_parser(
-        subparsers,
-        "hub-check",
-        "Check the local centralized hub service and backend status",
+    hub_docker_logs = _add_command_parser(
+        subparsers, "hub-docker-logs", "Tail local hub docker logs"
     )
-    hub_check.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
-    hub_check.add_argument("--admin-token", default="")
-    hub_check.add_argument("--timeout", type=int, default=15)
-    hub_check.set_defaults(func=cmd_hub_check)
-
-    hub_backends = _add_command_parser(
-        subparsers, "hub-backends", "List the hub-managed backend states"
-    )
-    hub_backends.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
-    hub_backends.add_argument("--admin-token", default="")
-    hub_backends.add_argument("--timeout", type=int, default=30)
-    hub_backends.set_defaults(func=cmd_hub_backends)
-
-    hub_search = _add_command_parser(
-        subparsers, "hub-search", "Route a search request through the centralized hub"
-    )
-    hub_search.add_argument("query")
-    hub_search.add_argument("--port", type=int, default=DEFAULT_GOOGLE_HUB_PORT)
-    hub_search.add_argument("--num", type=int, default=10)
-    hub_search.add_argument("--lang", default="en")
-    hub_search.add_argument("--timeout", type=int, default=90)
-    hub_search.set_defaults(func=cmd_hub_search)
+    hub_docker_logs.add_argument("--name", default="")
+    hub_docker_logs.add_argument("--lines", type=int, default=200)
+    hub_docker_logs.add_argument("--follow", action="store_true")
+    hub_docker_logs.set_defaults(func=cmd_hub_docker_logs)
 
     hf_sync = _add_command_parser(
         subparsers, "hf-sync", "Upload current workspace to a Docker Space"

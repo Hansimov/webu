@@ -29,6 +29,27 @@ def format_dashboard_time_label(ts: float | None = None) -> str:
     return dt.strftime("%H:%M:%S")
 
 
+def format_uptime_human(started_ts: float | None, now_ts: float | None = None) -> str:
+    if not started_ts:
+        return "0s"
+
+    now_ts = float(now_ts or datetime.now(tz=SHANGHAI_TZ).timestamp())
+    elapsed = max(0, int(now_ts - float(started_ts)))
+    days, rem = divmod(elapsed, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or parts:
+        parts.append(f"{hours}h")
+    if minutes or parts:
+        parts.append(f"{minutes}m")
+    parts.append(f"{seconds}s")
+    return " ".join(parts)
+
+
 @dataclass(frozen=True)
 class RequestRecord:
     ts: float

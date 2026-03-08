@@ -94,3 +94,24 @@ def test_hf_space_root_page_uses_panel(monkeypatch, tmp_path):
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.text == f"panel-root:{DEFAULT_GOOGLE_API_PANEL_PATH}"
+
+
+def test_admin_runtime_includes_uptime(monkeypatch, tmp_path):
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_ADMIN_TOKEN", "secret")
+    monkeypatch.setattr(
+        "webu.google_docker.server.create_google_search_server",
+        lambda settings=None, home_mode="swagger": _fake_google_search_app(home_mode),
+    )
+
+    app = create_google_docker_server(
+        google_api_settings=resolve_google_api_settings(headless=True),
+        docker_settings=resolve_google_docker_settings(),
+    )
+    client = TestClient(app)
+    resp = client.get("/admin/runtime", headers={"X-Admin-Token": "secret"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["started_ts"] > 0
+    assert data["uptime_seconds"] >= 0
+    assert data["uptime_human"]

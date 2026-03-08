@@ -326,8 +326,17 @@ def test_cli_parser_supports_hf_check_and_docker_up():
     parser = build_parser()
     hf_args = parser.parse_args(["hf-check", "--check-auth"])
     docker_args = parser.parse_args(["docker-up", "--skip-build"])
+    explicit_args = parser.parse_args(
+        ["docker-up", "--mount-configs", "--replace", "--bind-source"]
+    )
     assert hf_args.check_auth is True
     assert docker_args.skip_build is True
+    assert docker_args.bind_source is True
+    assert docker_args.mount_configs is True
+    assert docker_args.replace is True
+    assert explicit_args.bind_source is True
+    assert explicit_args.mount_configs is True
+    assert explicit_args.replace is True
 
 
 def test_cli_parser_supports_hf_doctor_and_config_commands():
@@ -342,21 +351,21 @@ def test_cli_parser_supports_hf_doctor_and_config_commands():
     assert init_args.force is True
 
 
-def test_cli_parser_supports_hub_and_multi_space_commands():
+def test_cli_parser_supports_hub_docker_and_multi_space_commands():
     parser = build_parser()
-    hub_args = parser.parse_args(["hub-search", "OpenAI news", "--port", "18100"])
     hub_docker_args = parser.parse_args(
         ["hub-docker-up", "--mount-configs", "--replace"]
     )
+    hub_logs_args = parser.parse_args(["hub-docker-logs", "--lines", "50"])
     create_space_args = parser.parse_args(
         ["hf-create-space", "--space", "owner/space2", "--exist-ok"]
     )
     sync_all_args = parser.parse_args(
         ["hf-sync-all", "--restart", "--max-workers", "4"]
     )
-    assert hub_args.port == 18100
     assert hub_docker_args.mount_configs is True
     assert hub_docker_args.replace is True
+    assert hub_logs_args.lines == 50
     assert create_space_args.space == "owner/space2"
     assert sync_all_args.restart is True
     assert sync_all_args.max_workers == 4
@@ -366,7 +375,8 @@ def test_root_help_contains_quick_start_examples():
     parser = build_parser()
     help_text = parser.format_help()
     assert "Quick Start:" in help_text
-    assert "ggdk hub-check" in help_text
+    assert "ggdk docker-up --mount-configs --replace" in help_text
+    assert "gghu check" in help_text
 
 
 def test_subcommand_help_contains_examples():

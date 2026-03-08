@@ -1,3 +1,4 @@
+from .benchmark import run_http_benchmark, run_manager_benchmark
 from .manager import (
     GoogleHubBackend,
     GoogleHubManager,
@@ -13,4 +14,6 @@ __all__ = [
     "app_instance",
     "create_google_hub_server",
     "resolve_google_hub_settings",
+    "run_http_benchmark",
+    "run_manager_benchmark",
 ]

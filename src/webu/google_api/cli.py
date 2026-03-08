@@ -17,7 +17,6 @@
 import argparse
 import asyncio
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -25,6 +24,17 @@ import time
 from pathlib import Path
 from tclogger import logger, logstr
 
+from webu.cli_support import (
+    LocalServiceSpec,
+    is_process_running as shared_is_process_running,
+    read_pid as shared_read_pid,
+    read_service_log,
+    remove_pid as shared_remove_pid,
+    start_service,
+    stop_service,
+    tail_service_log,
+    write_pid as shared_write_pid,
+)
 from webu.runtime_settings import resolve_google_api_settings
 
 # ═══════════════════════════════════════════════════════════════
@@ -36,6 +46,12 @@ _GOOGLE_API_SETTINGS = resolve_google_api_settings()
 DATA_DIR = _GOOGLE_API_SETTINGS.data_dir
 PID_FILE = DATA_DIR / "server.pid"
 LOG_FILE = DATA_DIR / "server.log"
+SERVICE_SPEC = LocalServiceSpec(
+    name="google_api",
+    uvicorn_target="webu.google_api.server:app_instance",
+    pid_file=PID_FILE,
+    log_file=LOG_FILE,
+)
 
 DEFAULT_HOST = _GOOGLE_API_SETTINGS.host
 DEFAULT_PORT = _GOOGLE_API_SETTINGS.port
@@ -52,35 +68,23 @@ def _ensure_data_dir():
 
 def _read_pid() -> int | None:
     """读取 PID 文件。"""
-    try:
-        if PID_FILE.exists():
-            return int(PID_FILE.read_text().strip())
-    except (ValueError, OSError):
-        pass
-    return None
+    return shared_read_pid(PID_FILE)
 
 
 def _write_pid(pid: int):
     """写入 PID 文件。"""
     _ensure_data_dir()
-    PID_FILE.write_text(str(pid))
+    shared_write_pid(PID_FILE, pid)
 
 
 def _remove_pid():
     """删除 PID 文件。"""
-    try:
-        PID_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
+    shared_remove_pid(PID_FILE)
 
 
 def _is_process_running(pid: int) -> bool:
     """检查进程是否存活。"""
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError, OSError):
-        return False
+    return shared_is_process_running(pid)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -98,30 +102,9 @@ def cmd_start(args):
     host = getattr(args, "host", DEFAULT_HOST)
     port = getattr(args, "port", DEFAULT_PORT)
 
-    _ensure_data_dir()
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "uvicorn",
-        "webu.google_api.server:app_instance",
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--factory",
-    ]
-
     logger.note(f"> Starting Google Search Server on {host}:{port} ...")
-    log_fp = open(LOG_FILE, "a")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=log_fp,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    _write_pid(proc.pid)
-    logger.okay(f"  ✓ Server started (PID: {proc.pid})")
+    pid = start_service(SERVICE_SPEC, host=host, port=port)
+    logger.okay(f"  ✓ Server started (PID: {pid})")
     logger.mesg(f"  Log: {logstr.file(LOG_FILE)}")
 
 
@@ -138,20 +121,7 @@ def cmd_stop(args):
         return
 
     logger.note(f"> Stopping server (PID: {pid}) ...")
-    try:
-        os.kill(pid, signal.SIGTERM)
-        # 等待进程退出
-        for _ in range(30):
-            if not _is_process_running(pid):
-                break
-            time.sleep(0.5)
-        else:
-            logger.warn(f"  × Process didn't stop gracefully, sending SIGKILL ...")
-            os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-    _remove_pid()
+    stop_service(SERVICE_SPEC)
     logger.okay(f"  ✓ Server stopped")
 
 
@@ -202,13 +172,10 @@ def cmd_logs(args):
     follow = getattr(args, "follow", False)
 
     if follow:
-        os.execvp("tail", ["tail", "-f", str(LOG_FILE)])
+        tail_service_log(LOG_FILE)
     else:
         try:
-            with open(LOG_FILE, "r") as f:
-                all_lines = f.readlines()
-                for line in all_lines[-lines:]:
-                    print(line, end="")
+            print(read_service_log(LOG_FILE, lines=lines), end="")
         except Exception as e:
             logger.err(f"  × Failed to read logs: {e}")
 
@@ -454,11 +421,10 @@ def _parse_proxy_list(proxies_str: str) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════
 
 
-def main():
-    """CLI 入口。"""
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ggsc",
-        description="ggsc (GooGle-SearCh) — 服务管理 + 搜索 + 代理状态",
+        description="ggsc (GooGle-SearCh) — 管理单实例 google_api 服务、搜索和代理检查",
     )
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
@@ -528,13 +494,20 @@ def main():
     )
     sp_pcheck.set_defaults(func=cmd_proxy_check)
 
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv: list[str] | None = None):
+    """CLI 入口。"""
+    parser = build_parser()
+
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
-        return
+        return 0
 
-    args.func(args)
+    return args.func(args) or 0
 
 
 if __name__ == "__main__":

@@ -23,11 +23,13 @@ ggdk config-check
 ## 2. 本地中心服务启动
 
 ```bash
+ggdk docker-up --mount-configs --replace
 ggdk hub-docker-up --mount-configs --replace
-ggdk hub-check
+gghu check
+gghu benchmark --query "OpenAI news" --requests 24 --concurrency 6
 ```
 
-如果你还保留单实例 google_api，本地 hub 会把它当成一个后端节点统一调度。
+其中 `ggdk` 负责容器生命周期，`gghu` 负责 hub 本身的检查、查询和 benchmark。
 
 ## 3. 同步到 HF Space
 
@@ -48,4 +50,5 @@ ggdk hf-doctor --space owner/space2 --check-auth
 1. 切换 Space：为相关命令追加 `--space owner/other-space`。
 2. 切换管理 token：追加 `--admin-token ...`。
 3. 切换搜索 token：对 `hf-search` 追加 `--api-token ...`。
-4. 修改共享说明源后，执行 `ggdk docs-sync`。
+4. 本地 hub 直接调试：使用 `gghu serve` 或 `gghu search`。
+5. 修改共享说明源后，执行 `ggdk docs-sync`。

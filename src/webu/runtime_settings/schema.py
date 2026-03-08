@@ -111,7 +111,7 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
         "sample": {
             "host": "0.0.0.0",
             "port": DEFAULT_GOOGLE_HUB_PORT,
-            "strategy": "least-inflight",
+            "strategy": "adaptive",
             "health_interval_sec": 30,
             "health_timeout_sec": 10,
             "request_timeout_sec": 90,
@@ -148,7 +148,10 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                 "host": {"type": "string"},
                 "port": {"type": "integer"},
                 "admin_token": {"type": "string"},
-                "strategy": {"type": "string", "enum": ["least-inflight"]},
+                "strategy": {
+                    "type": "string",
+                    "enum": ["adaptive", "least-inflight"],
+                },
                 "health_interval_sec": {"type": "integer"},
                 "health_timeout_sec": {"type": "integer"},
                 "request_timeout_sec": {"type": "integer"},

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 import uvicorn
 
 from pathlib import Path
@@ -14,6 +15,10 @@ from webu.runtime_settings import (
     GoogleDockerSettings,
     resolve_google_api_settings,
     resolve_google_docker_settings,
+)
+from webu.fastapis.request_metrics import (
+    format_dashboard_timestamp,
+    format_uptime_human,
 )
 from webu.google_api.server import create_google_search_server
 
@@ -33,6 +38,10 @@ class RuntimeInfoResponse(BaseModel):
     config_dir: str = ""
     project_root: str = ""
     service_log_path: str = ""
+    started_ts: float = 0.0
+    started_at_human: str = ""
+    uptime_seconds: int = 0
+    uptime_human: str = "0s"
 
 
 class LogsResponse(BaseModel):
@@ -57,6 +66,10 @@ class ConfigResponse(BaseModel):
     project_root: str = ""
     service_log_path: str = ""
     admin_token_configured: bool = False
+    started_ts: float = 0.0
+    started_at_human: str = ""
+    uptime_seconds: int = 0
+    uptime_human: str = "0s"
 
 
 def _read_tail(path: Path, lines: int) -> str:
@@ -81,6 +94,7 @@ def create_google_docker_server(
     resolved_admin_token = (
         admin_token if admin_token is not None else resolved_docker.admin_token
     )
+    started_ts = time.time()
     home_mode = "panel" if resolved_docker.runtime_env == "hf-space" else "swagger"
 
     app = create_google_search_server(settings=resolved_google, home_mode=home_mode)
@@ -108,6 +122,10 @@ def create_google_docker_server(
             config_dir=str(resolved_docker.config_dir),
             project_root=str(resolved_docker.project_root),
             service_log_path=str(resolved_docker.service_log_path),
+            started_ts=started_ts,
+            started_at_human=format_dashboard_timestamp(started_ts),
+            uptime_seconds=max(0, int(time.time() - started_ts)),
+            uptime_human=format_uptime_human(started_ts),
         )
 
     @app.get("/admin/logs", response_model=LogsResponse, tags=["管理"])
@@ -142,6 +160,10 @@ def create_google_docker_server(
             project_root=str(resolved_docker.project_root),
             service_log_path=str(resolved_docker.service_log_path),
             admin_token_configured=bool(resolved_admin_token),
+            started_ts=started_ts,
+            started_at_human=format_dashboard_timestamp(started_ts),
+            uptime_seconds=max(0, int(time.time() - started_ts)),
+            uptime_human=format_uptime_human(started_ts),
         )
 
     return app

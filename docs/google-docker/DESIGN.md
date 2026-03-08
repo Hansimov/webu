@@ -55,7 +55,21 @@ CLI 在同步 HF Space 时会：
 4. 注入 `WEBU_GOOGLE_API_TOKEN`，使 HF Space 的 `/search` 可以独立鉴权。
 5. 将本地 `google_api` profile 目录打包为 bootstrap 快照，在新容器首次启动时灌入运行目录，用于尽量保留已有的 Google Cookie / 浏览器状态。
 
-## CLI 简化策略
+## CLI 分层
+
+当前 CLI 责任边界如下：
+
+1. `ggsc`：只管理单实例 `google_api` 本地进程、单实例搜索和代理检查。
+2. `gghu`：只管理本地 `google_hub` 进程、hub 查询、后端状态和 benchmark。
+3. `ggdk`：只管理 Docker、本地容器化运行、HF Space 同步、远端诊断、配置模板和文档生成。
+
+这样拆分的原因：
+
+1. `google_api`、`google_hub`、`google_docker` 各自对应不同运行层级，命令放在一起会让职责越来越混乱。
+2. hub 的本地 HTTP 检查和 benchmark 不应该继续耦合在 docker/HF 运维 CLI 里。
+3. `ggdk` 现在聚焦“部署与运维面”，而不是“所有与 Google 相关的命令都堆进去”。
+
+## Docker / HF 运维简化策略
 
 常用的 HF 运维动作已经被收敛到 `ggdk`：
 
@@ -70,6 +84,14 @@ CLI 在同步 HF Space 时会：
 1. `ggdk docker-up` 用默认参数完成 build + run。
 2. `ggdk docker-down` 统一 stop/remove。
 3. `ggdk docker-check` 聚合容器运行状态、本地 `/health` 和 `/admin/runtime` 检查。
+4. `ggdk hub-docker-up` / `ggdk hub-docker-down` 只负责 hub 容器生命周期。
+
+hub 本身的本地交互则由 `gghu` 负责：
+
+1. `gghu check` 聚合 `/health` 和 `/admin/backends`。
+2. `gghu backends` 查看当前路由候选状态。
+3. `gghu search` 用真实查询穿过 hub。
+4. `gghu benchmark` 做顺序/并发压测，验证路由优化和负载均衡表现。
 
 ## 管理接口
 

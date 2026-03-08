@@ -86,6 +86,8 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-card-note {{ margin-top: 6px; font-size: 12px; color: var(--muted); }}
             .dash-section {{ margin-top: 24px; }}
             .dash-section-title {{ font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; font-weight: 600; }}
+            .dash-meta-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+            .dash-meta-chip {{ padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; line-height: 1; }}
             .dash-inst {{ padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }}
             .dash-inst-hd {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
             .dash-inst-name {{ font-size: 15px; font-weight: 600; }}
@@ -103,10 +105,19 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-table tr:hover td {{ background: rgba(255,255,255,0.02); }}
             .dash-table .col-query {{ max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
             .dash-empty {{ padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }}
+            .dash-strip-card {{ display: flex; flex-direction: column; gap: 12px; min-height: 190px; }}
+            .dash-strip-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }}
+            .dash-strip-summary {{ font-size: 12px; color: var(--muted); }}
+            .dash-strip-wrap {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(8px, 1fr)); align-items: end; gap: 6px; min-height: 118px; padding-top: 8px; }}
+            .dash-strip-col {{ display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }}
+            .dash-strip-bar {{ width: 100%; min-height: 10px; border-radius: 999px; background: var(--info); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.12); }}
+            .dash-strip-label {{ font-size: 10px; color: var(--muted); writing-mode: vertical-rl; transform: rotate(180deg); line-height: 1; letter-spacing: 0.03em; }}
+            .dash-strip-foot {{ display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }}
             @media (max-width: 768px) {{
                 .dash-shell {{ padding: 16px; }}
                 .dash-grid.chart {{ grid-template-columns: 1fr; }}
                 .dash-inst-stats {{ grid-template-columns: repeat(2, 1fr); }}
+                .dash-strip-wrap {{ gap: 4px; }}
             }}
         </style>
     </head>
@@ -159,7 +170,14 @@ def page_shell(
 
 
 def chip(text: str):
-    return html.Div(text, className="dashboard-chip")
+    return html.Div(text, className="dash-meta-chip")
+
+
+def meta_row(items: Iterable[str]):
+    chips = [chip(text) for text in items if str(text).strip()]
+    if not chips:
+        return None
+    return html.Div(chips, className="dash-meta-row")
 
 
 def metric_card(label: str, value: str, note: str = "", tone: str = "accent"):
@@ -194,6 +212,62 @@ def graph_card(title: str, figure: go.Figure):
             ),
         ],
         className="dash-card",
+    )
+
+
+def status_bar_strip_card(
+    *,
+    title: str,
+    bars: list[dict],
+    summary: str = "",
+    footer_left: str = "",
+    footer_right: str = "",
+):
+    if not bars:
+        bars = [{"label": "00:00:00", "height": 0.2, "color": THEME["border_light"]}]
+
+    columns = []
+    for item in bars[-24:]:
+        height_ratio = max(0.12, min(1.0, float(item.get("height", 0.0))))
+        columns.append(
+            html.Div(
+                [
+                    html.Div(
+                        className="dash-strip-bar",
+                        style={
+                            "height": f"{int(height_ratio * 100)}%",
+                            "background": item.get("color", THEME["info"]),
+                            "opacity": max(
+                                0.45, min(1.0, float(item.get("opacity", 1.0)))
+                            ),
+                        },
+                        title=str(item.get("title", item.get("label", ""))),
+                    ),
+                    html.Div(str(item.get("label", "")), className="dash-strip-label"),
+                ],
+                className="dash-strip-col",
+            )
+        )
+
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Div(title, className="dash-card-label"),
+                    html.Div(summary, className="dash-strip-summary"),
+                ],
+                className="dash-strip-head",
+            ),
+            html.Div(columns, className="dash-strip-wrap"),
+            html.Div(
+                [
+                    html.Span(footer_left or "", className="dash-strip-summary"),
+                    html.Span(footer_right or "", className="dash-strip-summary"),
+                ],
+                className="dash-strip-foot",
+            ),
+        ],
+        className="dash-card dash-strip-card",
     )
 
 

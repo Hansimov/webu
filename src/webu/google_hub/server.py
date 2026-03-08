@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import argparse
 import os
+import time
 import uvicorn
 
 from contextlib import asynccontextmanager
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from webu.fastapis.request_metrics import (
     format_dashboard_timestamp,
+    format_uptime_human,
     resolve_server_identity,
 )
 from webu.fastapis.styles import setup_root_redirect_page
@@ -41,9 +43,13 @@ class HubSearchResponse(BaseModel):
 
 
 class HubBackendsResponse(BaseModel):
-    strategy: str = "least-inflight"
+    strategy: str = "adaptive"
     healthy_backends: int = 0
     enabled_backends: int = 0
+    started_ts: float = 0.0
+    started_at_human: str = ""
+    uptime_seconds: int = 0
+    uptime_human: str = "0s"
     backends: list[dict] = Field(default_factory=list)
 
 
@@ -108,7 +114,16 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
     def build_snapshot_payload(metrics: dict) -> dict:
         return {
             "updated_at_human": format_dashboard_timestamp(),
-            "strategy": metrics.get("strategy", "least-inflight"),
+            "strategy": metrics.get("strategy", "adaptive"),
+            "started_at_human": format_dashboard_timestamp(
+                metrics.get("started_ts", 0.0)
+            ),
+            "started_ts": float(metrics.get("started_ts", 0.0) or 0.0),
+            "uptime_seconds": max(
+                0,
+                int(time.time() - float(metrics.get("started_ts", 0.0) or 0.0)),
+            ),
+            "uptime_human": format_uptime_human(metrics.get("started_ts", 0.0)),
             "node": resolve_server_identity(
                 os.getenv("WEBU_RUNTIME_ENV", "local").strip().lower() or "local"
             ),
