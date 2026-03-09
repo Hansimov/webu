@@ -3,6 +3,8 @@
 运行: pytest tests/google_api/test_scraper.py -xvs
 """
 
+import asyncio
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -218,3 +220,44 @@ class TestPerfTimer:
         assert scraper._profile_dir is not None
         assert scraper._cookie_file is not None
         assert scraper.perf is not None
+
+    @pytest.mark.asyncio
+    async def test_captcha_bypass_timeout_sets_error(self):
+        manager = MagicMock(spec=ProxyManager)
+        scraper = GoogleScraper(proxy_manager=manager, headless=True, verbose=False)
+        response = GoogleSearchResponse(query="captcha test", has_captcha=True)
+        context = AsyncMock()
+        page = AsyncMock()
+        browser = AsyncMock()
+        page.content = AsyncMock(return_value="<html></html>")
+        page.screenshot = AsyncMock(return_value=b"png")
+        page.goto = AsyncMock()
+        page.add_init_script = AsyncMock()
+        page.url = "https://www.google.com/search?q=captcha+test"
+        page.close = AsyncMock()
+        context.pages = [page]
+        context.new_page = AsyncMock(return_value=page)
+        context.close = AsyncMock()
+        browser.new_context = AsyncMock(return_value=context)
+
+        scraper._browser = browser
+        scraper._save_cookies = AsyncMock()
+        scraper._load_cookies = AsyncMock()
+        scraper._dismiss_consent = AsyncMock(return_value=False)
+        scraper._detect_no_results_early = AsyncMock(return_value=False)
+        scraper.parser.parse = MagicMock(return_value=response)
+
+        with patch("webu.google_api.scraper._save_screenshot_and_html"):
+            with patch("webu.google_api.scraper.CaptchaBypass") as bypass_cls:
+                bypass_cls.return_value.attempt_bypass = AsyncMock(
+                    side_effect=asyncio.TimeoutError()
+                )
+                result = await scraper._do_search(
+                    query="captcha test",
+                    num=10,
+                    lang="en",
+                    proxy_url="direct",
+                )
+
+        assert result.has_captcha is True
+        assert "captcha bypass limit reached" in result.error

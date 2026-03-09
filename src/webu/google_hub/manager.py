@@ -58,6 +58,7 @@ class BackendRuntimeState:
     backend: GoogleHubBackend
     healthy: bool = False
     resolved_ipv4: str = ""
+    search_cooldown_until_ts: float = 0.0
     last_error: str = ""
     latency_ms: int = 0
     inflight: int = 0
@@ -157,6 +158,7 @@ class BackendRuntimeState:
             "base_url": self.backend.base_url,
             "space_name": self.backend.space_name,
             "resolved_ipv4": self.resolved_ipv4,
+            "search_cooldown_until_ts": self.search_cooldown_until_ts,
             "enabled": self.backend.enabled,
             "disabled_reason": self.backend.disabled_reason,
             "weight": self.backend.weight,
@@ -217,6 +219,35 @@ def _resolve_backend_ipv4(base_url: str) -> str:
         return str(socket.gethostbyname(hostname))
     except OSError:
         return ""
+
+
+def sanitize_hub_search_error(error: str) -> str:
+    message = str(error or "").strip()
+    if not message:
+        return "hub search failed"
+    lowered = message.lower()
+    if message.startswith("hub search failed across "):
+        return message
+    if message.startswith("backend '") and " failed: " in message:
+        backend_name, _, backend_error = message.partition(" failed: ")
+        backend_error = backend_error.strip()
+        lowered_backend_error = backend_error.lower()
+        if "timeout" in lowered_backend_error or "timed out" in lowered_backend_error:
+            return f"{backend_name} failed: timeout"
+        if "httpsconnectionpool" in lowered_backend_error:
+            return f"{backend_name} failed: upstream request error"
+        return f"{backend_name} failed: {backend_error[:96]}"
+    if lowered.startswith("all hub backends failed:"):
+        if "timeout" in lowered or "timed out" in lowered:
+            return "hub search failed across available backends: timeout. Try again or pin another healthy instance."
+        if "httpsconnectionpool" in lowered:
+            return "hub search failed across available backends: upstream request error. Try again or pin another healthy instance."
+        return "hub search failed across available backends. Try again or pin another healthy instance."
+    if "httpsconnectionpool" in lowered:
+        if "timeout" in lowered or "timed out" in lowered:
+            return "hub search failed: timeout"
+        return "hub search failed: upstream request error"
+    return message
 
 
 def _normalize_backend(
@@ -400,6 +431,9 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
 
 
 class GoogleHubManager:
+    _AUTO_SEARCH_ATTEMPT_TIMEOUT_SEC = 18
+    _SEARCH_BACKOFF_SECONDS = 45.0
+
     def __init__(self, settings: GoogleHubSettings):
         self.settings = settings
         self.started_ts = time.time()
@@ -481,19 +515,86 @@ class GoogleHubManager:
         return state.to_dict()
 
     def _eligible_states(self) -> list[BackendRuntimeState]:
-        states = [
+        ready_healthy_states = [
+            state
+            for state in self.states.values()
+            if state.backend.enabled
+            and state.healthy
+            and not self._is_search_cooling_down(state)
+        ]
+        if ready_healthy_states:
+            return ready_healthy_states
+        healthy_states = [
             state
             for state in self.states.values()
             if state.backend.enabled and state.healthy
         ]
-        if states:
-            return states
+        if healthy_states:
+            return healthy_states
         return [state for state in self.states.values() if state.backend.enabled]
+
+    def _is_search_cooling_down(self, state: BackendRuntimeState) -> bool:
+        return state.search_cooldown_until_ts > time.time()
+
+    def _mark_search_backoff(
+        self,
+        state: BackendRuntimeState,
+        *,
+        error: str,
+        duration_ms: float,
+        attempt_timeout_sec: float,
+    ):
+        lowered_error = str(error or "").strip().lower()
+        timed_out = "timed out" in lowered_error or "timeout" in lowered_error
+        captcha_related = "captcha" in lowered_error
+        ran_too_long = duration_ms >= max(1.0, attempt_timeout_sec * 1000.0 * 0.92)
+        if timed_out or captcha_related or ran_too_long:
+            state.search_cooldown_until_ts = max(
+                state.search_cooldown_until_ts,
+                time.time() + self._SEARCH_BACKOFF_SECONDS,
+            )
+
+    def _summarize_backend_failure(self, error: str) -> str:
+        lowered_error = str(error or "").strip().lower()
+        if not lowered_error:
+            return "failed"
+        if "temporarily cooling down" in lowered_error:
+            return "cooling down"
+        if "timed out" in lowered_error or "timeout" in lowered_error:
+            return "timeout"
+        if "captcha" in lowered_error:
+            return "captcha blocked"
+        if "not healthy" in lowered_error:
+            return "not healthy"
+        if "disabled" in lowered_error:
+            return "disabled"
+        if "http " in lowered_error:
+            return "http error"
+        compact = str(error).strip().splitlines()[0]
+        return compact[:96]
+
+    def _format_auto_search_failure(self, failures: list[tuple[str, str]]) -> str:
+        if not failures:
+            return "hub search failed: no backend responded"
+        parts = [
+            f"{name} {self._summarize_backend_failure(error)}"
+            for name, error in failures[:4]
+        ]
+        detail = "; ".join(parts)
+        remaining = len(failures) - len(parts)
+        if remaining > 0:
+            detail = f"{detail}; +{remaining} more"
+        return (
+            f"hub search failed across {len(failures)} backend(s): {detail}. "
+            f"Try again or pin another healthy instance."
+        )
 
     def _state_rank(self, state: BackendRuntimeState) -> tuple:
         strategy = (self.settings.strategy or "adaptive").strip().lower()
+        cooldown_penalty = 1 if self._is_search_cooling_down(state) else 0
         if strategy == "least-inflight":
             return (
+                cooldown_penalty,
                 state.inflight / max(1, state.backend.weight),
                 state.consecutive_failures,
                 state.last_selected_ts,
@@ -503,6 +604,7 @@ class GoogleHubManager:
 
         score = state.compute_selection_score()
         return (
+            cooldown_penalty,
             score,
             state.inflight / max(1, state.backend.weight),
             state.consecutive_failures,
@@ -521,6 +623,10 @@ class GoogleHubManager:
             raise RuntimeError(f"backend '{requested_name}' is disabled")
         if not state.healthy:
             raise RuntimeError(f"backend '{requested_name}' is not healthy")
+        if self._is_search_cooling_down(state):
+            raise RuntimeError(
+                f"backend '{requested_name}' is temporarily cooling down after recent search failures"
+            )
         return state
 
     def choose_backend(self, backend_name: str = "") -> BackendRuntimeState:
@@ -566,6 +672,13 @@ class GoogleHubManager:
         overall_started = time.perf_counter()
         last_error = None
         last_backend_name = ""
+        failures: list[tuple[str, str]] = []
+        attempt_timeout_sec = float(self.settings.request_timeout_sec)
+        if not requested_name and len(ordered) > 1:
+            attempt_timeout_sec = min(
+                attempt_timeout_sec,
+                float(self._AUTO_SEARCH_ATTEMPT_TIMEOUT_SEC),
+            )
         for state in ordered:
             state.last_selected_ts = time.time()
             last_backend_name = state.backend.name
@@ -580,7 +693,7 @@ class GoogleHubManager:
                     f"{state.backend.base_url}/search",
                     params={"q": query, "num": num, "lang": lang},
                     headers=headers or None,
-                    timeout=self.settings.request_timeout_sec,
+                    timeout=attempt_timeout_sec,
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -591,6 +704,7 @@ class GoogleHubManager:
                     )
                 state.total_successes += 1
                 state.healthy = True
+                state.search_cooldown_until_ts = 0.0
                 state.last_error = ""
                 state.record_request((time.perf_counter() - started) * 1000.0, True)
                 self.request_metrics.record(
@@ -610,27 +724,42 @@ class GoogleHubManager:
                 }
             except Exception as exc:
                 last_error = exc
+                duration_ms = (time.perf_counter() - started) * 1000.0
                 state.total_failures += 1
-                state.healthy = False
                 state.last_error = str(exc)
-                state.record_request((time.perf_counter() - started) * 1000.0, False)
+                failures.append((state.backend.name, state.last_error))
+                self._mark_search_backoff(
+                    state,
+                    error=state.last_error,
+                    duration_ms=duration_ms,
+                    attempt_timeout_sec=attempt_timeout_sec,
+                )
+                state.record_request(duration_ms, False)
             finally:
                 state.inflight = max(0, state.inflight - 1)
+
+        final_error = str(last_error) if last_error else ""
+        if requested_name:
+            final_error = (
+                f"backend '{requested_name}' failed: "
+                f"{self._summarize_backend_failure(final_error)}"
+            )
+        else:
+            final_error = self._format_auto_search_failure(failures)
+        final_error = sanitize_hub_search_error(final_error)
 
         self.request_metrics.record(
             (time.perf_counter() - overall_started) * 1000.0,
             False,
             query=query,
             backend=last_backend_name,
-            error=str(last_error) if last_error else "",
+            error=final_error,
             response_payload={
                 "success": False,
-                "error": str(last_error) if last_error else "",
+                "error": final_error,
             },
         )
-        if requested_name:
-            raise RuntimeError(f"backend '{requested_name}' failed: {last_error}")
-        raise RuntimeError(f"all hub backends failed: {last_error}")
+        raise RuntimeError(final_error)
 
     async def backend_snapshot(self) -> list[dict[str, Any]]:
         return [state.to_dict() for state in self.states.values()]

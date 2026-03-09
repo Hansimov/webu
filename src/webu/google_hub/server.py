@@ -19,7 +19,12 @@ from webu.fastapis.request_metrics import (
 from webu.fastapis.styles import setup_root_redirect_page
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_HUB_PORT
 
-from .manager import GoogleHubManager, GoogleHubSettings, resolve_google_hub_settings
+from .manager import (
+    GoogleHubManager,
+    GoogleHubSettings,
+    resolve_google_hub_settings,
+    sanitize_hub_search_error,
+)
 from .panel import mount_google_hub_panel
 
 
@@ -108,7 +113,10 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
             )
             return HubSearchResponse(**payload)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
+            raise HTTPException(
+                status_code=502,
+                detail=sanitize_hub_search_error(str(exc)),
+            )
 
     @app.get("/admin/backends", response_model=HubBackendsResponse, tags=["管理"])
     async def admin_backends(x_admin_token: str | None = Header(default=None)):

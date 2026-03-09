@@ -231,7 +231,7 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-search-copy {{ font-size: 12px; color: var(--muted); line-height: 1.6; }}
             .dash-search-form {{ display: flex; flex-direction: column; gap: 12px; }}
             .dash-search-row {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
-            .dash-search-input {{ flex: 1 1 320px; min-width: 240px; min-height: 88px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; line-height: 1.55; resize: vertical; }}
+            .dash-search-input {{ flex: 1 1 320px; min-width: 240px; min-height: 56px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; line-height: 1.55; resize: vertical; }}
             .dash-search-route .dash-radioitems {{ display: flex; flex-wrap: wrap; gap: 8px; }}
             .dash-search-route label {{ display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; cursor: pointer; }}
             .dash-search-route input {{ margin: 0; accent-color: var(--accent); }}

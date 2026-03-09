@@ -33,6 +33,8 @@ from webu.runtime_settings import (
     resolve_google_docker_settings,
 )
 
+from .manager import sanitize_hub_search_error
+
 
 SnapshotProvider = Callable[[], dict]
 SearchProvider = Callable[[str, int, str, str], dict]
@@ -112,7 +114,7 @@ def _build_search_card(ids: dict[str, str], snapshot: dict, search_state: dict):
         selected_backend = ""
 
     status = str(search_state.get("status", "idle")).strip().lower() or "idle"
-    error_text = str(search_state.get("error", "")).strip()
+    error_text = sanitize_hub_search_error(str(search_state.get("error", "")).strip())
     result_payload = dict(search_state.get("result", {}) or {})
     result_query = str(
         result_payload.get("query", search_state.get("query", ""))
@@ -222,6 +224,7 @@ def _build_search_card(ids: dict[str, str], snapshot: dict, search_state: dict):
                                 id=ids["search_query"],
                                 value=query_value,
                                 placeholder="Search Google via the hub...",
+                                rows=2,
                                 className="dash-search-input",
                                 persistence=True,
                                 persistence_type="session",
@@ -260,6 +263,38 @@ def _build_search_card(ids: dict[str, str], snapshot: dict, search_state: dict):
         ],
         className="dash-card dash-search-card",
     )
+
+
+def _resolve_search_state(
+    search_clicks: int | None,
+    query_value: str | None,
+    backend_name: str | None,
+    search_provider: SearchProvider,
+) -> dict[str, object]:
+    if int(search_clicks or 0) <= 0:
+        raise PreventUpdate
+
+    query = str(query_value or "").strip()
+    backend_name = str(backend_name or "").strip()
+    if not query:
+        raise PreventUpdate
+    try:
+        result = search_provider(query, 5, "en", backend_name)
+        return {
+            "status": "ok",
+            "query": query,
+            "backend": backend_name,
+            "result": result,
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "query": query,
+            "backend": backend_name,
+            "result": {},
+            "error": sanitize_hub_search_error(str(exc)),
+        }
 
 
 def _build_body(
@@ -302,9 +337,7 @@ def _build_body(
         *build_time_metric_cards(snapshot),
         build_instances_metric_card(snapshot),
         *build_request_metric_cards(requests),
-        build_node_metric_card(
-            node, f"Strategy {snapshot.get('strategy', 'adaptive')}"
-        ),
+        build_node_metric_card(node, ""),
     ]
 
     body = [section("Overview", cards, kind="metric")]
@@ -547,28 +580,12 @@ def mount_google_hub_panel(
         query_value: str | None,
         backend_name: str | None,
     ):
-        del search_clicks
-        query = str(query_value or "").strip()
-        backend_name = str(backend_name or "").strip()
-        if not query:
-            raise PreventUpdate
-        try:
-            result = search_provider(query, 5, "en", backend_name)
-            return {
-                "status": "ok",
-                "query": query,
-                "backend": backend_name,
-                "result": result,
-                "error": "",
-            }
-        except Exception as exc:
-            return {
-                "status": "error",
-                "query": query,
-                "backend": backend_name,
-                "result": {},
-                "error": str(exc),
-            }
+        return _resolve_search_state(
+            search_clicks,
+            query_value,
+            backend_name,
+            search_provider,
+        )
 
     @dash_app.callback(
         Output(ids["root"], "children"),

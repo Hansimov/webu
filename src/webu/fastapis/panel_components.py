@@ -79,9 +79,6 @@ def build_request_metric_cards(requests: dict) -> list:
     recent_latency_ms = float(
         requests.get("recent_latency_ms", requests.get("last_latency_ms", 0.0))
     )
-    median_latency_ms = float(
-        requests.get("median_latency_ms", requests.get("avg_latency_ms", 0.0))
-    )
     return [
         metric_card(
             "Requests",
@@ -97,9 +94,9 @@ def build_request_metric_cards(requests: dict) -> list:
         ),
         metric_card(
             "Latency",
-            f"{format_ms(recent_latency_ms)} / {format_ms(median_latency_ms)}",
-            "recent / mid",
-            _latency_tone(max(recent_latency_ms, median_latency_ms)),
+            format_ms(recent_latency_ms),
+            "",
+            _latency_tone(recent_latency_ms),
         ),
     ]
 

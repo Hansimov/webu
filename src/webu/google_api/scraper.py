@@ -48,6 +48,8 @@ TZ_SHANGHAI = timezone(timedelta(hours=8))
 
 # Cookie 持久化目录
 DEFAULT_PROFILE_DIR = Path("data/google_api/chrome_profile")
+CAPTCHA_BYPASS_TIMEOUT_SEC = 45.0
+CAPTCHA_BYPASS_MAX_VLM_REQUESTS = 10
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -586,13 +588,19 @@ class GoogleScraper:
                 # 尝试自动绕过 CAPTCHA
                 bypasser = CaptchaBypass(
                     max_wait_after_click=15.0,
+                    max_solve_attempts=CAPTCHA_BYPASS_MAX_VLM_REQUESTS,
                     save_screenshots=True,
                     verbose=self.verbose,
                     run_dir=run_dir,
                 )
-                bypass_ok = await bypasser.attempt_bypass(
-                    page, proxy_url=proxy_url or "direct"
-                )
+                try:
+                    bypass_ok = await asyncio.wait_for(
+                        bypasser.attempt_bypass(page, proxy_url=proxy_url or "direct"),
+                        timeout=CAPTCHA_BYPASS_TIMEOUT_SEC,
+                    )
+                except asyncio.TimeoutError:
+                    bypass_ok = False
+                    response.error = "captcha bypass limit reached: exceeded 45s without solving challenge"
 
                 if bypass_ok:
                     # 绕过成功 — 重新获取页面内容并解析
@@ -620,6 +628,10 @@ class GoogleScraper:
                         )
                     except Exception:
                         pass
+                elif response.has_captcha and not response.error:
+                    response.error = (
+                        "captcha bypass limit reached: exceeded 10 VLM requests or 45s"
+                    )
                 search_perf.stop()
 
             self._search_count += 1

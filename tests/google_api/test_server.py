@@ -232,10 +232,8 @@ class TestGoogleSearchServerUnit:
                 app = create_google_search_server(headless=True, home_mode="panel")
                 with TestClient(app) as client:
                     root_resp = client.get("/", follow_redirects=False)
-                    assert root_resp.status_code == 307
-                    assert (
-                        root_resp.headers["location"] == DEFAULT_GOOGLE_API_PANEL_PATH
-                    )
+                    assert root_resp.status_code == 200
+                    assert DEFAULT_GOOGLE_API_PANEL_PATH in root_resp.text
 
                     panel_resp = client.get(DEFAULT_GOOGLE_API_PANEL_PATH)
                     assert panel_resp.status_code == 200
@@ -252,7 +250,7 @@ class TestGoogleSearchServerUnit:
                     assert response.status_code == 200
                     metrics = app.state.google_api_request_metrics.snapshot()
                     assert metrics.accepted_requests == 1
-                    assert metrics.successful_requests == 0
+                    assert metrics.successful_requests == 1
 
     def test_panel_body_includes_uptime_and_status_bars(self):
         snapshot = {
@@ -324,13 +322,20 @@ class TestGoogleSearchServerUnit:
             },
         }
 
-        body = build_google_api_panel_body(snapshot)
+        body = build_google_api_panel_body(
+            snapshot,
+            auth_unlocked=True,
+            admin_token_configured=False,
+            page=1,
+            page_size=10,
+        )
         class_names = _collect_class_names(body)
         text_values = _collect_text(body)
         assert any("dash-strip-card" in value for value in class_names)
         assert "UPTIME" in text_values
         assert "30m 0s" in text_values
         assert "OpenAI news headline | short snippet | example.com" in text_values
+        assert "recent / mid" not in text_values
 
 
 @pytest.mark.integration

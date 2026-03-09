@@ -2,7 +2,10 @@ import json
 import asyncio
 import time
 
+import pytest
+
 from dash import dcc
+from dash.exceptions import PreventUpdate
 from fastapi.testclient import TestClient
 
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH
@@ -11,9 +14,11 @@ from webu.google_hub.manager import (
     GoogleHubBackend,
     GoogleHubManager,
     GoogleHubSettings,
+    sanitize_hub_search_error,
 )
 from webu.google_hub.panel import _accepted_admin_tokens
 from webu.google_hub.panel import _build_body as build_google_hub_panel_body
+from webu.google_hub.panel import _resolve_search_state
 from webu.google_hub.server import create_google_hub_server
 
 
@@ -229,6 +234,223 @@ def test_hub_search_routes_to_best_backend(monkeypatch, tmp_path):
         metrics = app.state.google_hub_manager.request_metrics.snapshot()
         assert metrics.accepted_requests == 1
         assert metrics.successful_requests == 1
+
+
+def test_hub_search_skips_recently_timed_out_backend(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    _write_base_configs(config_dir)
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "request_timeout_sec": 30,
+                "backends": [
+                    {
+                        "name": "space1",
+                        "kind": "hf-space",
+                        "space": "owner/space1",
+                        "weight": 2,
+                    },
+                    {
+                        "name": "space2",
+                        "kind": "hf-space",
+                        "space": "owner/space2",
+                        "weight": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        calls.append((url, timeout))
+        if url.endswith("/health"):
+            return _Response(200, {"status": "ok"})
+        if url == "https://owner-space1.hf.space/search":
+            raise RuntimeError("Read timed out")
+        if url == "https://owner-space2.hf.space/search":
+            return _Response(
+                200,
+                {
+                    "success": True,
+                    "query": params["q"],
+                    "results": [{"title": "B", "url": "https://example.com/b"}],
+                    "result_count": 1,
+                    "total_results_text": "1 result",
+                    "has_captcha": False,
+                    "error": "",
+                },
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    app = create_google_hub_server()
+    with TestClient(app) as client:
+        resp = client.get("/search", params={"q": "python", "num": 3})
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["backend"] == "space2"
+        assert payload["results"][0]["title"] == "B"
+
+        backend_resp = client.get(
+            "/admin/backends", headers={"X-Admin-Token": "hub-secret"}
+        )
+        assert backend_resp.status_code == 200
+        backends = {item["name"]: item for item in backend_resp.json()["backends"]}
+        assert backends["space1"]["healthy"] is True
+        assert backends["space1"]["search_cooldown_until_ts"] > 0
+
+    search_timeouts = [timeout for url, timeout in calls if url.endswith("/search")]
+    assert 18 in search_timeouts
+
+
+def test_hub_search_returns_summarized_auto_failure(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    _write_base_configs(config_dir)
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "backends": [
+                    {
+                        "name": "space3",
+                        "kind": "hf-space",
+                        "space": "owner/space3",
+                        "weight": 1,
+                    },
+                    {
+                        "name": "space4",
+                        "kind": "hf-space",
+                        "space": "owner/space4",
+                        "weight": 1,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/health"):
+            return _Response(200, {"status": "ok"})
+        if url.endswith("/search"):
+            raise RuntimeError(
+                "HTTPSConnectionPool(host='owner-space4.hf.space', port=443): Read timed out."
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    with TestClient(create_google_hub_server()) as client:
+        resp = client.get("/search", params={"q": "bilibili", "num": 5})
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert "hub search failed across 2 backend(s)" in detail
+        assert "space3 timeout" in detail
+        assert "space4 timeout" in detail
+        assert "HTTPSConnectionPool" not in detail
+
+
+def test_hub_search_requires_real_submit_click():
+    with pytest.raises(PreventUpdate):
+        _resolve_search_state(0, "OpenAI news", "", lambda *_args: {"success": True})
+
+    result = _resolve_search_state(
+        1,
+        "OpenAI news",
+        "space1",
+        lambda query, num, lang, backend: {
+            "success": True,
+            "query": query,
+            "results": [],
+            "result_count": 0,
+            "selection_mode": "manual",
+            "backend": backend,
+        },
+    )
+    assert result["status"] == "ok"
+    assert result["backend"] == "space1"
+
+
+def test_sanitize_hub_search_error_scrubs_legacy_timeout_string():
+    message = (
+        "all hub backends failed: HTTPSConnectionPool(host='1krog-space4.hf.space', "
+        "port=443): Max retries exceeded with url: /search?q=test "
+        "(Caused by ReadTimeoutError(\"HTTPSConnectionPool(host='1krog-space4.hf.space', "
+        'port=443): Read timed out. (read timeout=60)"))'
+    )
+    sanitized = sanitize_hub_search_error(message)
+    assert sanitized == (
+        "hub search failed across available backends: timeout. "
+        "Try again or pin another healthy instance."
+    )
+
+
+def test_resolve_search_state_sanitizes_provider_exception():
+    result = _resolve_search_state(
+        1,
+        "OpenAI news",
+        "",
+        lambda *_args: (_ for _ in ()).throw(
+            RuntimeError(
+                "all hub backends failed: HTTPSConnectionPool(host='1krog-space4.hf.space', port=443): Read timed out."
+            )
+        ),
+    )
+    assert result["status"] == "error"
+    assert "timeout" in result["error"]
+    assert "HTTPSConnectionPool" not in result["error"]
+
+
+def test_hub_panel_sanitizes_stale_search_state_error():
+    snapshot = {
+        "updated_at_human": "2026-03-09 09:00:00",
+        "current_time_human": "2026-03-09 09:00:00",
+        "timezone_human": "UTC+08 Shanghai",
+        "started_at_human": "2026-03-09 08:00:00",
+        "uptime_human": "1h 0m 0s",
+        "strategy": "adaptive",
+        "node": {"label": "Server IP", "value": "1.2.3.4"},
+        "health": {"healthy_backends": 1, "backend_count": 1, "enabled_backends": 1},
+        "requests": {
+            "accepted_requests": 1,
+            "successful_requests": 0,
+            "failed_requests": 1,
+            "success_rate": 0.0,
+            "avg_latency_ms": 100.0,
+            "median_latency_ms": 100.0,
+            "recent_latency_ms": 100.0,
+            "last_latency_ms": 100.0,
+            "history": [],
+            "request_log": [],
+        },
+        "backends": [],
+    }
+    body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=True,
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+        search_state={
+            "status": "error",
+            "query": "test",
+            "backend": "",
+            "result": {},
+            "error": "all hub backends failed: HTTPSConnectionPool(host='1krog-space4.hf.space', port=443): Read timed out.",
+        },
+    )
+    text_values = _collect_text(body)
+    assert any("hub search failed" in value for value in text_values)
+    assert not any("HTTPSConnectionPool" in value for value in text_values)
 
 
 def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
@@ -665,6 +887,47 @@ def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
 
     assert "**.**.**.**" in text_values
     assert "secret preview" not in text_values
+
+
+def test_hub_panel_hides_strategy_note_and_uses_two_line_search_box():
+    snapshot = {
+        "updated_at_human": "2026-03-09 09:00:00",
+        "current_time_human": "2026-03-09 09:00:00",
+        "timezone_human": "UTC+08 Shanghai",
+        "started_at_human": "2026-03-09 08:00:00",
+        "uptime_human": "1h 0m 0s",
+        "strategy": "adaptive",
+        "node": {"label": "Server IP", "value": "1.2.3.4"},
+        "health": {"healthy_backends": 1, "backend_count": 1, "enabled_backends": 1},
+        "requests": {
+            "accepted_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "success_rate": 100.0,
+            "avg_latency_ms": 100.0,
+            "median_latency_ms": 100.0,
+            "recent_latency_ms": 100.0,
+            "last_latency_ms": 100.0,
+            "history": [],
+            "request_log": [],
+        },
+        "backends": [],
+    }
+
+    body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=True,
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+    )
+    text_values = _collect_text(body)
+    search_input = _find_component_by_id(body, "google-hub-panel-search-query")
+
+    assert "Strategy adaptive" not in text_values
+    assert isinstance(search_input, dcc.Textarea)
+    assert search_input.rows == 2
+    assert "recent / mid" not in text_values
 
 
 def test_hub_instance_cards_place_disabled_last_and_dim_them():

@@ -312,7 +312,9 @@ def create_google_search_server(
                 lang=req.lang,
                 proxy_url=req.proxy_url,
             )
-            success = bool(result.results) and not result.has_captcha
+            success = not result.has_captcha and not bool(
+                str(result.error or "").strip()
+            )
             response_model = SearchResponse(
                 success=success,
                 query=result.query,
