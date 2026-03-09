@@ -216,8 +216,8 @@ def test_hf_space_entries_expand_account_centered_config(monkeypatch, tmp_path):
                         "account": "owner-a",
                         "hf_token": "hf_demo_a",
                         "spaces": [
-                            {"name": "space1", "enabled": True, "weight": 1},
-                            {"name": "space2", "enabled": False, "weight": 2},
+                            {"name": "space1", "enabled": True},
+                            {"name": "space2", "enabled": False},
                         ],
                     }
                 ]
@@ -235,7 +235,7 @@ def test_hf_space_entries_expand_account_centered_config(monkeypatch, tmp_path):
         "owner-a/space2",
     ]
     assert entries[0]["hf_token"] == "hf_demo_a"
-    assert entries[1]["weight"] == 2
+    assert entries[1]["enabled"] is False
 
 
 def test_load_json_config_validates_known_configs(monkeypatch, tmp_path):
@@ -322,12 +322,10 @@ def test_google_hub_settings_resolve_backends(monkeypatch, tmp_path):
                             {
                                 "name": "space1",
                                 "enabled": True,
-                                "weight": 1,
                             },
                             {
                                 "name": "space2",
                                 "enabled": True,
-                                "weight": 2,
                             },
                         ],
                     }

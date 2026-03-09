@@ -137,6 +137,8 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-card-note {{ margin-top: 6px; font-size: 12px; color: var(--muted); }}
             .dash-section {{ margin-top: 24px; }}
             .dash-section-title {{ font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; font-weight: 600; }}
+            .dash-section-collapse .dash-section-title {{ margin-bottom: 0; }}
+            .dash-section-grid {{ display: grid; gap: 14px; }}
             .dash-controls {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }}
             .dash-controls-group {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }}
             .dash-controls-label {{ font-size: 11px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; }}
@@ -260,6 +262,9 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-action-row .dash-button {{ min-width: 88px; }}
             .dash-action-row-compact {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; width: 100%; }}
             .dash-action-row-compact .dash-button {{ min-width: 0; min-height: 30px; padding: 5px 7px; border-radius: 9px; font-size: 11px; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+            .dash-controls-card {{ padding: 12px 14px; }}
+            .dash-controls-card .dash-action-row {{ margin-top: 0; }}
+            .dash-controls-card .dash-action-status {{ margin-top: 2px; }}
             .dash-action-status {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
             .dash-action-status.ok {{ color: var(--accent); }}
             .dash-action-status.fail {{ color: var(--danger); }}
@@ -385,6 +390,34 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                         node.textContent = formatWebuShanghaiNow();
                     }});
                 }}
+                function bindWebuPersistentCollapses() {{
+                    document.querySelectorAll("details[data-webu-collapse-key]").forEach(function (node) {{
+                        const rawKey = String(node.dataset.webuCollapseKey || "").trim();
+                        if (!rawKey) {{
+                            return;
+                        }}
+                        const storageKey = "webu-collapse:" + rawKey;
+                        if (node.dataset.webuCollapseBound !== "1") {{
+                            node.dataset.webuCollapseBound = "1";
+                            node.addEventListener("toggle", function () {{
+                                try {{
+                                    window.localStorage.setItem(storageKey, node.open ? "1" : "0");
+                                }} catch (_err) {{}}
+                            }});
+                        }}
+                        if (node.dataset.webuCollapseHydrated === "1") {{
+                            return;
+                        }}
+                        node.dataset.webuCollapseHydrated = "1";
+                        const defaultValue = String(node.dataset.webuCollapseOpen || (node.hasAttribute("open") ? "1" : "0"));
+                        try {{
+                            const storedValue = window.localStorage.getItem(storageKey);
+                            node.open = (storedValue === null ? defaultValue : storedValue) === "1";
+                        }} catch (_err) {{
+                            node.open = defaultValue === "1";
+                        }}
+                    }});
+                }}
                 document.addEventListener("DOMContentLoaded", function () {{
                     function bindWebuSearchHotkeys() {{
                         document.querySelectorAll("textarea[id$='-search-query']").forEach(function (node) {{
@@ -419,7 +452,9 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                         }} catch (_err) {{}}
                     }}, 1000);
                     bindWebuSearchHotkeys();
+                    bindWebuPersistentCollapses();
                     window.setInterval(bindWebuSearchHotkeys, 500);
+                    window.setInterval(bindWebuPersistentCollapses, 500);
                     refreshWebuLiveUptime();
                     window.setInterval(refreshWebuLiveUptime, 1000);
                     document.querySelectorAll(".dash-strip-scroll").forEach(function (node) {{
@@ -534,11 +569,59 @@ def metric_card_with_meta(
     return html.Div(children, className="dash-card")
 
 
-def section(title: str | None, children, kind: str = "chart"):
+def section(
+    title: str | None,
+    children,
+    kind: str = "chart",
+    *,
+    collapsible: bool = False,
+    open: bool = True,
+    collapse_key: str = "",
+):
+    grid = html.Div(list(children), className=f"dash-grid {kind} dash-section-grid")
+    if not collapsible:
+        return html.Section(
+            [
+                *([html.H2(title, className="dash-section-title")] if title else []),
+                grid,
+            ],
+            className="dash-section",
+        )
+
     return html.Section(
         [
-            *([html.H2(title, className="dash-section-title")] if title else []),
-            html.Div(list(children), className=f"dash-grid {kind}"),
+            html.Details(
+                [
+                    html.Summary(
+                        [
+                            (
+                                html.H2(title, className="dash-section-title")
+                                if title
+                                else html.Span(className="dash-collapse-summary-main")
+                            ),
+                            html.Span(
+                                html.Span(className="dash-collapse-icon"),
+                                className="dash-collapse-summary-side",
+                            ),
+                        ],
+                        className="dash-collapse-summary",
+                    ),
+                    html.Div(
+                        [html.Div(grid, className="dash-collapse-body")],
+                        className="dash-collapse-content",
+                    ),
+                ],
+                open=open,
+                className="dash-collapse dash-section-collapse",
+                **(
+                    {
+                        "data-webu-collapse-key": collapse_key,
+                        "data-webu-collapse-open": "1" if open else "0",
+                    }
+                    if collapse_key
+                    else {}
+                ),
+            )
         ],
         className="dash-section",
     )

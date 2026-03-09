@@ -327,8 +327,12 @@ def _build_search_card(
                         className="dash-collapse-body dash-search-body",
                     ),
                 ],
-                open=True,
+                open=False,
                 className="dash-collapse",
+                **{
+                    "data-webu-collapse-key": "google-hub-search",
+                    "data-webu-collapse-open": "0",
+                },
             )
         ],
         className="dash-card dash-search-card",
@@ -442,7 +446,7 @@ def _build_global_controls_card(ids: dict[str, str], control_state: dict | None)
             ),
             message_node,
         ],
-        className="dash-card",
+        className="dash-card dash-controls-card",
     )
 
 
@@ -545,6 +549,9 @@ def _build_body(
                 "Controls",
                 [_build_global_controls_card(ids, control_state)],
                 kind="search",
+                collapsible=True,
+                open=False,
+                collapse_key="google-hub-controls",
             ),
             section(
                 "Search",
@@ -557,7 +564,14 @@ def _build_body(
                 ],
                 kind="search",
             ),
-            section("Trends", build_request_trend_cards(requests), kind="chart"),
+            section(
+                "Trends",
+                build_request_trend_cards(requests),
+                kind="chart",
+                collapsible=True,
+                open=True,
+                collapse_key="google-hub-trends",
+            ),
             section(
                 "Instances",
                 build_backend_instance_cards(
@@ -577,6 +591,9 @@ def _build_body(
                     )
                 ],
                 kind="search",
+                collapsible=True,
+                open=True,
+                collapse_key="google-hub-requests",
             ),
         ]
     )

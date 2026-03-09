@@ -166,19 +166,11 @@
       "spaces": [
         {
           "name": "space1",
-          "enabled": true,
-          "weight": 1,
-          "tags": [
-            "primary"
-          ]
+          "enabled": true
         },
         {
           "name": "space2",
-          "enabled": true,
-          "weight": 1,
-          "tags": [
-            "secondary"
-          ]
+          "enabled": true
         }
       ]
     },
@@ -188,11 +180,7 @@
       "spaces": [
         {
           "name": "space1",
-          "enabled": true,
-          "weight": 1,
-          "tags": [
-            "primary"
-          ]
+          "enabled": true
         }
       ]
     }
@@ -206,7 +194,7 @@
 2. 这里也不要放 admin_token。
 3. 推荐使用按账号分组的 accounts 结构，每个账号只维护一个 hf_token。
 4. 每个 space 可以只写 name；此时会自动拼成 account/name。
-5. 可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置；未在 google_hub.json 显式声明的已配置 Space 会被自动补齐到 hub 后端列表中。
+5. space 级目前只保留 enabled；未在 google_hub.json 显式声明的已配置 Space 会被自动补齐到 hub 后端列表中，并使用默认 weight=1、tags=[]。
 6. 为兼容旧配置，仍接受平铺的 legacy space 列表格式。
 
 ## 6. `configs/llms.json`

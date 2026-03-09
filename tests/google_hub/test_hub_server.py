@@ -144,6 +144,33 @@ def _find_component_by_id(component, component_id: str):
     return None
 
 
+def _collect_details_with_class_token(component, class_token: str):
+    matches = []
+    class_name = str(getattr(component, "className", "") or "")
+    if isinstance(component, html.Details) and class_token in class_name.split():
+        matches.append(component)
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            matches.extend(_collect_details_with_class_token(child, class_token))
+    elif children is not None:
+        matches.extend(_collect_details_with_class_token(children, class_token))
+    return matches
+
+
+def _detail_contains_component_id(component, component_id: str) -> bool:
+    if getattr(component, "id", None) == component_id:
+        return True
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        return any(
+            _detail_contains_component_id(child, component_id) for child in children
+        )
+    if children is not None:
+        return _detail_contains_component_id(children, component_id)
+    return False
+
+
 def test_hub_admin_backends_requires_token(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
@@ -1020,6 +1047,30 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "Use auto routing for the best healthy instance" not in text_values
     assert "{'type': 'google-hub-panel-history-page-button', 'page': 1}" in ids
 
+    search_details = [
+        detail
+        for detail in _collect_details_with_class_token(body, "dash-collapse")
+        if _detail_contains_component_id(detail, "google-hub-panel-search-query")
+    ]
+    section_details = _collect_details_with_class_token(body, "dash-section-collapse")
+    assert search_details and search_details[0].open is False
+    assert search_details[0].__dict__["data-webu-collapse-key"] == "google-hub-search"
+    assert search_details[0].__dict__["data-webu-collapse-open"] == "0"
+    keyed_details = {
+        str(detail.__dict__.get("data-webu-collapse-key", "")): detail
+        for detail in section_details
+    }
+    assert keyed_details["google-hub-controls"].open is False
+    assert (
+        keyed_details["google-hub-controls"].__dict__["data-webu-collapse-open"] == "0"
+    )
+    assert keyed_details["google-hub-trends"].open is True
+    assert keyed_details["google-hub-trends"].__dict__["data-webu-collapse-open"] == "1"
+    assert keyed_details["google-hub-requests"].open is True
+    assert (
+        keyed_details["google-hub-requests"].__dict__["data-webu-collapse-open"] == "1"
+    )
+
 
 def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
     snapshot = {
@@ -1128,6 +1179,7 @@ def test_hub_instance_cards_place_disabled_last_and_dim_them():
             },
             {
                 "name": "space2",
+                "kind": "hf-space",
                 "space_name": "owner/space2",
                 "base_url": "https://owner-space2.hf.space",
                 "resolved_ipv4": "10.20.30.41",
@@ -1140,6 +1192,7 @@ def test_hub_instance_cards_place_disabled_last_and_dim_them():
             },
             {
                 "name": "space1",
+                "kind": "hf-space",
                 "space_name": "owner/space1",
                 "base_url": "https://owner-space1.hf.space",
                 "resolved_ipv4": "10.20.30.40",
@@ -1158,11 +1211,27 @@ def test_hub_instance_cards_place_disabled_last_and_dim_them():
         name_nodes = _collect_components_by_class(card, "dash-inst-name")
         instance_names.append(name_nodes[0].children)
 
-    assert instance_names == ["space1", "space2", "local"]
+    assert instance_names == ["owner/space1", "owner/space2", "local"]
     assert cards[-1].style["opacity"] == 0.58
     assert "10.20.30.40" in _collect_text(cards[0])
     assert "10.20.30.41" not in _collect_text(cards[1])
     assert "127.0.0.1" not in _collect_text(cards[-1])
+    assert "owner/space1" not in _collect_text(cards[0])[1:]
+    assert "excluded by hub settings" not in _collect_text(cards[-1])
+    assert "google-api" not in _collect_text(cards[-1])
+
+
+def test_hub_panel_index_includes_persistent_collapse_script():
+    from webu.fastapis.dashboard_ui import create_dash_app
+
+    app = create_dash_app(
+        name="test-google-hub-panel",
+        title="Google Hub Panel",
+        panel_path=DEFAULT_GOOGLE_API_PANEL_PATH,
+    )
+
+    assert "webu-collapse:" in app.index_string
+    assert "details[data-webu-collapse-key]" in app.index_string
 
 
 def test_hub_panel_accepts_env_admin_token_alias(monkeypatch):

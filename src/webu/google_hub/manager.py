@@ -388,8 +388,6 @@ def _append_missing_hf_space_backends(
                     "kind": "hf-space",
                     "space": space_name,
                     "enabled": entry.get("enabled", True),
-                    "weight": entry.get("weight", 1),
-                    "tags": entry.get("tags", []),
                 },
                 default_search_token=default_search_token,
                 default_admin_token=default_admin_token,

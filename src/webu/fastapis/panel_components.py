@@ -274,15 +274,27 @@ def build_backend_instance_cards(instances: list[dict], control_factory=None) ->
             )
             if endpoint_tag:
                 tag_items.append(endpoint_tag)
+        raw_name = str(item.get("name", "instance")).strip() or "instance"
+        raw_caption = str(item.get("space_name") or item.get("kind", "")).strip()
+        note = str(item.get("disabled_reason", "")).strip()
+        if note == "excluded by hub settings":
+            note = ""
+        display_name = raw_name
+        display_caption = raw_caption
+        if str(item.get("kind", "")).strip() == "hf-space" and raw_caption:
+            display_name = raw_caption
+            display_caption = ""
+        elif not enabled and str(item.get("kind", "")).strip() == "google-api":
+            display_caption = ""
         cards.append(
             instance_card(
-                name=item.get("name", "instance"),
-                caption=item.get("space_name") or item.get("kind", ""),
+                name=display_name,
+                caption=display_caption,
                 healthy=healthy,
                 status_label=status_label,
                 status_tone=status_tone,
                 tags=tag_items,
-                note=str(item.get("disabled_reason", "")).strip(),
+                note=note,
                 controls=(control_factory(item) if control_factory else None),
                 style={"opacity": 0.58} if not enabled else None,
                 stats=[

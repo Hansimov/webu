@@ -295,7 +295,7 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "这里也不要放 admin_token。",
             "推荐使用按账号分组的 accounts 结构，每个账号只维护一个 hf_token。",
             "每个 space 可以只写 name；此时会自动拼成 account/name。",
-            "可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置；未在 google_hub.json 显式声明的已配置 Space 会被自动补齐到 hub 后端列表中。",
+            "space 级目前只保留 enabled；未在 google_hub.json 显式声明的已配置 Space 会被自动补齐到 hub 后端列表中，并使用默认 weight=1、tags=[]。",
             "为兼容旧配置，仍接受平铺的 legacy space 列表格式。",
         ],
         "sample": {
@@ -307,14 +307,10 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                         {
                             "name": "space1",
                             "enabled": True,
-                            "weight": 1,
-                            "tags": ["primary"],
                         },
                         {
                             "name": "space2",
                             "enabled": True,
-                            "weight": 1,
-                            "tags": ["secondary"],
                         },
                     ],
                 },
@@ -325,8 +321,6 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                         {
                             "name": "space1",
                             "enabled": True,
-                            "weight": 1,
-                            "tags": ["primary"],
                         }
                     ],
                 },
@@ -354,11 +348,6 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
                                                 "name": {"type": "string"},
                                                 "space": {"type": "string"},
                                                 "enabled": {"type": "boolean"},
-                                                "weight": {"type": "integer"},
-                                                "tags": {
-                                                    "type": "array",
-                                                    "items": {"type": "string"},
-                                                },
                                             },
                                             "anyOf": [
                                                 {"required": ["name"]},
