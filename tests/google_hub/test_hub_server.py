@@ -1,6 +1,7 @@
 import json
 import asyncio
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -720,6 +721,78 @@ def test_hub_fallback_counts_single_request_metric(monkeypatch, tmp_path):
         assert metrics.failed_requests == 0
 
 
+def test_hub_fallback_reports_total_latency(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    _write_base_configs(config_dir)
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "request_timeout_sec": 60,
+                "backends": [
+                    {
+                        "name": "local-google-api",
+                        "kind": "local-google-api",
+                        "base_url": "http://127.0.0.1:18200",
+                        "weight": 2,
+                    },
+                    {
+                        "name": "space1",
+                        "kind": "hf-space",
+                        "space": "owner/space1",
+                        "weight": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    perf_values = iter([100.0, 100.0, 128.2, 128.2, 130.5])
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/health"):
+            return _Response(200, {"status": "ok"})
+        if url == "http://127.0.0.1:18200/search":
+            raise RuntimeError("local timeout")
+        if url == "https://owner-space1.hf.space/search":
+            return _Response(
+                200,
+                {
+                    "success": True,
+                    "query": params["q"],
+                    "results": [{"title": "B", "url": "https://example.org"}],
+                    "result_count": 1,
+                    "total_results_text": "1 result",
+                    "has_captcha": False,
+                    "error": "",
+                    "latency_ms": 2300.0,
+                },
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    app = create_google_hub_server()
+    manager = app.state.google_hub_manager
+    manager.states["local-google-api"].healthy = True
+    manager.states["space1"].healthy = True
+
+    with patch(
+        "webu.google_hub.manager.time.perf_counter",
+        side_effect=lambda: next(perf_values),
+    ):
+        payload = asyncio.run(manager.search(query="fallback", num=5, lang="en"))
+
+    assert payload["backend"] == "space1"
+    assert payload["latency_ms"] == 30500.0
+    metrics = manager.request_metrics.snapshot()
+    assert metrics.last_latency_ms == 30500.0
+    assert metrics.request_log[0]["latency_ms"] == 30500.0
+
+
 def test_adaptive_strategy_prefers_fast_and_stable_backend():
     settings = GoogleHubSettings(
         host="0.0.0.0",
@@ -1042,10 +1115,24 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "Search" in text_values
     assert "Results" in text_values
     assert "Results · 1" not in text_values
+    assert "organic" not in text_values
     assert "HF controls" not in text_values
     assert len(collapse_icons) >= 2
     assert "Use auto routing for the best healthy instance" not in text_values
     assert "{'type': 'google-hub-panel-history-page-button', 'page': 1}" in ids
+    assert section_titles == [
+        "Overview",
+        "Search",
+        "Trends",
+        "Instances",
+        "Controls",
+        "Request history",
+    ]
+    assert "Query OpenAI news" not in text_values
+    assert "Mode manual" not in text_values
+    assert "Instance remote" not in text_values
+    assert "OpenAI news" in text_values
+    assert "remote" in text_values
 
     search_details = [
         detail
@@ -1066,6 +1153,10 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     )
     assert keyed_details["google-hub-trends"].open is True
     assert keyed_details["google-hub-trends"].__dict__["data-webu-collapse-open"] == "1"
+    assert keyed_details["google-hub-instances"].open is True
+    assert (
+        keyed_details["google-hub-instances"].__dict__["data-webu-collapse-open"] == "1"
+    )
     assert keyed_details["google-hub-requests"].open is True
     assert (
         keyed_details["google-hub-requests"].__dict__["data-webu-collapse-open"] == "1"

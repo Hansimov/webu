@@ -169,11 +169,13 @@ def _build_search_card(
         ]
     elif status == "ok":
         chips = [
-            f"Query {result_query or query_value}",
-            f"Mode {selection_mode}",
-            f"Instance {selected_backend_name or 'unknown'}",
+            result_query or query_value,
             f"Results {result_payload.get('result_count', 0)}",
         ]
+        if selected_backend_name:
+            chips.append(selected_backend_name)
+        elif selection_mode != "auto":
+            chips.append("manual")
         total_results_text = str(result_payload.get("total_results_text", "")).strip()
         if total_results_text:
             chips.append(total_results_text)
@@ -190,17 +192,28 @@ def _build_search_card(
             result_items.append(
                 html.Div(
                     [
-                        meta_row([f"#{position}", result_type]),
-                        (
-                            html.A(
-                                title,
-                                href=url or displayed_url or None,
-                                target="_blank",
-                                rel="noreferrer noopener",
-                                className="dash-search-result-title",
-                            )
-                            if (url or displayed_url)
-                            else html.Div(title, className="dash-search-result-title")
+                        html.Div(
+                            [
+                                html.Span(
+                                    f"#{position}",
+                                    className="dash-search-result-index",
+                                ),
+                                (
+                                    html.A(
+                                        title,
+                                        href=url or displayed_url or None,
+                                        target="_blank",
+                                        rel="noreferrer noopener",
+                                        className="dash-search-result-title",
+                                    )
+                                    if (url or displayed_url)
+                                    else html.Div(
+                                        title,
+                                        className="dash-search-result-title",
+                                    )
+                                ),
+                            ],
+                            className="dash-search-result-head",
                         ),
                         (
                             html.A(
@@ -546,14 +559,6 @@ def _build_body(
     body.extend(
         [
             section(
-                "Controls",
-                [_build_global_controls_card(ids, control_state)],
-                kind="search",
-                collapsible=True,
-                open=False,
-                collapse_key="google-hub-controls",
-            ),
-            section(
                 "Search",
                 [
                     _build_search_card(
@@ -578,6 +583,17 @@ def _build_body(
                     instances, control_factory=_build_instance_controls
                 ),
                 kind="instance",
+                collapsible=True,
+                open=True,
+                collapse_key="google-hub-instances",
+            ),
+            section(
+                "Controls",
+                [_build_global_controls_card(ids, control_state)],
+                kind="search",
+                collapsible=True,
+                open=False,
+                collapse_key="google-hub-controls",
             ),
             section(
                 "Request history",

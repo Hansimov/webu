@@ -254,6 +254,8 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-results-body {{ padding: 12px 16px 16px; gap: 14px; will-change: transform, opacity; }}
             .dash-search-results {{ display: grid; gap: 10px; }}
             .dash-search-result {{ padding: 14px; border-radius: 12px; border: 1px solid rgba(148,163,184,0.16); background: rgba(15,23,42,0.42); }}
+            .dash-search-result-head {{ display: flex; align-items: baseline; gap: 10px; min-width: 0; }}
+            .dash-search-result-index {{ flex: 0 0 auto; color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1.4; }}
             .dash-search-result-title {{ color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }}
             .dash-search-result-link {{ display: block; margin-top: 6px; color: var(--info); font-size: 12px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
             .dash-search-result-snippet {{ margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }}

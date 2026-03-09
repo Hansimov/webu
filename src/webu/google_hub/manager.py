@@ -963,13 +963,14 @@ class GoogleHubManager:
                         str(payload.get("error", "backend search failed")).strip()
                         or "backend search failed"
                     )
+                total_duration_ms = (time.perf_counter() - overall_started) * 1000.0
                 state.total_successes += 1
                 state.healthy = True
                 state.search_cooldown_until_ts = 0.0
                 state.last_error = ""
-                state.record_request((time.perf_counter() - started) * 1000.0, True)
+                state.record_request(total_duration_ms, True)
                 self.request_metrics.record(
-                    (time.perf_counter() - overall_started) * 1000.0,
+                    total_duration_ms,
                     True,
                     query=query,
                     backend=state.backend.name,
@@ -982,6 +983,7 @@ class GoogleHubManager:
                     "requested_backend": requested_name,
                     "selection_mode": "manual" if requested_name else "auto",
                     **payload,
+                    "latency_ms": round(total_duration_ms, 1),
                 }
             except Exception as exc:
                 last_error = exc

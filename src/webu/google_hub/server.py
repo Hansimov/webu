@@ -43,6 +43,7 @@ class HubSearchResponse(BaseModel):
     backend_url: str = ""
     requested_backend: str = ""
     selection_mode: str = "auto"
+    latency_ms: float = 0.0
     query: str = ""
     results: list[dict] = Field(default_factory=list)
     result_count: int = 0
