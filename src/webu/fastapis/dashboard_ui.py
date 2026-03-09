@@ -143,7 +143,6 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-page-size .dash-radioitems {{ display: flex; flex-wrap: wrap; gap: 6px; }}
             .dash-page-size label {{ display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; cursor: pointer; }}
             .dash-page-size input {{ margin: 0; accent-color: var(--accent); }}
-            .dash-page-input {{ width: 72px; padding: 7px 9px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; }}
             .dash-button {{ padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }}
             .dash-button:hover {{ border-color: rgba(52,211,153,0.45); background: rgba(52,211,153,0.08); }}
             .dash-button:disabled {{ opacity: 0.45; cursor: default; }}
@@ -235,26 +234,28 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-collapse-summary-side {{ display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }}
             .dash-collapse-icon {{ flex: 0 0 auto; width: 10px; height: 10px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 120ms ease; margin-right: 2px; }}
             .dash-collapse[open] > .dash-collapse-summary .dash-collapse-icon {{ transform: rotate(225deg); }}
-            .dash-collapse-body {{ padding: 0 14px 14px; display: grid; gap: 12px; }}
+            .dash-collapse-content {{ display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 220ms ease, opacity 180ms ease; }}
+            .dash-collapse[open] > .dash-collapse-content {{ grid-template-rows: 1fr; opacity: 1; }}
+            .dash-collapse-body {{ min-height: 0; overflow: hidden; padding: 0 14px 14px; display: grid; gap: 12px; }}
             .dash-search-card {{ display: flex; flex-direction: column; gap: 14px; }}
+            .dash-search-body {{ padding: 14px 16px 16px; gap: 14px; }}
             .dash-search-form {{ display: flex; flex-direction: column; gap: 12px; }}
-            .dash-search-row {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
+            .dash-search-form-card {{ padding: 14px; border-radius: 14px; border: 1px solid rgba(148,163,184,0.14); background: linear-gradient(180deg, rgba(15,23,42,0.46), rgba(15,23,42,0.24)); }}
+            .dash-search-row {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }}
             .dash-search-input {{ flex: 1 1 320px; min-width: 240px; min-height: 56px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; line-height: 1.55; resize: none; }}
             .dash-search-input::-webkit-resizer {{ display: none; }}
-            .dash-search-route {{ display: grid; gap: 8px; }}
-            .dash-search-dropdown .Select-control, .dash-search-dropdown .Select-menu-outer, .dash-search-dropdown .Select-menu, .dash-search-dropdown .Select-placeholder, .dash-search-dropdown .Select-value-label, .dash-search-dropdown .Select-input > input {{ background: rgba(15,23,42,0.72) !important; color: var(--text) !important; }}
-            .dash-search-dropdown .Select-control {{ border: 1px solid var(--border-light) !important; border-radius: 10px !important; min-height: 40px !important; }}
-            .dash-search-dropdown .Select-menu-outer {{ border: 1px solid var(--border-light) !important; }}
-            .dash-search-dropdown .VirtualizedSelectFocusedOption, .dash-search-dropdown .VirtualizedSelectOption:hover {{ background: rgba(52,211,153,0.12) !important; color: var(--text) !important; }}
+            .dash-search-submit {{ align-self: stretch; min-width: 112px; padding-inline: 16px; }}
             .dash-search-status {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
             .dash-search-status.ok {{ color: var(--accent); }}
             .dash-search-status.fail {{ color: var(--danger); }}
+            .dash-search-status.pending {{ color: var(--info); }}
+            .dash-results-body {{ padding: 12px 16px 16px; gap: 14px; will-change: transform, opacity; }}
             .dash-search-results {{ display: grid; gap: 10px; }}
-            .dash-search-result {{ padding: 12px; border-radius: 12px; border: 1px solid rgba(148,163,184,0.16); background: rgba(15,23,42,0.42); }}
+            .dash-search-result {{ padding: 14px; border-radius: 12px; border: 1px solid rgba(148,163,184,0.16); background: rgba(15,23,42,0.42); }}
             .dash-search-result-title {{ color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }}
             .dash-search-result-link {{ display: block; margin-top: 6px; color: var(--info); font-size: 12px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
             .dash-search-result-snippet {{ margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }}
-            .dash-search-empty {{ padding: 14px; border-radius: 12px; border: 1px dashed rgba(148,163,184,0.22); background: rgba(255,255,255,0.02); color: var(--muted); font-size: 12px; line-height: 1.6; }}
+            .dash-search-empty {{ padding: 14px 16px; border-radius: 12px; border: 1px dashed rgba(148,163,184,0.22); background: rgba(255,255,255,0.02); color: var(--muted); font-size: 12px; line-height: 1.6; }}
             .dash-action-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
             .dash-action-row .dash-button {{ min-width: 88px; }}
             .dash-action-row-compact {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; width: 100%; }}
@@ -262,6 +263,7 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-action-status {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
             .dash-action-status.ok {{ color: var(--accent); }}
             .dash-action-status.fail {{ color: var(--danger); }}
+            .dash-table-panel {{ width: 100%; }}
             .dash-table-wrap {{ width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }}
             .dash-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
             .dash-table th {{ position: sticky; top: 0; z-index: 1; background: var(--surface-alt); color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-light); }}
@@ -271,6 +273,15 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-table .col-query {{ max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
             .dash-table .col-result {{ min-width: 280px; max-width: 420px; white-space: normal; }}
             .dash-empty {{ padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }}
+            .dash-page-buttons {{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
+            .dash-page-button {{ min-width: 34px !important; height: 34px !important; padding: 0 10px !important; border-radius: 999px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; font-size: 12px !important; line-height: 1 !important; }}
+            .dash-page-button.is-active {{ border-color: rgba(96,165,250,0.46) !important; background: rgba(96,165,250,0.16) !important; color: #dbeafe !important; }}
+            .dash-controls-group .dash-button {{ color: var(--text) !important; }}
+            .dash-controls-group .dash-button:disabled {{ color: var(--muted) !important; opacity: 0.45; }}
+            @media (prefers-reduced-motion: reduce) {{
+                .dash-collapse-content {{ transition: none !important; }}
+            }}
+            .dash-page-ellipsis {{ padding: 0 2px; color: var(--muted); font-size: 12px; }}
             .dash-strip-card {{ display: flex; flex-direction: column; gap: 14px; min-height: 230px; min-width: 0; overflow: hidden; }}
             .dash-strip-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }}
             .dash-strip-summary {{ font-size: 12px; color: var(--muted); }}
@@ -314,7 +325,11 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                 .dash-controls-group {{ width: 100%; }}
                 .dash-auth-form {{ align-items: stretch; }}
                 .dash-auth-input {{ width: 100%; }}
+                .dash-search-body {{ padding: 12px; }}
+                .dash-search-form-card {{ padding: 12px; }}
                 .dash-search-input {{ width: 100%; min-width: 0; }}
+                .dash-search-submit {{ width: 100%; min-height: 44px; }}
+                .dash-results-body {{ padding: 10px 12px 12px; }}
                 .dash-inst-stats {{ grid-template-columns: repeat(2, 1fr); }}
                 .dash-strip-wrap {{ gap: 6px; padding-left: 8px; padding-right: 8px; }}
                     .dash-table .col-result {{ min-width: 240px; max-width: 320px; }}
@@ -967,6 +982,41 @@ def request_table(
         )
         rows.append(html.Tr(cells))
 
+    page_controls: list = []
+    if total_pages <= 7:
+        visible_pages = list(range(1, total_pages + 1))
+    else:
+        visible_pages = [
+            1,
+            max(1, page - 1),
+            page,
+            min(total_pages, page + 1),
+            total_pages,
+        ]
+        visible_pages = sorted(set(visible_pages))
+
+    last_visible_page = 0
+    for visible_page in visible_pages:
+        if visible_page - last_visible_page > 1:
+            page_controls.append(html.Span("...", className="dash-page-ellipsis"))
+        page_controls.append(
+            html.Button(
+                str(visible_page),
+                id={
+                    "type": f"{component_prefix}-history-page-button",
+                    "page": visible_page,
+                },
+                n_clicks=0,
+                className=(
+                    "dash-button dash-page-button is-active"
+                    if visible_page == page
+                    else "dash-button dash-page-button"
+                ),
+                disabled=visible_page == page,
+            )
+        )
+        last_visible_page = visible_page
+
     controls = None
     if component_prefix:
         controls = html.Div(
@@ -1005,16 +1055,7 @@ def request_table(
                             className="dash-button",
                             disabled=page >= total_pages,
                         ),
-                        html.Div("Page", className="dash-controls-label"),
-                        dcc.Input(
-                            id=f"{component_prefix}-history-page",
-                            type="number",
-                            min=1,
-                            max=total_pages,
-                            step=1,
-                            value=page,
-                            className="dash-page-input",
-                        ),
+                        html.Div(page_controls, className="dash-page-buttons"),
                         html.Div(
                             f"of {total_pages} · {total_records} items",
                             className="dash-auth-status",
@@ -1039,7 +1080,8 @@ def request_table(
                 ),
                 className="dash-table-wrap",
             ),
-        ]
+        ],
+        className="dash-table-panel",
     )
 
 

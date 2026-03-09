@@ -454,6 +454,52 @@ def test_hub_panel_sanitizes_stale_search_state_error():
     assert not any("HTTPSConnectionPool" in value for value in text_values)
 
 
+def test_hub_panel_shows_pending_search_feedback():
+    snapshot = {
+        "updated_at_human": "2026-03-09 09:00:00",
+        "current_time_human": "2026-03-09 09:00:00",
+        "timezone_human": "UTC+08 Shanghai",
+        "started_at_human": "2026-03-09 08:00:00",
+        "uptime_human": "1h 0m 0s",
+        "strategy": "adaptive",
+        "node": {"label": "Server IP", "value": "1.2.3.4"},
+        "health": {"healthy_backends": 1, "backend_count": 1, "enabled_backends": 1},
+        "requests": {
+            "accepted_requests": 0,
+            "successful_requests": 0,
+            "failed_requests": 0,
+            "success_rate": 0.0,
+            "avg_latency_ms": 0.0,
+            "median_latency_ms": 0.0,
+            "recent_latency_ms": 0.0,
+            "last_latency_ms": 0.0,
+            "history": [],
+            "request_log": [],
+        },
+        "backends": [],
+    }
+    body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=True,
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+        search_state={
+            "request_id": 2,
+            "status": "pending",
+            "query": "OpenAI news",
+            "backend": "",
+            "result": {},
+            "error": "",
+        },
+        control_state={"status": "ok", "message": "start requested for 4 HF space(s)"},
+    )
+    text_values = _collect_text(body)
+    assert "Submitted. Searching across hub routing..." in text_values
+    assert "Searching for OpenAI news..." in text_values
+    assert "start requested for 4 HF space(s)" not in text_values
+
+
 def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
@@ -935,7 +981,6 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     ]
     collapse_icons = _collect_components_by_class(body, "dash-collapse-icon")
     search_input = _find_component_by_id(body, "google-hub-panel-search-query")
-    search_backend = _find_component_by_id(body, "google-hub-panel-search-backend")
     assert any("dash-strip-card" in value for value in class_names)
     assert "UPTIME" in text_values
     assert "1h 0m 0s" in text_values
@@ -945,10 +990,9 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "OpenAI news headline | short snippet | example.com" in text_values
     assert "1/1 HEALTHY" in text_values
     assert "google-hub-panel-search-query" in ids
-    assert "google-hub-panel-search-backend" in ids
     assert isinstance(search_input, dcc.Textarea)
-    assert isinstance(search_backend, dcc.Dropdown)
-    assert "Stop/Start All" in text_values
+    assert "Start All" in text_values
+    assert "Stop All" in text_values
     assert "Restart All" in text_values
     assert "Rebuild All" in text_values
     assert "Squash All" in text_values
@@ -958,11 +1002,14 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
         isinstance(component, html.Details)
         for component in _collect_components_by_class(body, "dash-collapse")
     )
-    assert "Search" not in section_titles
+    assert "Search" in section_titles
+    assert "Search" in text_values
+    assert "Results" in text_values
     assert "Results · 1" not in text_values
+    assert "HF controls" not in text_values
     assert len(collapse_icons) >= 2
     assert "Use auto routing for the best healthy instance" not in text_values
-    assert "google-hub-panel-history-page" in ids
+    assert "{'type': 'google-hub-panel-history-page-button', 'page': 1}" in ids
 
 
 def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():

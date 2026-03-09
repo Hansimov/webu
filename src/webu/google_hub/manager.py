@@ -630,13 +630,21 @@ class GoogleHubManager:
                 runtime = None
                 performed = action_name
 
-                if action_name == "toggle":
+                if action_name in {"toggle", "start", "stop"}:
                     stage, sleep_time = self._get_space_runtime_state(
                         state.backend.space_name
                     )
                     state.runtime_stage = stage
                     state.runtime_sleep_time = sleep_time
-                    if stage in {"PAUSED", "STOPPED"}:
+                    if action_name == "start":
+                        if stage in {"PAUSED", "STOPPED"}:
+                            runtime = api.restart_space(
+                                repo_id, token=settings.hf_token, factory_reboot=False
+                            )
+                    elif action_name == "stop":
+                        if stage not in {"PAUSED", "STOPPED"}:
+                            runtime = api.pause_space(repo_id, token=settings.hf_token)
+                    elif stage in {"PAUSED", "STOPPED"}:
                         runtime = api.restart_space(
                             repo_id, token=settings.hf_token, factory_reboot=False
                         )
