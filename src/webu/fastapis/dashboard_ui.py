@@ -227,14 +227,25 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-stat-label {{ font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }}
             .dash-stat-value {{ margin-top: 4px; font-size: 16px; font-weight: 600; }}
             .dash-tag {{ display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; line-height: 1; }}
+            .dash-collapse {{ border-radius: 14px; border: 1px solid rgba(148,163,184,0.16); background: rgba(255,255,255,0.02); overflow: hidden; }}
+            .dash-collapse[open] {{ background: rgba(255,255,255,0.03); }}
+            .dash-collapse-summary {{ list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; color: var(--text); font-size: 13px; font-weight: 600; }}
+            .dash-collapse-summary::-webkit-details-marker {{ display: none; }}
+            .dash-collapse-summary-main {{ flex: 1 1 auto; min-width: 0; }}
+            .dash-collapse-summary-side {{ display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }}
+            .dash-collapse-icon {{ flex: 0 0 auto; width: 10px; height: 10px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 120ms ease; margin-right: 2px; }}
+            .dash-collapse[open] > .dash-collapse-summary .dash-collapse-icon {{ transform: rotate(225deg); }}
+            .dash-collapse-body {{ padding: 0 14px 14px; display: grid; gap: 12px; }}
             .dash-search-card {{ display: flex; flex-direction: column; gap: 14px; }}
-            .dash-search-copy {{ font-size: 12px; color: var(--muted); line-height: 1.6; }}
             .dash-search-form {{ display: flex; flex-direction: column; gap: 12px; }}
             .dash-search-row {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
-            .dash-search-input {{ flex: 1 1 320px; min-width: 240px; min-height: 56px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; line-height: 1.55; resize: vertical; }}
-            .dash-search-route .dash-radioitems {{ display: flex; flex-wrap: wrap; gap: 8px; }}
-            .dash-search-route label {{ display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; cursor: pointer; }}
-            .dash-search-route input {{ margin: 0; accent-color: var(--accent); }}
+            .dash-search-input {{ flex: 1 1 320px; min-width: 240px; min-height: 56px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; line-height: 1.55; resize: none; }}
+            .dash-search-input::-webkit-resizer {{ display: none; }}
+            .dash-search-route {{ display: grid; gap: 8px; }}
+            .dash-search-dropdown .Select-control, .dash-search-dropdown .Select-menu-outer, .dash-search-dropdown .Select-menu, .dash-search-dropdown .Select-placeholder, .dash-search-dropdown .Select-value-label, .dash-search-dropdown .Select-input > input {{ background: rgba(15,23,42,0.72) !important; color: var(--text) !important; }}
+            .dash-search-dropdown .Select-control {{ border: 1px solid var(--border-light) !important; border-radius: 10px !important; min-height: 40px !important; }}
+            .dash-search-dropdown .Select-menu-outer {{ border: 1px solid var(--border-light) !important; }}
+            .dash-search-dropdown .VirtualizedSelectFocusedOption, .dash-search-dropdown .VirtualizedSelectOption:hover {{ background: rgba(52,211,153,0.12) !important; color: var(--text) !important; }}
             .dash-search-status {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
             .dash-search-status.ok {{ color: var(--accent); }}
             .dash-search-status.fail {{ color: var(--danger); }}
@@ -244,6 +255,13 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-search-result-link {{ display: block; margin-top: 6px; color: var(--info); font-size: 12px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
             .dash-search-result-snippet {{ margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }}
             .dash-search-empty {{ padding: 14px; border-radius: 12px; border: 1px dashed rgba(148,163,184,0.22); background: rgba(255,255,255,0.02); color: var(--muted); font-size: 12px; line-height: 1.6; }}
+            .dash-action-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+            .dash-action-row .dash-button {{ min-width: 88px; }}
+            .dash-action-row-compact {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; width: 100%; }}
+            .dash-action-row-compact .dash-button {{ min-width: 0; min-height: 30px; padding: 5px 7px; border-radius: 9px; font-size: 11px; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+            .dash-action-status {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
+            .dash-action-status.ok {{ color: var(--accent); }}
+            .dash-action-status.fail {{ color: var(--danger); }}
             .dash-table-wrap {{ width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }}
             .dash-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
             .dash-table th {{ position: sticky; top: 0; z-index: 1; background: var(--surface-alt); color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-light); }}
@@ -501,10 +519,10 @@ def metric_card_with_meta(
     return html.Div(children, className="dash-card")
 
 
-def section(title: str, children, kind: str = "chart"):
+def section(title: str | None, children, kind: str = "chart"):
     return html.Section(
         [
-            html.H2(title, className="dash-section-title"),
+            *([html.H2(title, className="dash-section-title")] if title else []),
             html.Div(list(children), className=f"dash-grid {kind}"),
         ],
         className="dash-section",
@@ -583,6 +601,7 @@ def instance_card(
     status_tone: str | None = None,
     tags: list[tuple[str, str]] | None = None,
     note: str = "",
+    controls=None,
     style: dict | None = None,
 ):
     tone = status_tone or ("accent" if healthy else "danger")
@@ -670,6 +689,7 @@ def instance_card(
             html.Div(caption, className="dash-inst-meta"),
             html.Div(stat_items, className="dash-inst-stats"),
             html.Div(note, className="dash-inst-meta") if note else None,
+            controls,
         ],
         className="dash-inst",
         style=card_style,
@@ -949,63 +969,61 @@ def request_table(
 
     controls = None
     if component_prefix:
-        controls = (
-            html.Div(
-                [
-                    html.Div(
-                        [
-                            html.Div("Items per page", className="dash-controls-label"),
-                            dcc.RadioItems(
-                                id=f"{component_prefix}-history-page-size",
-                                options=[
-                                    {"label": str(value), "value": value}
-                                    for value in [5, 10, 20, 50, 100]
-                                ],
-                                value=page_size,
-                                inline=True,
-                                className="dash-radioitems",
-                                inputClassName="dash-radioinput",
-                                labelClassName="dash-radiolabel",
-                            ),
-                        ],
-                        className="dash-controls-group dash-page-size",
-                    ),
-                    html.Div(
-                        [
-                            html.Button(
-                                "Previous",
-                                id=f"{component_prefix}-history-prev",
-                                n_clicks=0,
-                                className="dash-button",
-                                disabled=page <= 1,
-                            ),
-                            html.Button(
-                                "Next",
-                                id=f"{component_prefix}-history-next",
-                                n_clicks=0,
-                                className="dash-button",
-                                disabled=page >= total_pages,
-                            ),
-                            html.Div("Page", className="dash-controls-label"),
-                            dcc.Input(
-                                id=f"{component_prefix}-history-page",
-                                type="number",
-                                min=1,
-                                max=total_pages,
-                                step=1,
-                                value=page,
-                                className="dash-page-input",
-                            ),
-                            html.Div(
-                                f"of {total_pages} · {total_records} items",
-                                className="dash-auth-status",
-                            ),
-                        ],
-                        className="dash-controls-group",
-                    ),
-                ],
-                className="dash-controls",
-            ),
+        controls = html.Div(
+            [
+                html.Div(
+                    [
+                        html.Div("Items per page", className="dash-controls-label"),
+                        dcc.RadioItems(
+                            id=f"{component_prefix}-history-page-size",
+                            options=[
+                                {"label": str(value), "value": value}
+                                for value in [5, 10, 20, 50, 100]
+                            ],
+                            value=page_size,
+                            inline=True,
+                            className="dash-radioitems",
+                            inputClassName="dash-radioinput",
+                            labelClassName="dash-radiolabel",
+                        ),
+                    ],
+                    className="dash-controls-group dash-page-size",
+                ),
+                html.Div(
+                    [
+                        html.Button(
+                            "Previous",
+                            id=f"{component_prefix}-history-prev",
+                            n_clicks=0,
+                            className="dash-button",
+                            disabled=page <= 1,
+                        ),
+                        html.Button(
+                            "Next",
+                            id=f"{component_prefix}-history-next",
+                            n_clicks=0,
+                            className="dash-button",
+                            disabled=page >= total_pages,
+                        ),
+                        html.Div("Page", className="dash-controls-label"),
+                        dcc.Input(
+                            id=f"{component_prefix}-history-page",
+                            type="number",
+                            min=1,
+                            max=total_pages,
+                            step=1,
+                            value=page,
+                            className="dash-page-input",
+                        ),
+                        html.Div(
+                            f"of {total_pages} · {total_records} items",
+                            className="dash-auth-status",
+                        ),
+                    ],
+                    className="dash-controls-group",
+                ),
+            ],
+            className="dash-controls",
         )
 
     return html.Div(

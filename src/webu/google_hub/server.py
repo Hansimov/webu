@@ -23,6 +23,7 @@ from .manager import (
     GoogleHubManager,
     GoogleHubSettings,
     resolve_google_hub_settings,
+    sanitize_hf_control_error,
     sanitize_hub_search_error,
 )
 from .panel import mount_google_hub_panel
@@ -60,6 +61,15 @@ class HubBackendsResponse(BaseModel):
     uptime_seconds: int = 0
     uptime_human: str = "0s"
     backends: list[dict] = Field(default_factory=list)
+
+
+class HubControlResponse(BaseModel):
+    status: str = "ok"
+    message: str = ""
+    action: str = ""
+    backend: str = ""
+    count: int = 0
+    results: list[dict] = Field(default_factory=list)
 
 
 def create_google_hub_server(settings: GoogleHubSettings | None = None):
@@ -129,6 +139,53 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         await manager.refresh_all_health()
         return HubBackendsResponse(**(await manager.metrics()))
 
+    @app.post(
+        "/admin/control/backend", response_model=HubControlResponse, tags=["管理"]
+    )
+    async def admin_control_backend(
+        backend: str = Query(..., min_length=1),
+        action: str = Query(..., min_length=1),
+        x_admin_token: str | None = Header(default=None),
+    ):
+        require_admin(x_admin_token)
+        try:
+            payload = await manager.control_backend(backend, action)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=sanitize_hf_control_error(str(exc)),
+            )
+        return HubControlResponse(
+            status="ok",
+            message=str(payload.get("message", "")).strip(),
+            action=str(payload.get("action", action)).strip(),
+            backend=str(payload.get("backend", backend)).strip(),
+            count=1,
+            results=[payload],
+        )
+
+    @app.post("/admin/control/all", response_model=HubControlResponse, tags=["管理"])
+    async def admin_control_all(
+        action: str = Query(..., min_length=1),
+        x_admin_token: str | None = Header(default=None),
+    ):
+        require_admin(x_admin_token)
+        try:
+            payload = await manager.control_all_backends(action)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=sanitize_hf_control_error(str(exc)),
+            )
+        return HubControlResponse(
+            status="ok",
+            message=str(payload.get("message", "")).strip(),
+            action=str(payload.get("action", action)).strip(),
+            backend="",
+            count=int(payload.get("count", 0) or 0),
+            results=list(payload.get("results", [])),
+        )
+
     def build_snapshot_payload(metrics: dict) -> dict:
         return {
             "updated_at_human": format_dashboard_timestamp(),
@@ -167,6 +224,11 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
                 lang=lang,
                 backend_name=backend_name,
             )
+        ),
+        lambda action, backend_name: asyncio.run(
+            manager.control_all_backends(action[:-4])
+            if action.endswith("-all")
+            else manager.control_backend(backend_name, action)
         ),
         admin_token=resolved_settings.admin_token,
     )

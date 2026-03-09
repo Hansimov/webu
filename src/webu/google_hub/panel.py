@@ -6,7 +6,7 @@ import os
 from urllib.parse import urlsplit
 
 from a2wsgi import WSGIMiddleware
-from dash import Input, Output, State, callback_context, dcc, html
+from dash import ALL, Input, Output, State, callback_context, dcc, html
 from dash.exceptions import PreventUpdate
 
 from webu.fastapis.dashboard_ui import (
@@ -33,11 +33,12 @@ from webu.runtime_settings import (
     resolve_google_docker_settings,
 )
 
-from .manager import sanitize_hub_search_error
+from .manager import sanitize_hf_control_error, sanitize_hub_search_error
 
 
 SnapshotProvider = Callable[[], dict]
 SearchProvider = Callable[[str, int, str, str], dict]
+ControlProvider = Callable[[str, str], dict]
 
 
 def _accepted_admin_tokens(admin_token: str) -> set[str]:
@@ -75,7 +76,20 @@ def _panel_ids(prefix: str) -> dict[str, str]:
         "search_query": f"{prefix}-search-query",
         "search_backend": f"{prefix}-search-backend",
         "search_submit": f"{prefix}-search-submit",
+        "control_state": f"{prefix}-control-state",
+        "control_toggle_all": f"{prefix}-control-toggle-all",
+        "control_restart_all": f"{prefix}-control-restart-all",
+        "control_rebuild_all": f"{prefix}-control-rebuild-all",
+        "control_squash_all": f"{prefix}-control-squash-all",
         "root": f"{prefix}-root",
+    }
+
+
+def _backend_action_id(action: str, backend_name: str) -> dict[str, str]:
+    return {
+        "type": "google-hub-panel-backend-action",
+        "action": str(action),
+        "backend": str(backend_name),
     }
 
 
@@ -123,9 +137,7 @@ def _build_search_card(ids: dict[str, str], snapshot: dict, search_state: dict):
     selection_mode = str(result_payload.get("selection_mode", "auto")).strip() or "auto"
 
     status_class = "dash-search-status"
-    status_text = (
-        "Search any query and let the hub route it to the best healthy instance."
-    )
+    status_text = ""
     if status == "ok":
         status_class += " ok"
         status_text = (
@@ -138,7 +150,7 @@ def _build_search_card(ids: dict[str, str], snapshot: dict, search_state: dict):
 
     result_children = [
         html.Div(
-            "Search results will appear here. Use auto routing or pin a specific healthy instance.",
+            "Search results will appear here.",
             className="dash-search-empty",
         )
     ]
@@ -210,56 +222,104 @@ def _build_search_card(ids: dict[str, str], snapshot: dict, search_state: dict):
             ),
         ]
 
+    results_open = status in {"ok", "error"}
+
     return html.Div(
         [
-            html.Div(
-                "Use auto routing for the best healthy instance, or pin one healthy instance when you need deterministic execution.",
-                className="dash-search-copy",
-            ),
-            html.Div(
+            html.Details(
                 [
-                    html.Div(
+                    html.Summary(
                         [
-                            dcc.Textarea(
-                                id=ids["search_query"],
-                                value=query_value,
-                                placeholder="Search Google via the hub...",
-                                rows=2,
-                                className="dash-search-input",
-                                persistence=True,
-                                persistence_type="session",
-                            ),
-                            html.Button(
-                                "Search",
-                                id=ids["search_submit"],
-                                n_clicks=0,
-                                className="dash-button",
+                            html.Span(className="dash-collapse-summary-main"),
+                            html.Span(
+                                [
+                                    (
+                                        html.Span(status_text, className=status_class)
+                                        if status_text
+                                        else None
+                                    ),
+                                    html.Span(className="dash-collapse-icon"),
+                                ],
+                                className="dash-collapse-summary-side",
                             ),
                         ],
-                        className="dash-search-row",
+                        className="dash-collapse-summary",
                     ),
                     html.Div(
                         [
-                            html.Div("Route", className="dash-controls-label"),
-                            dcc.RadioItems(
-                                id=ids["search_backend"],
-                                options=route_options,
-                                value=selected_backend,
-                                inline=True,
-                                persistence=True,
-                                persistence_type="session",
-                                className="dash-radioitems",
-                                inputClassName="dash-radioinput",
-                                labelClassName="dash-radiolabel",
+                            html.Div(
+                                [
+                                    html.Div(
+                                        [
+                                            dcc.Textarea(
+                                                id=ids["search_query"],
+                                                value=query_value,
+                                                placeholder="Search Google via the hub...",
+                                                rows=2,
+                                                className="dash-search-input",
+                                                persistence=True,
+                                                persistence_type="session",
+                                            ),
+                                            html.Button(
+                                                "Search",
+                                                id=ids["search_submit"],
+                                                n_clicks=0,
+                                                className="dash-button",
+                                            ),
+                                        ],
+                                        className="dash-search-row",
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                "Route", className="dash-controls-label"
+                                            ),
+                                            dcc.Dropdown(
+                                                id=ids["search_backend"],
+                                                options=route_options,
+                                                value=selected_backend,
+                                                clearable=False,
+                                                searchable=False,
+                                                persistence=True,
+                                                persistence_type="session",
+                                                className="dash-search-dropdown",
+                                            ),
+                                        ],
+                                        className="dash-search-route",
+                                    ),
+                                ],
+                                className="dash-search-form",
+                            ),
+                            html.Details(
+                                [
+                                    html.Summary(
+                                        [
+                                            html.Span(
+                                                className="dash-collapse-summary-main"
+                                            ),
+                                            html.Span(
+                                                html.Span(
+                                                    className="dash-collapse-icon"
+                                                ),
+                                                className="dash-collapse-summary-side",
+                                            ),
+                                        ],
+                                        className="dash-collapse-summary",
+                                    ),
+                                    html.Div(
+                                        result_children, className="dash-collapse-body"
+                                    ),
+                                ],
+                                open=results_open,
+                                className="dash-collapse",
                             ),
                         ],
-                        className="dash-search-route",
+                        className="dash-collapse-body",
                     ),
                 ],
-                className="dash-search-form",
-            ),
-            html.Div(status_text, className=status_class),
-            *result_children,
+                open=True,
+                className="dash-collapse",
+            )
         ],
         className="dash-card dash-search-card",
     )
@@ -297,6 +357,126 @@ def _resolve_search_state(
         }
 
 
+def _build_history_content(
+    request_log: list[dict],
+    *,
+    auth_unlocked: bool,
+    admin_token_configured: bool,
+    page: int,
+    page_size: int,
+):
+    if auth_unlocked or not admin_token_configured:
+        return request_table(
+            request_log,
+            show_backend=True,
+            page=page,
+            page_size=page_size,
+            component_prefix="google-hub-panel",
+        )
+    return html.Div(
+        "Unlock access to view request history.",
+        className="dash-search-empty",
+    )
+
+
+def _build_global_controls_card(ids: dict[str, str], control_state: dict | None):
+    control_state = dict(control_state or {})
+    status = str(control_state.get("status", "idle")).strip().lower()
+    message = str(control_state.get("message", "")).strip()
+    status_class = "dash-action-status"
+    if status == "ok":
+        status_class += " ok"
+    elif status == "error":
+        status_class += " fail"
+    return html.Div(
+        [
+            html.Div("HF controls", className="dash-card-label"),
+            html.Div(
+                [
+                    html.Button(
+                        "Stop/Start All",
+                        id=ids["control_toggle_all"],
+                        n_clicks=0,
+                        className="dash-button",
+                    ),
+                    html.Button(
+                        "Restart All",
+                        id=ids["control_restart_all"],
+                        n_clicks=0,
+                        className="dash-button",
+                    ),
+                    html.Button(
+                        "Rebuild All",
+                        id=ids["control_rebuild_all"],
+                        n_clicks=0,
+                        className="dash-button",
+                    ),
+                    html.Button(
+                        "Squash All",
+                        id=ids["control_squash_all"],
+                        n_clicks=0,
+                        className="dash-button",
+                    ),
+                ],
+                className="dash-action-row",
+            ),
+            html.Div(
+                message or "Control Hugging Face spaces from one place.",
+                className=status_class,
+            ),
+        ],
+        className="dash-card",
+    )
+
+
+def _build_instance_controls(item: dict):
+    backend_name = str(item.get("name", "")).strip()
+    if not backend_name:
+        return None
+    is_hf_space = str(item.get("kind", "")).strip() == "hf-space"
+    runtime_stage = str(item.get("runtime_stage", "")).strip().upper()
+    toggle_label = "Start" if runtime_stage in {"PAUSED", "STOPPED"} else "Stop"
+    disabled = not is_hf_space
+    disabled_style = {"opacity": 0.45, "cursor": "default"} if disabled else None
+    return html.Div(
+        [
+            html.Button(
+                toggle_label,
+                id=_backend_action_id("toggle", backend_name),
+                n_clicks=0,
+                className="dash-button",
+                disabled=disabled,
+                style=disabled_style,
+            ),
+            html.Button(
+                "Restart",
+                id=_backend_action_id("restart", backend_name),
+                n_clicks=0,
+                className="dash-button",
+                disabled=disabled,
+                style=disabled_style,
+            ),
+            html.Button(
+                "Rebuild",
+                id=_backend_action_id("rebuild", backend_name),
+                n_clicks=0,
+                className="dash-button",
+                disabled=disabled,
+                style=disabled_style,
+            ),
+            html.Button(
+                "Squash",
+                id=_backend_action_id("squash", backend_name),
+                n_clicks=0,
+                className="dash-button",
+                disabled=disabled,
+                style=disabled_style,
+            ),
+        ],
+        className="dash-action-row dash-action-row-compact",
+    )
+
+
 def _build_body(
     snapshot: dict,
     *,
@@ -306,6 +486,7 @@ def _build_body(
     page_size: int,
     ids: dict[str, str] | None = None,
     search_state: dict | None = None,
+    control_state: dict | None = None,
 ):
     ids = ids or _panel_ids("google-hub-panel")
     requests = snapshot.get("requests", {})
@@ -344,7 +525,12 @@ def _build_body(
     body.extend(
         [
             section(
-                "Search",
+                "Controls",
+                [_build_global_controls_card(ids, control_state)],
+                kind="search",
+            ),
+            section(
+                None,
                 [
                     _build_search_card(
                         ids,
@@ -356,26 +542,27 @@ def _build_body(
             ),
             section("Trends", build_request_trend_cards(requests), kind="chart"),
             section(
-                "Instances", build_backend_instance_cards(instances), kind="instance"
+                "Instances",
+                build_backend_instance_cards(
+                    instances, control_factory=_build_instance_controls
+                ),
+                kind="instance",
             ),
-        ]
-    )
-    if auth_unlocked or not admin_token_configured:
-        body.append(
             section(
                 "Request history",
                 [
-                    request_table(
+                    _build_history_content(
                         request_log,
-                        show_backend=True,
+                        auth_unlocked=auth_unlocked,
+                        admin_token_configured=admin_token_configured,
                         page=page,
                         page_size=page_size,
-                        component_prefix="google-hub-panel",
                     )
                 ],
                 kind="chart",
-            )
-        )
+            ),
+        ]
+    )
 
     return page_shell(
         title="GOOGLE HUB",
@@ -390,6 +577,7 @@ def mount_google_hub_panel(
     app,
     snapshot_provider: SnapshotProvider,
     search_provider: SearchProvider,
+    control_provider: ControlProvider,
     *,
     admin_token: str = "",
 ):
@@ -421,6 +609,11 @@ def mount_google_hub_panel(
             ),
             dcc.Store(id=ids["page_state"], storage_type="session", data=1),
             dcc.Store(id=ids["page_size_state"], storage_type="session", data=10),
+            dcc.Store(
+                id=ids["control_state"],
+                storage_type="memory",
+                data={"status": "idle", "message": ""},
+            ),
             dcc.Store(
                 id=ids["search_state"],
                 storage_type="session",
@@ -588,12 +781,75 @@ def mount_google_hub_panel(
         )
 
     @dash_app.callback(
+        Output(ids["control_state"], "data"),
+        Input(ids["control_toggle_all"], "n_clicks"),
+        Input(ids["control_restart_all"], "n_clicks"),
+        Input(ids["control_rebuild_all"], "n_clicks"),
+        Input(ids["control_squash_all"], "n_clicks"),
+        Input(
+            {"type": "google-hub-panel-backend-action", "action": ALL, "backend": ALL},
+            "n_clicks",
+        ),
+        State(ids["access_state"], "data"),
+        prevent_initial_call=True,
+    )
+    def run_control_action(
+        toggle_all_clicks: int,
+        restart_all_clicks: int,
+        rebuild_all_clicks: int,
+        squash_all_clicks: int,
+        backend_action_clicks: list[int],
+        access_state: dict | None,
+    ):
+        del (
+            toggle_all_clicks,
+            restart_all_clicks,
+            rebuild_all_clicks,
+            squash_all_clicks,
+            backend_action_clicks,
+        )
+        unlocked = bool(dict(access_state or {}).get("unlocked")) or not bool(
+            admin_token
+        )
+        if not unlocked:
+            return {
+                "status": "error",
+                "message": "Unlock access to run HF control actions.",
+            }
+
+        trigger = callback_context.triggered_id
+        try:
+            if isinstance(trigger, dict):
+                result = control_provider(
+                    str(trigger.get("action", "")), str(trigger.get("backend", ""))
+                )
+            elif trigger == ids["control_toggle_all"]:
+                result = control_provider("toggle-all", "")
+            elif trigger == ids["control_restart_all"]:
+                result = control_provider("restart-all", "")
+            elif trigger == ids["control_rebuild_all"]:
+                result = control_provider("rebuild-all", "")
+            elif trigger == ids["control_squash_all"]:
+                result = control_provider("squash-all", "")
+            else:
+                raise PreventUpdate
+            return {
+                "status": "ok",
+                "message": str(result.get("message", "Action requested")).strip(),
+            }
+        except PreventUpdate:
+            raise
+        except Exception as exc:
+            return {"status": "error", "message": sanitize_hf_control_error(str(exc))}
+
+    @dash_app.callback(
         Output(ids["root"], "children"),
         Input(ids["refresh"], "n_intervals"),
         Input(ids["access_state"], "data"),
         Input(ids["page_state"], "data"),
         Input(ids["page_size_state"], "data"),
         Input(ids["search_state"], "data"),
+        Input(ids["control_state"], "data"),
     )
     def refresh_panel(
         _n_intervals: int,
@@ -601,6 +857,7 @@ def mount_google_hub_panel(
         page: int | None,
         page_size: int | None,
         search_state: dict | None,
+        control_state: dict | None,
     ):
         state = dict(access_state or default_access_state)
         return _build_body(
@@ -611,6 +868,7 @@ def mount_google_hub_panel(
             page_size=max(1, int(page_size or 10)),
             ids=ids,
             search_state=dict(search_state or {}),
+            control_state=dict(control_state or {}),
         )
 
     app.mount(DEFAULT_GOOGLE_API_PANEL_PATH, WSGIMiddleware(dash_app.server))

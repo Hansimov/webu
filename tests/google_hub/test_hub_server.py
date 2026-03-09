@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from dash import dcc
+from dash import dcc, html
 from dash.exceptions import PreventUpdate
 from fastapi.testclient import TestClient
 
@@ -14,6 +14,7 @@ from webu.google_hub.manager import (
     GoogleHubBackend,
     GoogleHubManager,
     GoogleHubSettings,
+    sanitize_hf_control_error,
     sanitize_hub_search_error,
 )
 from webu.google_hub.panel import _accepted_admin_tokens
@@ -723,6 +724,84 @@ def test_hub_health_refresh_resolves_ipv4_for_healthy_hf_backend(monkeypatch):
     assert snapshot["resolved_ipv4"] == "10.20.30.40"
 
 
+def test_hub_control_backend_toggle_start_for_paused_space(monkeypatch):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            )
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    class _Runtime:
+        def __init__(self, stage):
+            self.stage = type("_Stage", (), {"value": stage})()
+            self.sleep_time = 3600
+
+    class _FakeApi:
+        def __init__(self, token=None):
+            self.token = token
+
+        def get_space_runtime(self, repo_id, token=None):
+            assert repo_id == "owner/space1"
+            return _Runtime("PAUSED")
+
+        def restart_space(self, repo_id, token=None, factory_reboot=False):
+            assert repo_id == "owner/space1"
+            assert factory_reboot is False
+            return _Runtime("RUNNING")
+
+    monkeypatch.setattr("webu.google_hub.manager.HfApi", _FakeApi)
+    monkeypatch.setattr(
+        "webu.google_hub.manager.resolve_hf_space_settings",
+        lambda space_name: type(
+            "_Settings",
+            (),
+            {
+                "repo_id": space_name,
+                "hf_token": "hf-token",
+                "space_host": "https://owner-space1.hf.space",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "webu.google_hub.manager.requests.get",
+        lambda url, timeout=None: _Response(200, {"status": "ok"}),
+    )
+    monkeypatch.setattr(
+        "webu.google_hub.manager.socket.gethostbyname",
+        lambda hostname: "10.20.30.40",
+    )
+
+    manager = GoogleHubManager(settings)
+    result = asyncio.run(manager.control_backend("space1", "toggle"))
+
+    assert result["action"] == "start"
+    assert result["backend"] == "space1"
+    assert result["snapshot"]["runtime_stage"] == "RUNNING"
+
+
+def test_sanitize_hf_control_error_scrubs_network_failure():
+    assert sanitize_hf_control_error("[Errno 101] Network is unreachable") == (
+        "HF control request failed: network unreachable. Retry later or switch the control endpoint."
+    )
+
+
 def test_hub_panel_body_includes_uptime_and_status_bars():
     snapshot = {
         "updated_at_human": "2026-03-09 09:00:00",
@@ -804,8 +883,10 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
             {
                 "name": "remote",
                 "space_name": "owner/space",
+                "kind": "hf-space",
                 "base_url": "https://owner-space.hf.space",
                 "resolved_ipv4": "10.20.30.40",
+                "runtime_stage": "RUNNING",
                 "healthy": True,
                 "enabled": True,
                 "disabled_reason": "",
@@ -822,11 +903,39 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
         admin_token_configured=True,
         page=1,
         page_size=10,
+        search_state={
+            "status": "ok",
+            "query": "OpenAI news",
+            "backend": "remote",
+            "result": {
+                "query": "OpenAI news",
+                "backend": "remote",
+                "selection_mode": "manual",
+                "result_count": 1,
+                "total_results_text": "1 result",
+                "has_captcha": False,
+                "results": [
+                    {
+                        "title": "OpenAI news headline",
+                        "url": "https://example.com/openai",
+                        "snippet": "short snippet",
+                        "position": 1,
+                    }
+                ],
+            },
+            "error": "",
+        },
     )
     class_names = _collect_class_names(body)
     text_values = _collect_text(body)
     ids = _collect_ids(body)
+    section_titles = [
+        component.children
+        for component in _collect_components_by_class(body, "dash-section-title")
+    ]
+    collapse_icons = _collect_components_by_class(body, "dash-collapse-icon")
     search_input = _find_component_by_id(body, "google-hub-panel-search-query")
+    search_backend = _find_component_by_id(body, "google-hub-panel-search-backend")
     assert any("dash-strip-card" in value for value in class_names)
     assert "UPTIME" in text_values
     assert "1h 0m 0s" in text_values
@@ -838,6 +947,22 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "google-hub-panel-search-query" in ids
     assert "google-hub-panel-search-backend" in ids
     assert isinstance(search_input, dcc.Textarea)
+    assert isinstance(search_backend, dcc.Dropdown)
+    assert "Stop/Start All" in text_values
+    assert "Restart All" in text_values
+    assert "Rebuild All" in text_values
+    assert "Squash All" in text_values
+    assert "Restart" in text_values
+    assert "dash-action-row dash-action-row-compact" in class_names
+    assert any(
+        isinstance(component, html.Details)
+        for component in _collect_components_by_class(body, "dash-collapse")
+    )
+    assert "Search" not in section_titles
+    assert "Results · 1" not in text_values
+    assert len(collapse_icons) >= 2
+    assert "Use auto routing for the best healthy instance" not in text_values
+    assert "google-hub-panel-history-page" in ids
 
 
 def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
@@ -887,6 +1012,7 @@ def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
 
     assert "**.**.**.**" in text_values
     assert "secret preview" not in text_values
+    assert "Unlock access to view request history." in text_values
 
 
 def test_hub_panel_hides_strategy_note_and_uses_two_line_search_box():

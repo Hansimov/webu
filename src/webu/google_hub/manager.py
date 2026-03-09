@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import requests
+from huggingface_hub import HfApi
 
 from webu.fastapis.request_metrics import RequestMetrics
 from webu.runtime_settings import (
@@ -58,6 +59,8 @@ class BackendRuntimeState:
     backend: GoogleHubBackend
     healthy: bool = False
     resolved_ipv4: str = ""
+    runtime_stage: str = ""
+    runtime_sleep_time: int = 0
     search_cooldown_until_ts: float = 0.0
     last_error: str = ""
     latency_ms: int = 0
@@ -158,6 +161,8 @@ class BackendRuntimeState:
             "base_url": self.backend.base_url,
             "space_name": self.backend.space_name,
             "resolved_ipv4": self.resolved_ipv4,
+            "runtime_stage": self.runtime_stage,
+            "runtime_sleep_time": self.runtime_sleep_time,
             "search_cooldown_until_ts": self.search_cooldown_until_ts,
             "enabled": self.backend.enabled,
             "disabled_reason": self.backend.disabled_reason,
@@ -248,6 +253,23 @@ def sanitize_hub_search_error(error: str) -> str:
             return "hub search failed: timeout"
         return "hub search failed: upstream request error"
     return message
+
+
+def sanitize_hf_control_error(error: str) -> str:
+    message = str(error or "").strip()
+    if not message:
+        return "HF control request failed"
+    lowered = message.lower()
+    if "network is unreachable" in lowered:
+        return "HF control request failed: network unreachable. Retry later or switch the control endpoint."
+    if "httpsconnectionpool" in lowered or "max retries exceeded" in lowered:
+        return "HF control request failed: control endpoint unavailable. Retry later or switch the control endpoint."
+    if (
+        "name or service not known" in lowered
+        or "temporary failure in name resolution" in lowered
+    ):
+        return "HF control request failed: DNS resolution failed. Retry later or switch the control endpoint."
+    return f"HF control request failed: {message[:160]}"
 
 
 def _normalize_backend(
@@ -481,12 +503,24 @@ class GoogleHubManager:
         if not backend.enabled:
             state.healthy = False
             state.resolved_ipv4 = ""
+            state.runtime_stage = ""
+            state.runtime_sleep_time = 0
             state.last_error = "backend disabled"
             state.last_checked_ts = time.time()
             return state.to_dict()
 
         started = time.perf_counter()
         try:
+            if backend.kind == "hf-space":
+                runtime_stage = str(state.runtime_stage or "").strip().upper()
+                if runtime_stage in {"PAUSED", "STOPPED"}:
+                    state.healthy = False
+                    state.resolved_ipv4 = ""
+                    state.last_error = runtime_stage.lower()
+                    state.latency_ms = int((time.perf_counter() - started) * 1000)
+                    state.last_checked_ts = time.time()
+                    state.selection_score = state.compute_selection_score()
+                    return state.to_dict()
             response = await asyncio.to_thread(
                 requests.get,
                 f"{backend.base_url}/health",
@@ -503,6 +537,8 @@ class GoogleHubManager:
                 )
             else:
                 state.resolved_ipv4 = ""
+                state.runtime_stage = ""
+                state.runtime_sleep_time = 0
         except Exception as exc:
             state.healthy = False
             state.resolved_ipv4 = ""
@@ -513,6 +549,179 @@ class GoogleHubManager:
         state.last_checked_ts = time.time()
         state.selection_score = state.compute_selection_score()
         return state.to_dict()
+
+    def _resolve_hf_control_endpoints(self) -> list[str]:
+        endpoints: list[str] = []
+        for raw_endpoint in [
+            os.getenv("WEBU_HF_CONTROL_ENDPOINT", ""),
+            os.getenv("HF_ENDPOINT", ""),
+            "https://hf-mirror.com",
+            "https://huggingface.co",
+        ]:
+            endpoint = str(raw_endpoint or "").strip().rstrip("/")
+            if endpoint and endpoint not in endpoints:
+                endpoints.append(endpoint)
+        return endpoints
+
+    def _build_hf_api(self, *, token: str, endpoint: str) -> HfApi:
+        try:
+            return HfApi(token=token, endpoint=endpoint)
+        except TypeError:
+            return HfApi(token=token)
+
+    def _resolve_hf_api(self, space_name: str) -> tuple[HfApi, Any]:
+        settings = resolve_hf_space_settings(space_name)
+        if not settings.hf_token:
+            raise RuntimeError(f"HF token not configured for {space_name}")
+        endpoint = self._resolve_hf_control_endpoints()[0]
+        return self._build_hf_api(token=settings.hf_token, endpoint=endpoint), settings
+
+    def _iter_hf_apis(self, space_name: str) -> list[tuple[HfApi, Any, str]]:
+        settings = resolve_hf_space_settings(space_name)
+        if not settings.hf_token:
+            raise RuntimeError(f"HF token not configured for {space_name}")
+        return [
+            (
+                self._build_hf_api(token=settings.hf_token, endpoint=endpoint),
+                settings,
+                endpoint,
+            )
+            for endpoint in self._resolve_hf_control_endpoints()
+        ]
+
+    def _get_space_runtime_state(self, space_name: str) -> tuple[str, int]:
+        last_error: Exception | None = None
+        for api, settings, _endpoint in self._iter_hf_apis(space_name):
+            try:
+                runtime = api.get_space_runtime(
+                    settings.repo_id, token=settings.hf_token
+                )
+                stage = (
+                    str(
+                        getattr(
+                            getattr(runtime, "stage", ""),
+                            "value",
+                            getattr(runtime, "stage", ""),
+                        )
+                        or ""
+                    )
+                    .strip()
+                    .upper()
+                )
+                sleep_time = int(getattr(runtime, "sleep_time", 0) or 0)
+                return stage, sleep_time
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(sanitize_hf_control_error(str(last_error or "")))
+
+    def _run_hf_space_action(
+        self, state: BackendRuntimeState, action: str
+    ) -> dict[str, Any]:
+        if state.backend.kind != "hf-space" or not state.backend.space_name:
+            raise RuntimeError(
+                f"backend '{state.backend.name}' does not support HF controls"
+            )
+
+        action_name = str(action or "").strip().lower()
+        last_error: Exception | None = None
+        for api, settings, _endpoint in self._iter_hf_apis(state.backend.space_name):
+            try:
+                repo_id = settings.repo_id
+                runtime = None
+                performed = action_name
+
+                if action_name == "toggle":
+                    stage, sleep_time = self._get_space_runtime_state(
+                        state.backend.space_name
+                    )
+                    state.runtime_stage = stage
+                    state.runtime_sleep_time = sleep_time
+                    if stage in {"PAUSED", "STOPPED"}:
+                        runtime = api.restart_space(
+                            repo_id, token=settings.hf_token, factory_reboot=False
+                        )
+                        performed = "start"
+                    else:
+                        runtime = api.pause_space(repo_id, token=settings.hf_token)
+                        performed = "stop"
+                elif action_name == "restart":
+                    runtime = api.restart_space(
+                        repo_id, token=settings.hf_token, factory_reboot=False
+                    )
+                elif action_name == "rebuild":
+                    runtime = api.restart_space(
+                        repo_id, token=settings.hf_token, factory_reboot=True
+                    )
+                elif action_name == "squash":
+                    api.super_squash_history(
+                        repo_id,
+                        branch="main",
+                        commit_message="Hub squash history",
+                        repo_type="space",
+                        token=settings.hf_token,
+                    )
+                else:
+                    raise RuntimeError(f"unsupported control action: {action}")
+
+                if runtime is not None:
+                    state.runtime_stage = (
+                        str(
+                            getattr(
+                                getattr(runtime, "stage", ""),
+                                "value",
+                                getattr(runtime, "stage", ""),
+                            )
+                            or ""
+                        )
+                        .strip()
+                        .upper()
+                    )
+                    state.runtime_sleep_time = int(
+                        getattr(runtime, "sleep_time", 0) or 0
+                    )
+                return {
+                    "backend": state.backend.name,
+                    "space_name": state.backend.space_name,
+                    "action": performed,
+                    "runtime_stage": state.runtime_stage,
+                    "runtime_sleep_time": state.runtime_sleep_time,
+                }
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(sanitize_hf_control_error(str(last_error or "")))
+
+    async def control_backend(self, backend_name: str, action: str) -> dict[str, Any]:
+        state = self.states.get(str(backend_name or "").strip())
+        if not state:
+            raise RuntimeError(f"backend '{backend_name}' not found")
+        result = await asyncio.to_thread(self._run_hf_space_action, state, action)
+        refreshed = await self.refresh_backend_health(state.backend.name)
+        if str(result.get("runtime_stage", "")).strip():
+            refreshed["runtime_stage"] = str(result.get("runtime_stage", "")).strip()
+            refreshed["runtime_sleep_time"] = int(
+                result.get("runtime_sleep_time", 0) or 0
+            )
+        return {
+            **result,
+            "message": f"{result['action']} requested for {result['backend']}",
+            "snapshot": refreshed,
+        }
+
+    async def control_all_backends(self, action: str) -> dict[str, Any]:
+        targets = [
+            state.backend.name
+            for state in self.states.values()
+            if state.backend.kind == "hf-space" and state.backend.space_name
+        ]
+        results = []
+        for backend_name in targets:
+            results.append(await self.control_backend(backend_name, action))
+        return {
+            "action": str(action or "").strip().lower(),
+            "count": len(results),
+            "results": results,
+            "message": f"{str(action or '').strip().lower()} requested for {len(results)} HF space(s)",
+        }
 
     def _eligible_states(self) -> list[BackendRuntimeState]:
         ready_healthy_states = [

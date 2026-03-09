@@ -232,7 +232,7 @@ def build_latency_trend_bars(history: list[dict]) -> list[dict]:
     return bars
 
 
-def build_backend_instance_cards(instances: list[dict]) -> list:
+def build_backend_instance_cards(instances: list[dict], control_factory=None) -> list:
     def _build_ipv4_tag(resolved_ipv4: str, base_url: str) -> tuple[str, str] | None:
         hostname = str(resolved_ipv4 or "").strip()
         if not hostname:
@@ -283,6 +283,7 @@ def build_backend_instance_cards(instances: list[dict]) -> list:
                 status_tone=status_tone,
                 tags=tag_items,
                 note=str(item.get("disabled_reason", "")).strip(),
+                controls=(control_factory(item) if control_factory else None),
                 style={"opacity": 0.58} if not enabled else None,
                 stats=[
                     ("Requests", str(item.get("request_count", 0))),
