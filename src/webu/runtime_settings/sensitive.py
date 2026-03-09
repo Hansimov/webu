@@ -14,7 +14,7 @@ SENSITIVE_TOKEN_KEYS = {
     "hf_token",
     "search_api_token",
 }
-SENSITIVE_SPACE_KEYS = {"space"}
+SENSITIVE_SPACE_KEYS = {"space", "account"}
 SENSITIVE_URL_KEYS = {"base_url", "url"}
 
 

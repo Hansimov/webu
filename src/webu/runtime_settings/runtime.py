@@ -81,6 +81,65 @@ class HfSpaceSettings:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+def resolve_hf_space_entries(raw_config: Any | None = None) -> list[dict[str, Any]]:
+    payload = (
+        raw_config if raw_config is not None else (load_json_config("hf_spaces") or {})
+    )
+    flattened: list[dict[str, Any]] = []
+
+    if isinstance(payload, dict):
+        account_items = payload.get("accounts", [])
+        if not isinstance(account_items, list):
+            return flattened
+        for account_entry in account_items:
+            if not isinstance(account_entry, dict):
+                continue
+            account_name = str(account_entry.get("account", "")).strip()
+            account_token = str(account_entry.get("hf_token", "")).strip()
+            spaces = account_entry.get("spaces", [])
+            if not isinstance(spaces, list):
+                continue
+            for space_entry in spaces:
+                if not isinstance(space_entry, dict):
+                    continue
+                normalized = dict(space_entry)
+                space_name = str(normalized.get("space", "")).strip()
+                if not space_name:
+                    short_name = str(normalized.get("name", "")).strip()
+                    if short_name and account_name:
+                        space_name = f"{account_name}/{short_name}"
+                if not space_name:
+                    continue
+                normalized["space"] = space_name
+                if account_name and not str(normalized.get("account", "")).strip():
+                    normalized["account"] = account_name
+                if account_token and not str(normalized.get("hf_token", "")).strip():
+                    normalized["hf_token"] = account_token
+                flattened.append(normalized)
+        return flattened
+
+    if not isinstance(payload, list):
+        return flattened
+
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        normalized = dict(entry)
+        space_name = str(normalized.get("space", "")).strip()
+        if not space_name:
+            short_name = str(normalized.get("name", "")).strip()
+            account_name = str(normalized.get("account", "")).strip()
+            if short_name and account_name:
+                space_name = f"{account_name}/{short_name}"
+        if not space_name:
+            continue
+        normalized["space"] = space_name
+        if not str(normalized.get("account", "")).strip() and "/" in space_name:
+            normalized["account"] = space_name.split("/", 1)[0]
+        flattened.append(normalized)
+    return flattened
+
+
 def _runtime_uses_local_proxy_config(runtime_env: str | None = None) -> bool:
     env = runtime_env or detect_runtime_environment()
     return env in {"local", "docker"}
@@ -169,12 +228,9 @@ def _resolve_default_hf_space_name(selected: dict[str, Any] | None = None) -> st
 
     space_host = str(os.getenv("SPACE_HOST", "")).strip().lower()
     if space_host:
-        raw_entries = load_json_config("hf_spaces") or []
         normalized_host = space_host.removeprefix("https://").removeprefix("http://")
         normalized_host = normalized_host.rstrip("/")
-        for entry in raw_entries:
-            if not isinstance(entry, dict):
-                continue
+        for entry in resolve_hf_space_entries():
             space_name = str(entry.get("space", "")).strip()
             if not space_name:
                 continue
@@ -187,10 +243,7 @@ def _resolve_default_hf_space_name(selected: dict[str, Any] | None = None) -> st
         if selected_space:
             return selected_space
 
-    raw_entries = load_json_config("hf_spaces") or []
-    for entry in raw_entries:
-        if not isinstance(entry, dict):
-            continue
+    for entry in resolve_hf_space_entries():
         space_name = str(entry.get("space", "")).strip()
         if space_name:
             return space_name
@@ -533,7 +586,7 @@ def resolve_google_docker_settings() -> GoogleDockerSettings:
 
 
 def resolve_hf_space_settings(space_name: str) -> HfSpaceSettings:
-    raw_entries = load_json_config("hf_spaces") or []
+    raw_entries = resolve_hf_space_entries()
     matched = None
     for entry in raw_entries:
         if entry.get("space") == space_name:

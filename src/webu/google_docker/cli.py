@@ -57,6 +57,7 @@ from webu.runtime_settings import (
     resolve_google_api_settings,
     resolve_google_api_service_profile,
     resolve_google_docker_settings,
+    resolve_hf_space_entries,
     resolve_hf_space_settings,
 )
 
@@ -342,9 +343,7 @@ def _build_profile_export_candidates(
             "admin_token": default_admin_token,
         }
 
-    for entry in load_json_config("hf_spaces") or []:
-        if not isinstance(entry, dict):
-            continue
+    for entry in resolve_hf_space_entries():
         space_name = str(entry.get("space", "")).strip()
         if not space_name or not bool(entry.get("enabled", True)):
             continue
@@ -507,10 +506,7 @@ def _resolve_default_space_name(explicit_space: str | None = None) -> str:
     if space_name:
         return space_name
 
-    raw_entries = load_json_config("hf_spaces") or []
-    for entry in raw_entries:
-        if not isinstance(entry, dict):
-            continue
+    for entry in resolve_hf_space_entries():
         candidate = str(entry.get("space", "")).strip()
         if candidate:
             return candidate
@@ -1251,9 +1247,8 @@ def cmd_hf_create_space(args):
 
     token = args.hf_token.strip()
     if not token:
-        existing_spaces = load_json_config("hf_spaces") or []
-        for entry in existing_spaces:
-            if isinstance(entry, dict) and str(entry.get("hf_token", "")).strip():
+        for entry in resolve_hf_space_entries():
+            if str(entry.get("hf_token", "")).strip():
                 token = str(entry.get("hf_token", "")).strip()
                 break
     if not token:
@@ -1271,11 +1266,8 @@ def cmd_hf_create_space(args):
 
 
 def cmd_hf_sync_all(args):
-    entries = load_json_config("hf_spaces") or []
     space_names = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
+    for entry in resolve_hf_space_entries():
         space_name = str(entry.get("space", "")).strip()
         if space_name and bool(entry.get("enabled", True)):
             space_names.append(space_name)

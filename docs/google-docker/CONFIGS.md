@@ -97,7 +97,10 @@
   "strategy": "adaptive",
   "health_interval_sec": 30,
   "health_timeout_sec": 10,
-  "request_timeout_sec": 90,
+  "request_timeout_sec": 60,
+  "exclude_nodes": [
+    "local-google-api"
+  ],
   "backends": [
     {
       "name": "local-google-api",
@@ -140,46 +143,71 @@
 
 1. kind 只允许 local-google-api、google-api、hf-space。
 2. hf-space 后端可以只写 space，不写 base_url。
-3. search_api_token 和 admin_token 为空时，会回退到现有 google_api/google_docker 配置中的默认 token。
+3. 如果 google_hub.json 没有显式声明某个已配置的 hf_space，hub 会自动从 hf_spaces.json 补齐该后端。
+4. search_api_token 和 admin_token 为空时，会回退到现有 google_api/google_docker 配置中的默认 token。
+5. exclude_nodes 支持按后端 name 或 space 名称禁用节点。
 
 ## 5. `configs/hf_spaces.json`
 
 用途：
 
-1. 维护 HF Space 名称和 HF token。
+1. 按 HF 账号集中维护 token，并在账号下声明多个 Spaces。
 2. 仅用于 CLI 访问 Hugging Face Hub。
-3. 第一项会被 ggdk hf-sync、ggdk hf-status、ggdk hf-files 等命令当作默认 Space。
+3. 第一个已配置的 Space 会被 ggdk hf-sync、ggdk hf-status、ggdk hf-files 等命令当作默认 Space。
 
 模板：
 
 ```json
-[
-  {
-    "space": "owner/space1",
-    "hf_token": "your-hf-token",
-    "enabled": true,
-    "weight": 1,
-    "tags": [
-      "primary"
-    ]
-  },
-  {
-    "space": "owner/space2",
-    "hf_token": "your-hf-token",
-    "enabled": true,
-    "weight": 1,
-    "tags": [
-      "secondary"
-    ]
-  }
-]
+{
+  "accounts": [
+    {
+      "account": "owner-a",
+      "hf_token": "your-hf-token-a",
+      "spaces": [
+        {
+          "name": "space1",
+          "enabled": true,
+          "weight": 1,
+          "tags": [
+            "primary"
+          ]
+        },
+        {
+          "name": "space2",
+          "enabled": true,
+          "weight": 1,
+          "tags": [
+            "secondary"
+          ]
+        }
+      ]
+    },
+    {
+      "account": "owner-b",
+      "hf_token": "your-hf-token-b",
+      "spaces": [
+        {
+          "name": "space1",
+          "enabled": true,
+          "weight": 1,
+          "tags": [
+            "primary"
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
 说明：
 
 1. 这里不要放 /search 的业务 token。
 2. 这里也不要放 admin_token。
-3. 可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置。
+3. 推荐使用按账号分组的 accounts 结构，每个账号只维护一个 hf_token。
+4. 每个 space 可以只写 name；此时会自动拼成 account/name。
+5. 可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置；未在 google_hub.json 显式声明的已配置 Space 会被自动补齐到 hub 后端列表中。
+6. 为兼容旧配置，仍接受平铺的 legacy space 列表格式。
 
 ## 6. `configs/llms.json`
 

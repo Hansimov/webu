@@ -1,3 +1,4 @@
+import json
 import threading
 
 from types import SimpleNamespace
@@ -642,7 +643,20 @@ def test_cmd_hf_sync_all_runs_in_parallel(monkeypatch, tmp_path, capsys):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
     (config_dir / "hf_spaces.json").write_text(
-        '[{"space": "owner/space1", "hf_token": "hf_demo", "enabled": true}, {"space": "owner/space2", "hf_token": "hf_demo", "enabled": true}]',
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account": "owner",
+                        "hf_token": "hf_demo",
+                        "spaces": [
+                            {"name": "space1", "enabled": True},
+                            {"name": "space2", "enabled": True},
+                        ],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
@@ -681,7 +695,17 @@ def test_resolve_default_space_name_reads_first_configured_space(monkeypatch, tm
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
     (config_dir / "hf_spaces.json").write_text(
-        '[{"space": "owner/demo", "hf_token": "hf_xxx"}]',
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account": "owner",
+                        "hf_token": "hf_xxx",
+                        "spaces": [{"name": "demo"}],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))

@@ -56,14 +56,21 @@ def _write_base_configs(config_dir):
     )
     (config_dir / "hf_spaces.json").write_text(
         json.dumps(
-            [
-                {
-                    "space": "owner/space1",
-                    "hf_token": "hf_demo",
-                    "enabled": True,
-                    "weight": 1,
-                }
-            ]
+            {
+                "accounts": [
+                    {
+                        "account": "owner",
+                        "hf_token": "hf_demo",
+                        "spaces": [
+                            {
+                                "name": "space1",
+                                "enabled": True,
+                                "weight": 1,
+                            }
+                        ],
+                    }
+                ]
+            }
         ),
         encoding="utf-8",
     )
@@ -145,6 +152,7 @@ def test_hub_admin_backends_requires_token(monkeypatch, tmp_path):
         json.dumps(
             {
                 "admin_token": "hub-secret",
+                "exclude_nodes": ["owner/space1"],
                 "backends": [
                     {
                         "name": "local-google-api",
@@ -318,6 +326,7 @@ def test_hub_search_returns_summarized_auto_failure(monkeypatch, tmp_path):
     (config_dir / "google_hub.json").write_text(
         json.dumps(
             {
+                "exclude_nodes": ["owner/space1"],
                 "backends": [
                     {
                         "name": "space3",
@@ -331,7 +340,7 @@ def test_hub_search_returns_summarized_auto_failure(monkeypatch, tmp_path):
                         "space": "owner/space4",
                         "weight": 1,
                     },
-                ]
+                ],
             }
         ),
         encoding="utf-8",
@@ -383,9 +392,9 @@ def test_hub_search_requires_real_submit_click():
 
 def test_sanitize_hub_search_error_scrubs_legacy_timeout_string():
     message = (
-        "all hub backends failed: HTTPSConnectionPool(host='1krog-space4.hf.space', "
+        "all hub backends failed: HTTPSConnectionPool(host='owner-b-space4.hf.space', "
         "port=443): Max retries exceeded with url: /search?q=test "
-        "(Caused by ReadTimeoutError(\"HTTPSConnectionPool(host='1krog-space4.hf.space', "
+        "(Caused by ReadTimeoutError(\"HTTPSConnectionPool(host='owner-b-space4.hf.space', "
         'port=443): Read timed out. (read timeout=60)"))'
     )
     sanitized = sanitize_hub_search_error(message)
@@ -402,7 +411,7 @@ def test_resolve_search_state_sanitizes_provider_exception():
         "",
         lambda *_args: (_ for _ in ()).throw(
             RuntimeError(
-                "all hub backends failed: HTTPSConnectionPool(host='1krog-space4.hf.space', port=443): Read timed out."
+                "all hub backends failed: HTTPSConnectionPool(host='owner-b-space4.hf.space', port=443): Read timed out."
             )
         ),
     )
@@ -446,7 +455,7 @@ def test_hub_panel_sanitizes_stale_search_state_error():
             "query": "test",
             "backend": "",
             "result": {},
-            "error": "all hub backends failed: HTTPSConnectionPool(host='1krog-space4.hf.space', port=443): Read timed out.",
+            "error": "all hub backends failed: HTTPSConnectionPool(host='owner-b-space4.hf.space', port=443): Read timed out.",
         },
     )
     text_values = _collect_text(body)

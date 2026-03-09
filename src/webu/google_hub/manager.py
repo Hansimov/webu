@@ -21,6 +21,7 @@ from webu.runtime_settings import (
     load_json_config,
     resolve_google_api_service_profile,
     resolve_google_docker_settings,
+    resolve_hf_space_entries,
     resolve_hf_space_settings,
 )
 
@@ -342,6 +343,62 @@ def _parse_excluded_nodes(raw_value: Any) -> list[str]:
     return values
 
 
+def _generate_backend_name(space_name: str, used_names: set[str]) -> str:
+    repo_name = space_name.split("/")[-1]
+    candidates = [repo_name, space_name.replace("/", "-")]
+    for candidate in candidates:
+        normalized = str(candidate).strip()
+        if normalized and normalized not in used_names:
+            return normalized
+
+    suffix = 2
+    base_name = space_name.replace("/", "-") or "hf-space"
+    while True:
+        candidate = f"{base_name}-{suffix}"
+        if candidate not in used_names:
+            return candidate
+        suffix += 1
+
+
+def _append_missing_hf_space_backends(
+    backends: list[GoogleHubBackend],
+    *,
+    runtime_env: str,
+    excluded_nodes: set[str],
+    default_search_token: str,
+    default_admin_token: str,
+):
+    declared_spaces = {
+        backend.space_name for backend in backends if backend.kind == "hf-space"
+    }
+    used_names = {backend.name for backend in backends}
+
+    for entry in resolve_hf_space_entries():
+        space_name = str(entry.get("space", "")).strip()
+        if not space_name or space_name in declared_spaces:
+            continue
+
+        backend_name = _generate_backend_name(space_name, used_names)
+        used_names.add(backend_name)
+        declared_spaces.add(space_name)
+        backends.append(
+            _normalize_backend(
+                {
+                    "name": backend_name,
+                    "kind": "hf-space",
+                    "space": space_name,
+                    "enabled": entry.get("enabled", True),
+                    "weight": entry.get("weight", 1),
+                    "tags": entry.get("tags", []),
+                },
+                default_search_token=default_search_token,
+                default_admin_token=default_admin_token,
+                runtime_env=runtime_env,
+                excluded_nodes=excluded_nodes,
+            )
+        )
+
+
 def resolve_google_hub_settings() -> GoogleHubSettings:
     config = load_json_config("google_hub") or {}
     paths = get_workspace_paths()
@@ -385,6 +442,14 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
             )
         )
 
+    _append_missing_hf_space_backends(
+        backends,
+        runtime_env=runtime_env,
+        excluded_nodes=excluded_node_set,
+        default_search_token=str(default_hf.get("api_token", "")).strip(),
+        default_admin_token=str(default_admin_token).strip(),
+    )
+
     if not backends:
         backends = [
             GoogleHubBackend(
@@ -405,32 +470,13 @@ def resolve_google_hub_settings() -> GoogleHubSettings:
                 tags=["local", "primary"],
             )
         ]
-        for entry in load_json_config("hf_spaces") or []:
-            if not isinstance(entry, dict):
-                continue
-            space_name = str(entry.get("space", "")).strip()
-            if not space_name:
-                continue
-            backends.append(
-                GoogleHubBackend(
-                    name=space_name.split("/")[-1],
-                    kind="hf-space",
-                    base_url=_normalize_backend_base_url(
-                        resolve_hf_space_settings(space_name).space_host.rstrip("/"),
-                        runtime_env,
-                    ),
-                    enabled=bool(entry.get("enabled", True)),
-                    weight=max(1, int(entry.get("weight", 1))),
-                    search_api_token=str(default_hf.get("api_token", "")).strip(),
-                    admin_token=str(default_admin_token).strip(),
-                    space_name=space_name,
-                    tags=[
-                        str(tag).strip()
-                        for tag in entry.get("tags", [])
-                        if str(tag).strip()
-                    ],
-                )
-            )
+        _append_missing_hf_space_backends(
+            backends,
+            runtime_env=runtime_env,
+            excluded_nodes=excluded_node_set,
+            default_search_token=str(default_hf.get("api_token", "")).strip(),
+            default_admin_token=str(default_admin_token).strip(),
+        )
 
     return GoogleHubSettings(
         host=str(config.get("host", "0.0.0.0")),

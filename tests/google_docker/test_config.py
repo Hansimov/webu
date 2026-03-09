@@ -9,6 +9,7 @@ from webu.runtime_settings import (
     resolve_gemini_default_proxy,
     resolve_google_api_settings,
     resolve_google_api_service_profile,
+    resolve_hf_space_entries,
     resolve_hf_space_settings,
     resolve_proxy_api_fetch_proxy,
     resolve_searches_chrome_proxy,
@@ -63,7 +64,17 @@ def test_google_api_service_profile_resolves_by_type(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     (config_dir / "hf_spaces.json").write_text(
-        json.dumps([{"space": "owner/demo-space", "hf_token": "hf_demo"}]),
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account": "owner",
+                        "hf_token": "hf_demo",
+                        "spaces": [{"name": "demo-space"}],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
@@ -95,10 +106,15 @@ def test_google_api_service_profile_resolves_current_space_from_space_host(
     )
     (config_dir / "hf_spaces.json").write_text(
         json.dumps(
-            [
-                {"space": "owner/space1", "hf_token": "hf_demo"},
-                {"space": "owner/space3", "hf_token": "hf_demo"},
-            ]
+            {
+                "accounts": [
+                    {
+                        "account": "owner",
+                        "hf_token": "hf_demo",
+                        "spaces": [{"name": "space1"}, {"name": "space3"}],
+                    }
+                ]
+            }
         ),
         encoding="utf-8",
     )
@@ -168,7 +184,17 @@ def test_hf_space_settings_reads_token(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
     (config_dir / "hf_spaces.json").write_text(
-        json.dumps([{"space": "owner/demo", "hf_token": "hf_demo"}]),
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account": "owner",
+                        "hf_token": "hf_demo",
+                        "spaces": [{"name": "demo"}],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
@@ -177,6 +203,39 @@ def test_hf_space_settings_reads_token(monkeypatch, tmp_path):
     settings = resolve_hf_space_settings("owner/demo")
     assert settings.hf_token == "hf_demo"
     assert settings.space_host == "https://owner-demo.hf.space"
+
+
+def test_hf_space_entries_expand_account_centered_config(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "hf_spaces.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account": "owner-a",
+                        "hf_token": "hf_demo_a",
+                        "spaces": [
+                            {"name": "space1", "enabled": True, "weight": 1},
+                            {"name": "space2", "enabled": False, "weight": 2},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    entries = resolve_hf_space_entries()
+
+    assert [entry["space"] for entry in entries] == [
+        "owner-a/space1",
+        "owner-a/space2",
+    ]
+    assert entries[0]["hf_token"] == "hf_demo_a"
+    assert entries[1]["weight"] == 2
 
 
 def test_load_json_config_validates_known_configs(monkeypatch, tmp_path):
@@ -254,20 +313,26 @@ def test_google_hub_settings_resolve_backends(monkeypatch, tmp_path):
     )
     (config_dir / "hf_spaces.json").write_text(
         json.dumps(
-            [
-                {
-                    "space": "owner/space1",
-                    "hf_token": "hf_demo",
-                    "enabled": True,
-                    "weight": 1,
-                },
-                {
-                    "space": "owner/space2",
-                    "hf_token": "hf_demo",
-                    "enabled": True,
-                    "weight": 2,
-                },
-            ]
+            {
+                "accounts": [
+                    {
+                        "account": "owner",
+                        "hf_token": "hf_demo",
+                        "spaces": [
+                            {
+                                "name": "space1",
+                                "enabled": True,
+                                "weight": 1,
+                            },
+                            {
+                                "name": "space2",
+                                "enabled": True,
+                                "weight": 2,
+                            },
+                        ],
+                    }
+                ]
+            }
         ),
         encoding="utf-8",
     )
@@ -301,8 +366,79 @@ def test_google_hub_settings_resolve_backends(monkeypatch, tmp_path):
     assert [backend.name for backend in settings.backends] == [
         "local-google-api",
         "space2",
+        "space1",
     ]
     assert settings.backends[1].base_url == "https://owner-space2.hf.space"
+    assert settings.backends[2].base_url == "https://owner-space1.hf.space"
+
+
+def test_google_hub_settings_auto_names_owner_prefixed_duplicates(
+    monkeypatch, tmp_path
+):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "google_api.json").write_text(
+        json.dumps(
+            {
+                "host": "0.0.0.0",
+                "port": 18200,
+                "proxy_mode": "auto",
+                "services": [
+                    {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
+                    {"type": "hf-space", "api_token": "hf-search-token"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "google_docker.json").write_text(
+        json.dumps({"admin_token": "admin-token"}), encoding="utf-8"
+    )
+    (config_dir / "hf_spaces.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account": "owner-a",
+                        "hf_token": "hf_demo",
+                        "spaces": [{"name": "space1", "enabled": True}],
+                    },
+                    {
+                        "account": "owner-b",
+                        "hf_token": "hf_demo2",
+                        "spaces": [{"name": "space1", "enabled": True}],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "backends": [
+                    {
+                        "name": "space1",
+                        "kind": "hf-space",
+                        "space": "owner-a/space1",
+                        "weight": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    settings = resolve_google_hub_settings()
+
+    assert [backend.name for backend in settings.backends] == [
+        "space1",
+        "owner-b-space1",
+    ]
+    assert settings.backends[1].space_name == "owner-b/space1"
+    assert settings.backends[1].base_url == "https://owner-b-space1.hf.space"
 
 
 def test_google_hub_settings_normalize_local_backend_for_docker(monkeypatch, tmp_path):

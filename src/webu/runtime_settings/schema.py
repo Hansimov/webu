@@ -106,6 +106,7 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
         "notes": [
             "kind 只允许 local-google-api、google-api、hf-space。",
             "hf-space 后端可以只写 space，不写 base_url。",
+            "如果 google_hub.json 没有显式声明某个已配置的 hf_space，hub 会自动从 hf_spaces.json 补齐该后端。",
             "search_api_token 和 admin_token 为空时，会回退到现有 google_api/google_docker 配置中的默认 token。",
             "exclude_nodes 支持按后端 name 或 space 名称禁用节点。",
         ],
@@ -285,44 +286,109 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
     "hf_spaces": {
         "file": "configs/hf_spaces.json",
         "purpose": [
-            "维护 HF Space 名称和 HF token。",
+            "按 HF 账号集中维护 token，并在账号下声明多个 Spaces。",
             "仅用于 CLI 访问 Hugging Face Hub。",
-            "第一项会被 ggdk hf-sync、ggdk hf-status、ggdk hf-files 等命令当作默认 Space。",
+            "第一个已配置的 Space 会被 ggdk hf-sync、ggdk hf-status、ggdk hf-files 等命令当作默认 Space。",
         ],
         "notes": [
             "这里不要放 /search 的业务 token。",
             "这里也不要放 admin_token。",
-            "可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置。",
+            "推荐使用按账号分组的 accounts 结构，每个账号只维护一个 hf_token。",
+            "每个 space 可以只写 name；此时会自动拼成 account/name。",
+            "可以通过 enabled、weight、tags 参与本地 google_hub 的调度配置；未在 google_hub.json 显式声明的已配置 Space 会被自动补齐到 hub 后端列表中。",
+            "为兼容旧配置，仍接受平铺的 legacy space 列表格式。",
         ],
-        "sample": [
-            {
-                "space": "owner/space1",
-                "hf_token": "your-hf-token",
-                "enabled": True,
-                "weight": 1,
-                "tags": ["primary"],
-            },
-            {
-                "space": "owner/space2",
-                "hf_token": "your-hf-token",
-                "enabled": True,
-                "weight": 1,
-                "tags": ["secondary"],
-            },
-        ],
-        "schema": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["space", "hf_token"],
-                "properties": {
-                    "space": {"type": "string"},
-                    "hf_token": {"type": "string"},
-                    "enabled": {"type": "boolean"},
-                    "weight": {"type": "integer"},
-                    "tags": {"type": "array", "items": {"type": "string"}},
+        "sample": {
+            "accounts": [
+                {
+                    "account": "owner-a",
+                    "hf_token": "your-hf-token-a",
+                    "spaces": [
+                        {
+                            "name": "space1",
+                            "enabled": True,
+                            "weight": 1,
+                            "tags": ["primary"],
+                        },
+                        {
+                            "name": "space2",
+                            "enabled": True,
+                            "weight": 1,
+                            "tags": ["secondary"],
+                        },
+                    ],
                 },
-            },
+                {
+                    "account": "owner-b",
+                    "hf_token": "your-hf-token-b",
+                    "spaces": [
+                        {
+                            "name": "space1",
+                            "enabled": True,
+                            "weight": 1,
+                            "tags": ["primary"],
+                        }
+                    ],
+                },
+            ]
+        },
+        "schema": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "required": ["accounts"],
+                    "properties": {
+                        "accounts": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["account", "hf_token", "spaces"],
+                                "properties": {
+                                    "account": {"type": "string"},
+                                    "hf_token": {"type": "string"},
+                                    "spaces": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {"type": "string"},
+                                                "space": {"type": "string"},
+                                                "enabled": {"type": "boolean"},
+                                                "weight": {"type": "integer"},
+                                                "tags": {
+                                                    "type": "array",
+                                                    "items": {"type": "string"},
+                                                },
+                                            },
+                                            "anyOf": [
+                                                {"required": ["name"]},
+                                                {"required": ["space"]},
+                                            ],
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    },
+                },
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["space", "hf_token"],
+                        "properties": {
+                            "space": {"type": "string"},
+                            "hf_token": {"type": "string"},
+                            "enabled": {"type": "boolean"},
+                            "weight": {"type": "integer"},
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            ]
         },
     },
 }
