@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
+
+from urllib.parse import urlsplit
+
 from webu.fastapis.dashboard_ui import (
     THEME,
     format_ms,
@@ -232,6 +236,21 @@ def build_latency_trend_bars(history: list[dict]) -> list[dict]:
 
 
 def build_backend_instance_cards(instances: list[dict]) -> list:
+    def _build_ipv4_tag(resolved_ipv4: str, base_url: str) -> tuple[str, str] | None:
+        hostname = str(resolved_ipv4 or "").strip()
+        if not hostname:
+            parsed = urlsplit(str(base_url or "").strip())
+            hostname = str(parsed.hostname or "").strip()
+        if not hostname:
+            return None
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return None
+        if address.version != 4:
+            return None
+        return (str(address), "info")
+
     cards = []
     ordered_instances = sorted(
         instances,
@@ -250,6 +269,14 @@ def build_backend_instance_cards(instances: list[dict]) -> list:
         else:
             status_label = "healthy" if healthy else "unhealthy"
             status_tone = "accent" if healthy else "danger"
+        tag_items: list[tuple[str, str]] = []
+        if healthy:
+            endpoint_tag = _build_ipv4_tag(
+                str(item.get("resolved_ipv4", "")),
+                str(item.get("base_url", "")),
+            )
+            if endpoint_tag:
+                tag_items.append(endpoint_tag)
         cards.append(
             instance_card(
                 name=item.get("name", "instance"),
@@ -257,6 +284,7 @@ def build_backend_instance_cards(instances: list[dict]) -> list:
                 healthy=healthy,
                 status_label=status_label,
                 status_tone=status_tone,
+                tags=tag_items,
                 note=str(item.get("disabled_reason", "")).strip(),
                 style={"opacity": 0.58} if not enabled else None,
                 stats=[

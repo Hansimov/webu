@@ -1,6 +1,8 @@
 import json
+import asyncio
 import time
 
+from dash import dcc
 from fastapi.testclient import TestClient
 
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH
@@ -10,6 +12,7 @@ from webu.google_hub.manager import (
     GoogleHubManager,
     GoogleHubSettings,
 )
+from webu.google_hub.panel import _accepted_admin_tokens
 from webu.google_hub.panel import _build_body as build_google_hub_panel_body
 from webu.google_hub.server import create_google_hub_server
 
@@ -112,6 +115,20 @@ def _collect_components_by_class(component, class_name: str):
     elif children is not None:
         matches.extend(_collect_components_by_class(children, class_name))
     return matches
+
+
+def _find_component_by_id(component, component_id: str):
+    if getattr(component, "id", None) == component_id:
+        return component
+    children = getattr(component, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            match = _find_component_by_id(child, component_id)
+            if match is not None:
+                return match
+    elif children is not None:
+        return _find_component_by_id(children, component_id)
+    return None
 
 
 def test_hub_admin_backends_requires_token(monkeypatch, tmp_path):
@@ -276,6 +293,68 @@ def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
         assert payload["query"] == "OpenAI news"
 
 
+def test_hub_search_can_pin_specific_healthy_backend(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    _write_base_configs(config_dir)
+    (config_dir / "google_hub.json").write_text(
+        json.dumps(
+            {
+                "backends": [
+                    {
+                        "name": "local-google-api",
+                        "kind": "local-google-api",
+                        "base_url": "http://127.0.0.1:18200",
+                        "weight": 2,
+                    },
+                    {
+                        "name": "space1",
+                        "kind": "hf-space",
+                        "space": "owner/space1",
+                        "weight": 1,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url == "http://127.0.0.1:18200/health":
+            return _Response(200, {"status": "ok"})
+        if url == "https://owner-space1.hf.space/health":
+            return _Response(200, {"status": "ok"})
+        if url == "https://owner-space1.hf.space/search":
+            return _Response(
+                200,
+                {
+                    "success": True,
+                    "query": params["q"],
+                    "results": [{"title": "Pinned", "url": "https://example.org"}],
+                    "result_count": 1,
+                    "total_results_text": "1 result",
+                    "has_captcha": False,
+                    "error": "",
+                },
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    with TestClient(create_google_hub_server()) as client:
+        resp = client.get(
+            "/search",
+            params={"q": "OpenAI news", "num": 5, "lang": "en", "backend": "space1"},
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["backend"] == "space1"
+        assert payload["requested_backend"] == "space1"
+        assert payload["selection_mode"] == "manual"
+
+
 def test_hub_fallback_counts_single_request_metric(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
@@ -381,6 +460,47 @@ def test_adaptive_strategy_prefers_fast_and_stable_backend():
     assert ordered[0].compute_selection_score() < ordered[1].compute_selection_score()
 
 
+def test_hub_health_refresh_resolves_ipv4_for_healthy_hf_backend(monkeypatch):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            )
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    def _fake_get(url, timeout=None):
+        assert url == "https://owner-space1.hf.space/health"
+        return _Response(200, {"status": "ok"})
+
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+    monkeypatch.setattr(
+        "webu.google_hub.manager.socket.gethostbyname",
+        lambda hostname: "10.20.30.40",
+    )
+
+    manager = GoogleHubManager(settings)
+    snapshot = asyncio.run(manager.refresh_backend_health("space1"))
+
+    assert snapshot["healthy"] is True
+    assert snapshot["resolved_ipv4"] == "10.20.30.40"
+
+
 def test_hub_panel_body_includes_uptime_and_status_bars():
     snapshot = {
         "updated_at_human": "2026-03-09 09:00:00",
@@ -451,6 +571,7 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
             {
                 "name": "local",
                 "kind": "google-api",
+                "base_url": "http://127.0.0.1:18200",
                 "healthy": False,
                 "enabled": False,
                 "disabled_reason": "excluded by hub settings",
@@ -461,6 +582,8 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
             {
                 "name": "remote",
                 "space_name": "owner/space",
+                "base_url": "https://owner-space.hf.space",
+                "resolved_ipv4": "10.20.30.40",
                 "healthy": True,
                 "enabled": True,
                 "disabled_reason": "",
@@ -480,12 +603,19 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     )
     class_names = _collect_class_names(body)
     text_values = _collect_text(body)
+    ids = _collect_ids(body)
+    search_input = _find_component_by_id(body, "google-hub-panel-search-query")
     assert any("dash-strip-card" in value for value in class_names)
     assert "UPTIME" in text_values
     assert "1h 0m 0s" in text_values
     assert "disabled" in text_values
+    assert "10.20.30.40" in text_values
+    assert "127.0.0.1" not in text_values
     assert "OpenAI news headline | short snippet | example.com" in text_values
     assert "1/1 HEALTHY" in text_values
+    assert "google-hub-panel-search-query" in ids
+    assert "google-hub-panel-search-backend" in ids
+    assert isinstance(search_input, dcc.Textarea)
 
 
 def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
@@ -543,6 +673,7 @@ def test_hub_instance_cards_place_disabled_last_and_dim_them():
             {
                 "name": "local",
                 "kind": "google-api",
+                "base_url": "http://127.0.0.1:18200",
                 "healthy": False,
                 "enabled": False,
                 "disabled_reason": "excluded by hub settings",
@@ -553,6 +684,8 @@ def test_hub_instance_cards_place_disabled_last_and_dim_them():
             {
                 "name": "space2",
                 "space_name": "owner/space2",
+                "base_url": "https://owner-space2.hf.space",
+                "resolved_ipv4": "10.20.30.41",
                 "healthy": False,
                 "enabled": True,
                 "disabled_reason": "",
@@ -563,6 +696,8 @@ def test_hub_instance_cards_place_disabled_last_and_dim_them():
             {
                 "name": "space1",
                 "space_name": "owner/space1",
+                "base_url": "https://owner-space1.hf.space",
+                "resolved_ipv4": "10.20.30.40",
                 "healthy": True,
                 "enabled": True,
                 "disabled_reason": "",
@@ -580,6 +715,25 @@ def test_hub_instance_cards_place_disabled_last_and_dim_them():
 
     assert instance_names == ["space1", "space2", "local"]
     assert cards[-1].style["opacity"] == 0.58
+    assert "10.20.30.40" in _collect_text(cards[0])
+    assert "10.20.30.41" not in _collect_text(cards[1])
+    assert "127.0.0.1" not in _collect_text(cards[-1])
+
+
+def test_hub_panel_accepts_env_admin_token_alias(monkeypatch):
+    monkeypatch.setenv("WEBU_HUB_ADMIN_TOKEN", "hub-token")
+    monkeypatch.setenv("WEBU_ADMIN_TOKEN", "shared-token")
+    monkeypatch.setattr(
+        "webu.google_hub.panel.resolve_google_docker_settings",
+        lambda: type("_Settings", (), {"admin_token": "docker-token"})(),
+    )
+
+    assert _accepted_admin_tokens("panel-token") == {
+        "panel-token",
+        "docker-token",
+        "hub-token",
+        "shared-token",
+    }
 
 
 def test_hub_panel_root_redirect_and_page(monkeypatch, tmp_path):

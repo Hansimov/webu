@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import time
 
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ class GoogleHubSettings:
 class BackendRuntimeState:
     backend: GoogleHubBackend
     healthy: bool = False
+    resolved_ipv4: str = ""
     last_error: str = ""
     latency_ms: int = 0
     inflight: int = 0
@@ -154,6 +156,7 @@ class BackendRuntimeState:
             "kind": self.backend.kind,
             "base_url": self.backend.base_url,
             "space_name": self.backend.space_name,
+            "resolved_ipv4": self.resolved_ipv4,
             "enabled": self.backend.enabled,
             "disabled_reason": self.backend.disabled_reason,
             "weight": self.backend.weight,
@@ -203,6 +206,17 @@ def _normalize_backend_base_url(base_url: str, runtime_env: str) -> str:
         fragment=parts.fragment,
     )
     return urlunsplit(rebuilt).rstrip("/")
+
+
+def _resolve_backend_ipv4(base_url: str) -> str:
+    parsed = urlsplit(str(base_url or "").strip())
+    hostname = str(parsed.hostname or "").strip()
+    if not hostname:
+        return ""
+    try:
+        return str(socket.gethostbyname(hostname))
+    except OSError:
+        return ""
 
 
 def _normalize_backend(
@@ -432,6 +446,7 @@ class GoogleHubManager:
         backend = state.backend
         if not backend.enabled:
             state.healthy = False
+            state.resolved_ipv4 = ""
             state.last_error = "backend disabled"
             state.last_checked_ts = time.time()
             return state.to_dict()
@@ -448,8 +463,15 @@ class GoogleHubManager:
             state.last_error = ""
             state.consecutive_failures = 0
             state.latency_ms = int((time.perf_counter() - started) * 1000)
+            if backend.kind == "hf-space":
+                state.resolved_ipv4 = await asyncio.to_thread(
+                    _resolve_backend_ipv4, backend.base_url
+                )
+            else:
+                state.resolved_ipv4 = ""
         except Exception as exc:
             state.healthy = False
+            state.resolved_ipv4 = ""
             state.last_error = str(exc)
             state.consecutive_failures += 1
             state.last_failure_ts = time.time()
@@ -488,7 +510,27 @@ class GoogleHubManager:
             state.backend.name,
         )
 
-    def choose_backend(self) -> BackendRuntimeState:
+    def _resolve_requested_backend(self, backend_name: str) -> BackendRuntimeState:
+        requested_name = str(backend_name or "").strip()
+        if not requested_name:
+            raise RuntimeError("backend name is required")
+        state = self.states.get(requested_name)
+        if not state:
+            raise RuntimeError(f"backend '{requested_name}' not found")
+        if not state.backend.enabled:
+            raise RuntimeError(f"backend '{requested_name}' is disabled")
+        if not state.healthy:
+            raise RuntimeError(f"backend '{requested_name}' is not healthy")
+        return state
+
+    def choose_backend(self, backend_name: str = "") -> BackendRuntimeState:
+        requested_name = str(backend_name or "").strip()
+        if requested_name:
+            state = self._resolve_requested_backend(requested_name)
+            state.last_selected_ts = time.time()
+            state.selection_score = state.compute_selection_score()
+            return state
+
         candidates = self._eligible_states()
         if not candidates:
             raise RuntimeError("no enabled hub backends configured")
@@ -498,14 +540,26 @@ class GoogleHubManager:
         selected.selection_score = selected.compute_selection_score()
         return selected
 
-    def ordered_backends(self) -> list[BackendRuntimeState]:
+    def ordered_backends(self, backend_name: str = "") -> list[BackendRuntimeState]:
+        requested_name = str(backend_name or "").strip()
+        if requested_name:
+            return [self._resolve_requested_backend(requested_name)]
+
         candidates = self._eligible_states()
         if not candidates:
             return []
         return sorted(candidates, key=self._state_rank)
 
-    async def search(self, *, query: str, num: int, lang: str) -> dict[str, Any]:
-        ordered = self.ordered_backends()
+    async def search(
+        self,
+        *,
+        query: str,
+        num: int,
+        lang: str,
+        backend_name: str = "",
+    ) -> dict[str, Any]:
+        requested_name = str(backend_name or "").strip()
+        ordered = self.ordered_backends(requested_name)
         if not ordered:
             raise RuntimeError("no hub backends available")
 
@@ -530,6 +584,11 @@ class GoogleHubManager:
                 )
                 response.raise_for_status()
                 payload = response.json()
+                if not bool(payload.get("success", True)):
+                    raise RuntimeError(
+                        str(payload.get("error", "backend search failed")).strip()
+                        or "backend search failed"
+                    )
                 state.total_successes += 1
                 state.healthy = True
                 state.last_error = ""
@@ -545,6 +604,8 @@ class GoogleHubManager:
                     "backend": state.backend.name,
                     "backend_kind": state.backend.kind,
                     "backend_url": state.backend.base_url,
+                    "requested_backend": requested_name,
+                    "selection_mode": "manual" if requested_name else "auto",
                     **payload,
                 }
             except Exception as exc:
@@ -567,6 +628,8 @@ class GoogleHubManager:
                 "error": str(last_error) if last_error else "",
             },
         )
+        if requested_name:
+            raise RuntimeError(f"backend '{requested_name}' failed: {last_error}")
         raise RuntimeError(f"all hub backends failed: {last_error}")
 
     async def backend_snapshot(self) -> list[dict[str, Any]]:

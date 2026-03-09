@@ -35,6 +35,8 @@ class HubSearchResponse(BaseModel):
     backend: str = ""
     backend_kind: str = ""
     backend_url: str = ""
+    requested_backend: str = ""
+    selection_mode: str = "auto"
     query: str = ""
     results: list[dict] = Field(default_factory=list)
     result_count: int = 0
@@ -95,9 +97,15 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         q: str = Query(..., min_length=1),
         num: int = Query(10, ge=1, le=50),
         lang: str = Query("en"),
+        backend: str = Query(""),
     ):
         try:
-            payload = await manager.search(query=q, num=num, lang=lang)
+            payload = await manager.search(
+                query=q,
+                num=num,
+                lang=lang,
+                backend_name=backend,
+            )
             return HubSearchResponse(**payload)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
@@ -144,6 +152,14 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
     mount_google_hub_panel(
         app,
         lambda: build_snapshot_payload(asyncio.run(manager.metrics())),
+        lambda query, num, lang, backend_name: asyncio.run(
+            manager.search(
+                query=query,
+                num=num,
+                lang=lang,
+                backend_name=backend_name,
+            )
+        ),
         admin_token=resolved_settings.admin_token,
     )
 

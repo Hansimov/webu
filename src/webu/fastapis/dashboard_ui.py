@@ -123,6 +123,7 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-grid > * {{ min-width: 0; }}
             .dash-grid.metric {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }}
             .dash-grid.chart {{ grid-template-columns: repeat(2, 1fr); }}
+            .dash-grid.search {{ grid-template-columns: 1fr; }}
             .dash-grid.instance {{ grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }}
             .dash-card {{
                 min-width: 0;
@@ -218,13 +219,31 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-meta-chip {{ padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; line-height: 1; }}
             .dash-inst {{ padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }}
             .dash-inst-hd {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
+            .dash-inst-tags {{ display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }}
             .dash-inst-name {{ font-size: 15px; font-weight: 600; }}
             .dash-inst-meta {{ margin-top: 4px; font-size: 12px; color: var(--muted); }}
             .dash-inst-stats {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }}
             .dash-stat {{ padding: 8px 10px; border-radius: 8px; background: var(--surface-alt); }}
             .dash-stat-label {{ font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }}
             .dash-stat-value {{ margin-top: 4px; font-size: 16px; font-weight: 600; }}
-            .dash-tag {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }}
+            .dash-tag {{ display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; line-height: 1; }}
+            .dash-search-card {{ display: flex; flex-direction: column; gap: 14px; }}
+            .dash-search-copy {{ font-size: 12px; color: var(--muted); line-height: 1.6; }}
+            .dash-search-form {{ display: flex; flex-direction: column; gap: 12px; }}
+            .dash-search-row {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
+            .dash-search-input {{ flex: 1 1 320px; min-width: 240px; min-height: 88px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; line-height: 1.55; resize: vertical; }}
+            .dash-search-route .dash-radioitems {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+            .dash-search-route label {{ display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; cursor: pointer; }}
+            .dash-search-route input {{ margin: 0; accent-color: var(--accent); }}
+            .dash-search-status {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
+            .dash-search-status.ok {{ color: var(--accent); }}
+            .dash-search-status.fail {{ color: var(--danger); }}
+            .dash-search-results {{ display: grid; gap: 10px; }}
+            .dash-search-result {{ padding: 12px; border-radius: 12px; border: 1px solid rgba(148,163,184,0.16); background: rgba(15,23,42,0.42); }}
+            .dash-search-result-title {{ color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }}
+            .dash-search-result-link {{ display: block; margin-top: 6px; color: var(--info); font-size: 12px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+            .dash-search-result-snippet {{ margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }}
+            .dash-search-empty {{ padding: 14px; border-radius: 12px; border: 1px dashed rgba(148,163,184,0.22); background: rgba(255,255,255,0.02); color: var(--muted); font-size: 12px; line-height: 1.6; }}
             .dash-table-wrap {{ width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }}
             .dash-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
             .dash-table th {{ position: sticky; top: 0; z-index: 1; background: var(--surface-alt); color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-light); }}
@@ -277,6 +296,7 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                 .dash-controls-group {{ width: 100%; }}
                 .dash-auth-form {{ align-items: stretch; }}
                 .dash-auth-input {{ width: 100%; }}
+                .dash-search-input {{ width: 100%; min-width: 0; }}
                 .dash-inst-stats {{ grid-template-columns: repeat(2, 1fr); }}
                 .dash-strip-wrap {{ gap: 6px; padding-left: 8px; padding-right: 8px; }}
                     .dash-table .col-result {{ min-width: 240px; max-width: 320px; }}
@@ -333,6 +353,24 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                     }});
                 }}
                 document.addEventListener("DOMContentLoaded", function () {{
+                    function bindWebuSearchHotkeys() {{
+                        document.querySelectorAll("textarea[id$='-search-query']").forEach(function (node) {{
+                            if (node.dataset.webuEnterBound === "1") {{
+                                return;
+                            }}
+                            node.dataset.webuEnterBound = "1";
+                            node.addEventListener("keydown", function (event) {{
+                                if (event.key !== "Enter" || event.shiftKey || event.isComposing) {{
+                                    return;
+                                }}
+                                event.preventDefault();
+                                const button = document.getElementById(node.id.replace(/-search-query$/, "-search-submit"));
+                                if (button) {{
+                                    button.click();
+                                }}
+                            }});
+                        }});
+                    }}
                     let lastSharedAccessState = null;
                     window.setInterval(function () {{
                         try {{
@@ -347,6 +385,8 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
                             }}
                         }} catch (_err) {{}}
                     }}, 1000);
+                    bindWebuSearchHotkeys();
+                    window.setInterval(bindWebuSearchHotkeys, 500);
                     refreshWebuLiveUptime();
                     window.setInterval(refreshWebuLiveUptime, 1000);
                     document.querySelectorAll(".dash-strip-scroll").forEach(function (node) {{
@@ -541,6 +581,7 @@ def instance_card(
     stats: list[tuple[str, str]],
     status_label: str | None = None,
     status_tone: str | None = None,
+    tags: list[tuple[str, str]] | None = None,
     note: str = "",
     style: dict | None = None,
 ):
@@ -573,10 +614,14 @@ def instance_card(
         "info": "0 14px 28px rgba(59,130,246,0.10)",
         "neutral": "0 14px 28px rgba(15,23,42,0.22)",
     }
-    tag_style = {
-        "background": soft_map.get(tone, THEME["accent_soft"]),
-        "color": color_map.get(tone, THEME["accent"]),
-    }
+
+    def _tag_style(tag_tone: str) -> dict:
+        resolved_tone = tag_tone if tag_tone in soft_map else tone
+        return {
+            "background": soft_map.get(resolved_tone, THEME["accent_soft"]),
+            "color": color_map.get(resolved_tone, THEME["accent"]),
+        }
+
     card_style = {
         "border": f"1px solid {border_map.get(tone, THEME['border'])}",
         "background": (
@@ -596,16 +641,29 @@ def instance_card(
         )
         for label, value in stats
     ]
+    tag_items = [
+        html.Span(
+            status_label or ("healthy" if healthy else "unhealthy"),
+            className="dash-tag",
+            style=_tag_style(tone),
+        )
+    ]
+    for text, tag_tone in list(tags or []):
+        if not str(text).strip():
+            continue
+        tag_items.append(
+            html.Span(
+                str(text),
+                className="dash-tag",
+                style=_tag_style(str(tag_tone or "neutral")),
+            )
+        )
     return html.Div(
         [
             html.Div(
                 [
                     html.Div(name, className="dash-inst-name"),
-                    html.Span(
-                        status_label or ("healthy" if healthy else "unhealthy"),
-                        className="dash-tag",
-                        style=tag_style,
-                    ),
+                    html.Div(tag_items, className="dash-inst-tags"),
                 ],
                 className="dash-inst-hd",
             ),

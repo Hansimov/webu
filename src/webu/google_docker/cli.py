@@ -1178,7 +1178,7 @@ def cmd_hf_sync(args):
     space_name = _resolve_default_space_name(args.space)
     api, hf_settings = _resolve_hf_api(space_name)
     docker_settings = resolve_google_docker_settings()
-    repo_id = args.repo_id or space_name
+    repo_id = getattr(args, "repo_id", "") or space_name
 
     api.create_repo(
         repo_id=repo_id, repo_type="space", space_sdk="docker", exist_ok=True

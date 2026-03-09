@@ -563,6 +563,81 @@ def test_cmd_hf_sync_deletes_stale_remote_files(monkeypatch, tmp_path):
     assert recorded["upload_folder"]["delete_patterns"] == "*"
 
 
+def test_cmd_hf_sync_works_without_repo_id_attr(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+
+    class DummyApi:
+        def create_repo(self, repo_id, repo_type, space_sdk, exist_ok):
+            assert repo_id == "owner/demo"
+            assert repo_type == "space"
+            assert space_sdk == "docker"
+            assert exist_ok is True
+
+        def upload_folder(
+            self,
+            repo_id,
+            repo_type,
+            folder_path,
+            commit_message,
+            delete_patterns,
+        ):
+            assert repo_id == "owner/demo"
+            assert repo_type == "space"
+            assert folder_path == str(bundle_root)
+            assert delete_patterns == "*"
+
+    monkeypatch.setattr(
+        "webu.google_docker.cli._resolve_hf_api",
+        lambda space_name: (
+            DummyApi(),
+            SimpleNamespace(
+                hf_token="hf_demo", space_host="https://owner-demo.hf.space"
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.resolve_google_docker_settings",
+        lambda: GoogleDockerSettings(
+            host="0.0.0.0",
+            port=18200,
+            image_name="webu/google-api:dev",
+            container_name="webu-google-api",
+            admin_token="",
+            service_log_path=tmp_path / "service.log",
+            app_port=18200,
+            runtime_env="local",
+            project_root=tmp_path,
+            config_dir=config_dir,
+        ),
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.get_workspace_paths",
+        lambda: SimpleNamespace(root=tmp_path),
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.prepare_space_bundle",
+        lambda source_root, output_root, app_port, repo_id: bundle_root,
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli._sync_space_runtime_config",
+        lambda api, space_name, admin_token, app_port: None,
+    )
+
+    args = SimpleNamespace(
+        space="owner/demo",
+        port=18200,
+        message="",
+        restart=False,
+        factory=False,
+        admin_token="",
+    )
+
+    cmd_hf_sync(args)
+
+
 def test_cmd_hf_sync_all_runs_in_parallel(monkeypatch, tmp_path, capsys):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
