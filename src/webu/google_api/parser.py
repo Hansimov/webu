@@ -1,28 +1,27 @@
 """Google 搜索结果 HTML 解析模块。
 
 功能：
-1. 纯化 HTML — 移除 script、style、无用标签，保留核心内容
-2. 解析搜索结果 — 提取标题、链接、摘要等结构化数据
+1. 纯化 HTML —— 移除 script、style、无用标签，保留核心内容
+2. 解析搜索结果 —— 提取站点标题、页面标题、URL、展示 URL、摘要和时间信息
 
 设计原则：
-- 不依赖特定 CSS class 名（Google 经常更换）
-- 以 <a href> + <h3> 组合作为核心锚点，这是最稳定的结构特征
-- 分层提取：有机结果 → 视频结果 → 退化提取
-- 去重 + 过滤内部链接
+- 不依赖单一 CSS class 名，优先使用稳定的结构特征
+- 以外链 + 标题为主锚点，再从结果容器中提取 site title / cite / snippet
+- 兼容 Google 常规有机结果与视频卡片
+- 尽量清理翻译提示、Read more、About this result、时间线子链接等噪声
 """
+
+from __future__ import annotations
 
 import re
 
 from bs4 import BeautifulSoup, Tag
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from tclogger import logger, logstr
 from typing import Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 
-# ── 过滤规则 ──────────────────────────────────────
-
-# Google 内部域名（不算有机结果）
 _GOOGLE_DOMAINS = {
     "google.com",
     "google.co.uk",
@@ -47,6 +46,146 @@ _GOOGLE_DOMAINS = {
     "maps.google.com",
 }
 
+_ALLOWED_GOOGLE_SUBDOMAINS = {
+    "developers.google.com",
+    "cloud.google.com",
+    "ai.google.dev",
+    "colab.research.google.com",
+}
+
+_RESULT_CONTAINER_CLASS_HINTS = {
+    "A6K0A",
+    "tF2Cxc",
+    "asEBEc",
+    "KYaZsb",
+    "X4T0U",
+    "vtSz8d",
+    "N54PNb",
+}
+
+_NOISE_EXACT_TEXTS = {
+    "Read more",
+    "About this result",
+    "View all",
+    "More results",
+    "Videos",
+}
+
+_NOISE_PHRASES = {
+    "Translate this page",
+    "翻译此页",
+    "About this result",
+    "Read more",
+    "Web Result with Site Links",
+}
+
+_METRIC_WORDS = {
+    "followers",
+    "views",
+    "comments",
+    "posts",
+    "subscribers",
+    "likes",
+}
+
+_MONTH_PATTERN = (
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|"
+    r"January|February|March|April|June|July|August|September|October|November|December)"
+)
+
+_DATE_PREFIX_PATTERNS = [
+    rf"\d{{1,2}}\s+{_MONTH_PATTERN}\s+\d{{4}}",
+    rf"{_MONTH_PATTERN}\s+\d{{1,2}},?\s+\d{{4}}",
+    r"\d{4}年\d{1,2}月\d{1,2}日",
+    r"\d+\s+(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago",
+    r"\d+\s*(?:秒|分钟|小时|天|周|个月|年)前",
+]
+
+_TIME_INFO_RE = re.compile(
+    rf"^(?P<time>(?:{'|'.join(_DATE_PREFIX_PATTERNS)}))$",
+    re.IGNORECASE,
+)
+
+_LEADING_TIME_RE = re.compile(
+    rf"^(?P<time>(?:{'|'.join(_DATE_PREFIX_PATTERNS)}))\s*[—–-]\s*(?P<rest>.+)$",
+    re.IGNORECASE,
+)
+
+_EMBEDDED_TIME_RE = re.compile(
+    rf"(?P<time>(?:{'|'.join(_DATE_PREFIX_PATTERNS)}))",
+    re.IGNORECASE,
+)
+
+
+def _normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").replace("\xa0", " ")).strip()
+
+
+def _normalize_display_text(text: str) -> str:
+    text = _normalize_whitespace(text)
+    text = text.replace("›", ">")
+    text = re.sub(r"\s*>\s*", " > ", text)
+    text = re.sub(r"\s*·\s*", " · ", text)
+    return _normalize_whitespace(text)
+
+
+def _looks_like_time_info(text: str) -> bool:
+    return bool(_TIME_INFO_RE.match(_normalize_whitespace(text)))
+
+
+def _extract_inline_time_info(text: str) -> str:
+    normalized = _normalize_whitespace(text)
+    if not normalized:
+        return ""
+    if _looks_like_time_info(normalized):
+        return normalized
+    stripped = normalized.rstrip("—–- ").strip()
+    if _looks_like_time_info(stripped):
+        return stripped
+    match = _LEADING_TIME_RE.match(normalized)
+    if match:
+        return match.group("time")
+    embedded = _EMBEDDED_TIME_RE.search(normalized)
+    return embedded.group("time") if embedded else ""
+
+
+def _looks_like_url_or_path(text: str) -> bool:
+    normalized = _normalize_whitespace(text)
+    if not normalized:
+        return False
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        return True
+    if ">" in normalized and ("." in normalized or normalized.startswith("/")):
+        return True
+    return normalized.count("/") >= 2 and "." in normalized
+
+
+def _looks_like_display_url_text(text: str) -> bool:
+    normalized = _normalize_display_text(text)
+    if not normalized:
+        return False
+    if _looks_like_url_or_path(normalized):
+        return True
+    return bool(re.search(r"(?:^|\s)[\w.-]+\.[A-Za-z]{2,}(?:$|\s)", normalized))
+
+
+def _looks_like_metric_text(text: str) -> bool:
+    normalized = _normalize_display_text(text).lower()
+    if not normalized:
+        return False
+    if any(word in normalized for word in _METRIC_WORDS):
+        return True
+    return bool(re.search(r"\b\d+\s+years?\s+ago\b", normalized))
+
+
+def _is_noise_text(text: str) -> bool:
+    normalized = _normalize_whitespace(text)
+    if not normalized:
+        return True
+    if normalized in _NOISE_EXACT_TEXTS:
+        return True
+    return any(phrase.lower() in normalized.lower() for phrase in _NOISE_PHRASES)
+
 
 def _is_google_internal(url: str) -> bool:
     """判断 URL 是否属于 Google 内部链接。"""
@@ -55,68 +194,47 @@ def _is_google_internal(url: str) -> bool:
     except Exception:
         return True
 
-    # 白名单：有实际内容的 Google 子域
-    _ALLOWED_SUBDOMAINS = {
-        "developers.google.com",
-        "cloud.google.com",
-        "ai.google.dev",
-        "colab.research.google.com",
-    }
-    if host in _ALLOWED_SUBDOMAINS:
+    if host in _ALLOWED_GOOGLE_SUBDOMAINS:
         return False
-
-    # 精确匹配 or *.google.com 子域
     if host in _GOOGLE_DOMAINS:
         return True
-    for gd in _GOOGLE_DOMAINS:
-        if host.endswith("." + gd):
-            return True
     if host.endswith(".google.com") or host.endswith(".google.co.uk"):
         return True
+    for domain in _GOOGLE_DOMAINS:
+        if host.endswith("." + domain):
+            return True
     return False
 
 
 def _normalize_url(href: str) -> str:
-    """规范化 Google 搜索结果链接。
-
-    处理 /url?q=... 重定向 和 fragment 链接。
-    """
+    """规范化 Google 搜索结果链接。"""
     if href.startswith("/url?"):
-        m = re.search(r"[?&]q=([^&]+)", href)
-        if m:
-            return unquote(m.group(1))
+        match = re.search(r"[?&]q=([^&]+)", href)
+        if match:
+            return unquote(match.group(1))
     return href
 
 
 def _clean_url(url: str) -> str:
-    """去掉 #:~:text= 等 fragment（Google 高亮跳转），保留有用 fragment。"""
+    """去掉 Google 高亮 fragment，保留正常 fragment。"""
     if "#:~:text=" in url:
         return url.split("#:~:text=")[0]
     return url
 
 
 def _dedup_key(url: str) -> str:
-    """生成用于去重的 URL key。
-
-    - 去掉 #:~:text= fragment
-    - 去掉 Google 的 tracking 参数（ved, sa, usg 等）
-    - 保留有意义的 query 参数（如 YouTube 的 v=, list=）
-    """
+    """生成去重 key，去掉 tracking 参数，保留有意义参数。"""
     url = _clean_url(url)
     try:
         parsed = urlparse(url)
-        # 去掉常见 tracking 参数，保留有意义参数
-        if parsed.query:
-            from urllib.parse import parse_qs, urlencode
-
-            params = parse_qs(parsed.query, keep_blank_values=True)
-            tracking_keys = {"ved", "sa", "usg", "ei", "source", "opi", "gs_lcrp"}
-            clean_params = {k: v for k, v in params.items() if k not in tracking_keys}
-            clean_query = urlencode(clean_params, doseq=True)
-            return f"{parsed.scheme}://{parsed.hostname}{parsed.path}" + (
-                f"?{clean_query}" if clean_query else ""
-            )
-        return f"{parsed.scheme}://{parsed.hostname}{parsed.path}"
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        tracking_keys = {"ved", "sa", "usg", "ei", "source", "opi", "gs_lcrp"}
+        cleaned = {
+            key: value for key, value in params.items() if key not in tracking_keys
+        }
+        clean_query = urlencode(cleaned, doseq=True)
+        base = f"{parsed.scheme}://{parsed.hostname}{parsed.path}"
+        return base + (f"?{clean_query}" if clean_query else "")
     except Exception:
         return url
 
@@ -127,8 +245,10 @@ class GoogleSearchResult:
 
     title: str = ""
     url: str = ""
+    site_title: str = ""
     displayed_url: str = ""
     snippet: str = ""
+    time_info: str = ""
     position: int = 0
     result_type: str = "organic"  # organic | video | featured | knowledge
 
@@ -151,7 +271,7 @@ class GoogleSearchResponse:
     def to_dict(self) -> dict:
         return {
             "query": self.query,
-            "results": [r.to_dict() for r in self.results],
+            "results": [result.to_dict() for result in self.results],
             "total_results_text": self.total_results_text,
             "result_count": len(self.results),
             "has_captcha": self.has_captcha,
@@ -162,15 +282,8 @@ class GoogleSearchResponse:
 
 
 class GoogleResultParser:
-    """Google 搜索结果 HTML 解析器。
+    """Google 搜索结果 HTML 解析器。"""
 
-    核心思路：以 <h3> 为锚点定位有机搜索结果。
-    Google 无论怎么改 class / id，<a href="..."><h3>Title</h3></a>
-    这个组合始终不变。解析器据此提取标题 + URL，再在上下文中找
-    cite（显示 URL）和 snippet（摘要）。
-    """
-
-    # 需要移除的标签（用于 clean_html）
     REMOVE_TAGS = [
         "script",
         "style",
@@ -184,7 +297,6 @@ class GoogleResultParser:
         "footer",
     ]
 
-    # 需要移除的属性（用于 clean_html）
     REMOVE_ATTRS = [
         "style",
         "onclick",
@@ -205,8 +317,6 @@ class GoogleResultParser:
 
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
-
-    # ── public API ──────────────────────────────────
 
     def clean_html(self, html: str) -> str:
         """纯化 HTML：移除 script/style/无用标签和属性。"""
@@ -230,7 +340,6 @@ class GoogleResultParser:
         return str(soup)
 
     def detect_captcha(self, html: str) -> bool:
-        """检测是否触发了 CAPTCHA。"""
         captcha_indicators = [
             "captcha",
             "unusual traffic",
@@ -239,21 +348,13 @@ class GoogleResultParser:
             "Our systems have detected unusual traffic",
             "/sorry/",
         ]
-        html_lower = html.lower()
-        return any(indicator.lower() in html_lower for indicator in captcha_indicators)
+        lowered = html.lower()
+        return any(indicator.lower() in lowered for indicator in captcha_indicators)
 
     def detect_consent(self, html: str) -> bool:
-        """检测是否显示了 Google Cookie 同意弹窗。"""
         return "before you continue" in html.lower()
 
-    def _detect_no_results(self, soup) -> str:
-        """检测 Google "无结果" 页面，返回提示信息。
-
-        Google 无结果页面包含：
-        - "did not match any documents"
-        - "No results found"
-        - "No results containing all your search terms"
-        """
+    def _detect_no_results(self, soup: BeautifulSoup) -> str:
         text = soup.get_text(separator=" ", strip=True).lower()
         if "did not match any documents" in text:
             return "did not match any documents"
@@ -264,24 +365,7 @@ class GoogleResultParser:
         return ""
 
     def parse(self, html: str, query: str = "") -> GoogleSearchResponse:
-        """解析 Google 搜索结果 HTML。
-
-        解析策略（由精确到宽松，逐级 fallback）：
-        1. h3 锚点法 —— 在 #search 内找所有 <h3>，回溯到包含外链的 <a>
-        2. 视频结果 —— 提取 YouTube 等视频链接（不与有机结果重复）
-        3. 退化全链接 —— 扫描 #search 内所有外链（最后手段）
-
-        Args:
-            html: 原始 HTML 内容
-            query: 搜索查询词
-
-        Returns:
-            GoogleSearchResponse
-        """
-        response = GoogleSearchResponse(
-            query=query,
-            raw_html_length=len(html),
-        )
+        response = GoogleSearchResponse(query=query, raw_html_length=len(html))
 
         if self.detect_captcha(html):
             response.has_captcha = True
@@ -291,27 +375,19 @@ class GoogleResultParser:
             return response
 
         soup = BeautifulSoup(html, "html.parser")
-
-        # 提取搜索结果数量文本
         result_stats = soup.find("div", id="result-stats")
         if result_stats:
-            response.total_results_text = result_stats.get_text(strip=True)
+            response.total_results_text = _normalize_whitespace(
+                result_stats.get_text(" ", strip=True)
+            )
 
-        # 确定搜索范围（优先 #search，再 #rso，最后整个页面）
         scope = soup.find("div", id="search") or soup.find("div", id="rso") or soup
 
-        # ── 策略 1：h3 锚点法（最稳健）──────────────
         results, seen_urls = self._parse_by_h3_anchors(scope)
-
-        # ── 策略 2：视频结果 ──────────────────────
-        video_results = self._parse_video_results(scope, seen_urls)
-        results.extend(video_results)
-
-        # ── 策略 3：退化全链接法（兜底）────────────
+        results.extend(self._parse_video_results(scope, seen_urls))
         if not results:
             results = self._parse_fallback_links(scope)
 
-        # 检测 Google "无结果" 页面（"did not match any documents"）
         if not results:
             no_results_msg = self._detect_no_results(soup)
             if no_results_msg:
@@ -319,19 +395,16 @@ class GoogleResultParser:
                 if self.verbose:
                     logger.mesg(f"  ℹ Google: {no_results_msg}")
 
-        # 重新编号 position
-        for i, r in enumerate(results):
-            r.position = i + 1
+        for index, result in enumerate(results, start=1):
+            result.position = index
 
         response.results = results
-
-        # 纯化 HTML 并记录长度
         clean = self.clean_html(html)
         response.clean_html_length = len(clean)
 
         if self.verbose:
-            n_organic = sum(1 for r in results if r.result_type == "organic")
-            n_video = sum(1 for r in results if r.result_type == "video")
+            n_organic = sum(1 for result in results if result.result_type == "organic")
+            n_video = sum(1 for result in results if result.result_type == "video")
             parts = [f"{n_organic} organic"]
             if n_video:
                 parts.append(f"{n_video} video")
@@ -343,178 +416,149 @@ class GoogleResultParser:
 
         return response
 
-    # ── 策略 1：h3 锚点法 ────────────────────────
-
     def _parse_by_h3_anchors(
         self, scope: Tag
     ) -> tuple[list[GoogleSearchResult], set[str]]:
-        """以 <h3> 为锚点提取有机搜索结果。
-
-        思路：遍历 scope 内所有 <h3>，对每个 <h3>：
-        1. 检查 <h3> 是否在 <a> 中 — 取 <a> 的 href
-        2. 若不在 <a> 中，向上查找最近的包含外链 <a> 的祖先容器
-        3. 从该容器中提取 cite（显示 URL）和 snippet（摘要）
-        """
         results: list[GoogleSearchResult] = []
         seen_urls: set[str] = set()
 
         for h3 in scope.find_all("h3"):
-            title = h3.get_text(strip=True)
-            if not title or len(title) < 2:
+            title = _normalize_whitespace(h3.get_text(" ", strip=True))
+            if not title or len(title) < 2 or _is_noise_text(title):
                 continue
 
-            # —— 定位包含外链的 <a> ——
-            url = ""
             anchor = h3.find_parent("a")
-            if anchor:
-                url = self._resolve_href(anchor.get("href", ""))
+            url = self._resolve_href(anchor.get("href", "") if anchor else "")
             if not url:
-                # h3 不在 <a> 中，向上找包含外链 <a> 的容器
-                container = self._find_result_container(h3)
-                if container:
-                    a_tag = container.find("a", href=True)
-                    if a_tag:
-                        url = self._resolve_href(a_tag["href"])
-
+                container = self._find_result_container(h3, "")
+                anchor = self._find_primary_anchor(container, "") if container else None
+                url = self._resolve_href(anchor.get("href", "") if anchor else "")
             if not url:
                 continue
 
-            # 去重（基于规范化 URL key）
-            clean = _clean_url(url)
+            clean_url = _clean_url(url)
             key = _dedup_key(url)
             if key in seen_urls:
                 continue
+
+            container = self._find_result_container(h3, clean_url)
+            if container is None:
+                continue
+
+            anchor = self._find_primary_anchor(container, clean_url) or anchor
+            meta = self._extract_result_metadata(container, anchor, title, clean_url)
+            if not title or title == meta["site_title"]:
+                continue
+
             seen_urls.add(key)
-
-            # —— 定位结果容器，提取 cite + snippet ——
-            container = self._find_result_container(h3)
-            displayed_url = ""
-            snippet = ""
-
-            if container:
-                cite = container.find("cite")
-                if cite:
-                    displayed_url = cite.get_text(strip=True)
-                snippet = self._extract_snippet(container, title)
-
             results.append(
                 GoogleSearchResult(
                     title=title,
-                    url=clean,
-                    displayed_url=displayed_url,
-                    snippet=snippet,
+                    url=clean_url,
+                    site_title=meta["site_title"],
+                    displayed_url=meta["displayed_url"],
+                    snippet=meta["snippet"],
+                    time_info=meta["time_info"],
                     result_type="organic",
                 )
             )
 
         return results, seen_urls
 
-    # ── 策略 2：视频结果 ─────────────────────────
-
     def _parse_video_results(
         self, scope: Tag, seen_urls: set[str]
     ) -> list[GoogleSearchResult]:
-        """提取视频搜索结果（YouTube 等）。
-
-        视频结果的典型结构：
-        - 主链接指向 YouTube 视频页面
-        - 可能包含视频时间线（带 &t= 参数的链接）
-        - 有些是 playlist 链接
-
-        我们只提取主视频链接（不含 &t= 时间线片段）。
-        """
         results: list[GoogleSearchResult] = []
         video_domains = {"youtube.com", "youtu.be", "vimeo.com", "dailymotion.com"}
 
-        for a_tag in scope.find_all("a", href=True):
-            href = self._resolve_href(a_tag["href"])
+        for anchor in scope.find_all("a", href=True):
+            href = self._resolve_href(anchor["href"])
             if not href:
                 continue
 
-            # 只处理视频域名
             try:
                 host = urlparse(href).hostname or ""
+                query = parse_qs(urlparse(href).query)
             except Exception:
                 continue
-            is_video = any(vd in host for vd in video_domains)
-            if not is_video:
+
+            if not any(domain in host for domain in video_domains):
+                continue
+            if "t" in query or anchor.has_attr("data-time"):
                 continue
 
-            # 跳过时间线片段链接（&t=123）
-            if "&t=" in href:
-                continue
-            # 跳过 #:~:text= 高亮链接
-            clean = _clean_url(href)
-            key = _dedup_key(href)
+            clean_url = _clean_url(href)
+            key = _dedup_key(clean_url)
             if key in seen_urls:
                 continue
 
-            # 提取标题：优先 <h3>，其次 <a> 的文本
-            h3 = a_tag.find("h3")
-            if h3:
-                title = h3.get_text(strip=True)
-            else:
-                title = a_tag.get_text(strip=True)
-            # 清理标题中的多余后缀（如 "YouTube·Channel Name·3 hours ago"）
-            title = self._clean_video_title(title)
+            container = self._find_result_container(anchor, clean_url)
+            title = self._extract_video_title(anchor, container)
             if not title or len(title) < 3:
                 continue
 
+            meta = self._extract_result_metadata(
+                container or anchor, anchor, title, clean_url
+            )
             seen_urls.add(key)
             results.append(
                 GoogleSearchResult(
                     title=title,
-                    url=clean,
+                    url=clean_url,
+                    site_title=meta["site_title"],
+                    displayed_url=meta["displayed_url"],
+                    snippet=meta["snippet"],
+                    time_info=meta["time_info"],
                     result_type="video",
                 )
             )
 
         return results
 
-    # ── 策略 3：退化全链接法 ──────────────────────
-
     def _parse_fallback_links(self, scope: Tag) -> list[GoogleSearchResult]:
-        """退化解析 — 扫描所有外链，按出现顺序收集。"""
         results: list[GoogleSearchResult] = []
         seen_urls: set[str] = set()
 
-        for a_tag in scope.find_all("a", href=True):
-            href = self._resolve_href(a_tag["href"])
+        for anchor in scope.find_all("a", href=True):
+            href = self._resolve_href(anchor["href"])
             if not href:
                 continue
 
-            base = _clean_url(href)
-            if base in seen_urls:
+            clean_url = _clean_url(href)
+            key = _dedup_key(clean_url)
+            if key in seen_urls:
                 continue
-            seen_urls.add(base)
 
-            # 尝试获取标题
-            h3 = a_tag.find("h3")
-            title = h3.get_text(strip=True) if h3 else ""
+            title = self._extract_video_title(anchor, None)
             if not title:
-                title = a_tag.get_text(strip=True)
-            if not title or len(title) < 3:
-                parent = a_tag.find_parent("div")
-                if parent:
-                    h3 = parent.find("h3")
-                    if h3:
-                        title = h3.get_text(strip=True)
-            if not title or len(title) < 3:
+                h3 = anchor.find("h3")
+                title = (
+                    _normalize_whitespace(h3.get_text(" ", strip=True))
+                    if h3
+                    else _normalize_whitespace(anchor.get_text(" ", strip=True))
+                )
+            if not title or len(title) < 3 or _is_noise_text(title):
                 continue
 
+            container = self._find_result_container(anchor, clean_url)
+            meta = self._extract_result_metadata(
+                container or anchor, anchor, title, clean_url
+            )
+            seen_urls.add(key)
             results.append(
                 GoogleSearchResult(
                     title=title,
-                    url=base,
+                    url=clean_url,
+                    site_title=meta["site_title"],
+                    displayed_url=meta["displayed_url"],
+                    snippet=meta["snippet"],
+                    time_info=meta["time_info"],
                 )
             )
 
         return results
 
-    # ── 辅助方法 ─────────────────────────────────
-
     def _resolve_href(self, href: str) -> str:
-        """解析 href：过滤无效/内部链接，处理 /url?q= 重定向。"""
         if not href:
             return ""
         href = _normalize_url(href)
@@ -524,127 +568,349 @@ class GoogleResultParser:
             return ""
         return href
 
-    def _find_result_container(self, element: Tag) -> Optional[Tag]:
-        """从一个元素向上查找搜索结果的容器 div。
+    def _find_result_container(self, element: Tag, url: str) -> Optional[Tag]:
+        best: Optional[Tag] = None
+        best_score = -10
 
-        启发式：向上遍历祖先，找到同时包含 <h3> 和 <cite> 的最小容器，
-        或者包含 class 含 'g' 的 div，或者向上最多 6 层的 div。
-        """
-        # 先尝试找包含 cite 的最小祖先 div
-        for parent in element.parents:
-            if not isinstance(parent, Tag) or parent.name == "html":
-                break
-            if parent.name == "div" and parent.find("cite"):
-                return parent
-        # 如果没找到 cite，回退到向上 6 层
-        depth = 0
-        for parent in element.parents:
+        for depth, parent in enumerate(element.parents, start=1):
             if not isinstance(parent, Tag):
+                continue
+            if parent.name in {"body", "html"}:
                 break
-            if parent.name == "div":
-                depth += 1
-                if depth >= 4:
-                    return parent
-        return None
+            if parent.name not in {"div", "article", "section"}:
+                continue
 
-    def _extract_snippet(self, container: Tag, title: str = "") -> str:
-        """从搜索结果容器中提取摘要文本。
+            score = 0
+            classes = set(parent.get("class", []))
+            text_len = len(_normalize_whitespace(parent.get_text(" ", strip=True)))
+            heading_count = len(parent.find_all("h3"))
+            external_links = [
+                candidate
+                for candidate in parent.find_all("a", href=True)
+                if self._resolve_href(candidate.get("href", ""))
+            ]
 
-        多种策略逐级尝试：
-        1. data-sncf 属性（Google 的摘要标记）
-        2. data-content-feature="1" 属性
-        3. 排除标题/URL 后，最长的文本块
+            if parent.find("h3"):
+                score += 2
+            if parent.find("cite"):
+                score += 3
+            if parent.find(class_="VuuXrf"):
+                score += 2
+            if parent.find(class_="Sg4azc"):
+                score += 3
+            if parent.find(attrs={"data-sncf": True}) or parent.find(
+                attrs={"data-content-feature": "1"}
+            ):
+                score += 3
+            if parent.get("data-rpos") is not None:
+                score += 2
+            if classes & _RESULT_CONTAINER_CLASS_HINTS:
+                score += 3
+            if external_links:
+                score += 1
+            if url and any(
+                _clean_url(self._resolve_href(candidate.get("href", ""))) == url
+                for candidate in external_links
+            ):
+                score += 3
+            if 40 <= text_len <= 1800:
+                score += 1
+            elif text_len > 3200:
+                score -= 3
+            if heading_count > 1:
+                score -= min(heading_count - 1, 4) * 2
+            if len(external_links) > 8:
+                score -= 2
+            if depth > 2:
+                score -= min(depth - 2, 4)
 
-        最后统一清理：去除标题前缀、URL 片段、"Translate this page" 等。
-        """
-        # 方法 1：data-sncf 属性
-        snippet_div = container.find(attrs={"data-sncf": True})
-        if snippet_div:
-            text = snippet_div.get_text(strip=True)
+            if score > best_score:
+                best = parent
+                best_score = score
+
+        return best
+
+    def _find_primary_anchor(self, container: Optional[Tag], url: str) -> Optional[Tag]:
+        if container is None:
+            return None
+
+        resolved: list[Tag] = []
+        for anchor in container.find_all("a", href=True):
+            href = self._resolve_href(anchor.get("href", ""))
+            if not href:
+                continue
+            if url and _clean_url(href) != url:
+                continue
+            resolved.append(anchor)
+
+        if not resolved:
+            return None
+        for anchor in resolved:
+            if anchor.find("h3"):
+                return anchor
+        for anchor in resolved:
+            if anchor.find(attrs={"role": "heading"}):
+                return anchor
+        return resolved[0]
+
+    def _extract_result_metadata(
+        self,
+        container: Tag,
+        primary_anchor: Optional[Tag],
+        title: str,
+        url: str,
+    ) -> dict[str, str]:
+        displayed_url = self._extract_displayed_url(container, primary_anchor, url)
+        site_title = self._extract_site_title(
+            container, primary_anchor, title, displayed_url
+        )
+        time_info = self._extract_time_info(
+            container, primary_anchor, title, site_title, displayed_url
+        )
+        snippet = self._extract_snippet(
+            container, primary_anchor, title, site_title, displayed_url, time_info
+        )
+        return {
+            "site_title": site_title,
+            "displayed_url": displayed_url,
+            "snippet": snippet,
+            "time_info": time_info,
+        }
+
+    def _extract_displayed_url(
+        self,
+        container: Tag,
+        primary_anchor: Optional[Tag],
+        url: str,
+    ) -> str:
+        for root in [primary_anchor, container]:
+            if root is None:
+                continue
+            cite = root.find("cite")
+            if cite:
+                text = _normalize_display_text(cite.get_text(" ", strip=True))
+                if (
+                    text
+                    and _looks_like_display_url_text(text)
+                    and not _looks_like_metric_text(text)
+                ):
+                    return text
+        return self._format_display_url_from_url(url)
+
+    def _extract_site_title(
+        self,
+        container: Tag,
+        primary_anchor: Optional[Tag],
+        title: str,
+        displayed_url: str,
+    ) -> str:
+        for root in [primary_anchor, container]:
+            if root is None:
+                continue
+            preferred = root.find(class_="VuuXrf")
+            if preferred:
+                text = _normalize_whitespace(preferred.get_text(" ", strip=True))
+                if text and text != title and not _looks_like_time_info(text):
+                    return text
+            video_meta = root.find(class_="Sg4azc")
+            if video_meta:
+                text = self._clean_site_title_candidate(
+                    video_meta.get_text(" ", strip=True), title
+                )
+                if text:
+                    return text
+
+        seen: set[str] = set()
+        for root in [primary_anchor, container]:
+            if root is None:
+                continue
+            for node in root.find_all(["span", "div"], limit=80):
+                text = self._clean_site_title_candidate(
+                    node.get_text(" ", strip=True), title
+                )
+                if text in seen:
+                    continue
+                seen.add(text)
+                if not text or len(text) > 80:
+                    continue
+                if text.endswith("..."):
+                    continue
+                if len(text.split()) > 6 and " · " not in text:
+                    continue
+                if text == title or text == displayed_url:
+                    continue
+                if (
+                    _is_noise_text(text)
+                    or _looks_like_url_or_path(text)
+                    or _looks_like_time_info(text)
+                ):
+                    continue
+                if " · " in text and text.split(" · ", 1)[0].lower() in {
+                    "youtube",
+                    "vimeo",
+                }:
+                    return text
+                if len(text) >= 2:
+                    return text
+        return ""
+
+    def _extract_time_info(
+        self,
+        container: Tag,
+        primary_anchor: Optional[Tag],
+        title: str,
+        site_title: str,
+        displayed_url: str,
+    ) -> str:
+        for root in [primary_anchor, container]:
+            if root is None:
+                continue
+            for node in root.find_all(["span", "div"], limit=120):
+                text = _normalize_whitespace(node.get_text(" ", strip=True))
+                if not text or text in {title, site_title, displayed_url}:
+                    continue
+                extracted = _extract_inline_time_info(text)
+                if extracted:
+                    return extracted
+
+        snippet_root = container.find(attrs={"data-sncf": True}) or container.find(
+            attrs={"data-content-feature": "1"}
+        )
+        if snippet_root is not None:
+            text = self._extract_text_without_links(snippet_root)
+            time_info, _ = self._split_leading_time_info(text)
+            if time_info:
+                return time_info
+            extracted = _extract_inline_time_info(text)
+            if extracted:
+                return extracted
+        return ""
+
+    def _extract_snippet(
+        self,
+        container: Tag,
+        primary_anchor: Optional[Tag],
+        title: str,
+        site_title: str,
+        displayed_url: str,
+        time_info: str,
+    ) -> str:
+        candidates: list[str] = []
+
+        prioritized = [
+            container.find(attrs={"data-sncf": True}),
+            container.find(attrs={"data-content-feature": "1"}),
+        ]
+        for candidate in prioritized:
+            if candidate is None:
+                continue
+            text = self._extract_text_without_links(candidate)
             if text:
-                return self._clean_snippet(text, title, container)
+                candidates.append(text)
 
-        # 方法 2：data-content-feature="1"
-        content_div = container.find(attrs={"data-content-feature": "1"})
-        if content_div:
-            text = content_div.get_text(strip=True)
-            if len(text) > 20:
-                return self._clean_snippet(text, title, container)
+        for node in container.find_all(["div", "span", "p"], limit=120):
+            if primary_anchor is not None and primary_anchor in node.parents:
+                continue
+            text = self._extract_text_without_links(node)
+            if not text or len(text) < 25 or len(text) > 450:
+                continue
+            candidates.append(text)
 
-        # 方法 3：启发式 — 在容器内找最长非标题文本
-        title_text = title or ""
-        cite = container.find("cite")
-        cite_text = cite.get_text(strip=True) if cite else ""
-
-        longest = ""
-        for elem in container.find_all(["span", "div", "em"]):
-            text = elem.get_text(strip=True)
-            if len(text) <= len(longest) or len(text) < 30:
-                continue
-            if text == title_text or text == cite_text:
-                continue
-            if text.startswith("http"):
-                continue
-            # 避免选到整个容器的完整文本
-            if len(text) > 500:
-                continue
-            longest = text
-
-        return self._clean_snippet(longest, title, container)
+        best = ""
+        for candidate in candidates:
+            cleaned = self._clean_snippet(
+                candidate, title, site_title, displayed_url, time_info
+            )
+            if len(cleaned) > len(best):
+                best = cleaned
+        return best
 
     def _clean_snippet(
-        self, snippet: str, title: str = "", container: Tag = None
+        self,
+        snippet: str,
+        title: str,
+        site_title: str,
+        displayed_url: str,
+        time_info: str,
     ) -> str:
-        """清理摘要文本：去除标题前缀、URL 残留、翻译提示等。"""
+        snippet = _normalize_whitespace(snippet)
         if not snippet:
             return ""
 
-        # 1) 去除 "Translate this page" 及变体
-        snippet = re.sub(r"Translate this page\.?\s*", "", snippet).strip()
-        snippet = re.sub(r"翻译此页\.?\s*", "", snippet).strip()
-
-        # 2) 去除标题前缀（snippet 以 title 开头时）
-        if title and snippet.startswith(title):
-            snippet = snippet[len(title) :].lstrip(" \t\n·—-–:：.。")
-
-        # 3) 去除开头的 URL 残留（如 "https://example.com › ..."）
-        snippet = re.sub(r"^https?://\S+\s*›?\s*", "", snippet).strip()
-
-        # 4) 去除显示 URL（cite）残留
-        if container:
-            cite = container.find("cite")
-            if cite:
-                cite_text = cite.get_text(strip=True)
-                if cite_text and snippet.startswith(cite_text):
-                    snippet = snippet[len(cite_text) :].lstrip(" \t\n·—-–:：.。")
-
-        # 5) 去除日期前缀（如 "Jan 1, 2025 — "、"2025年1月1日 — "）
-        snippet = re.sub(r"^\d{1,2}\s+\w{3,9}\s+\d{4}\s*[—–-]\s*", "", snippet).strip()
+        for phrase in _NOISE_PHRASES:
+            snippet = re.sub(re.escape(phrase), " ", snippet, flags=re.IGNORECASE)
+        snippet = re.sub(r"\bRead more\b", " ", snippet, flags=re.IGNORECASE)
         snippet = re.sub(
-            r"^\w{3,9}\s+\d{1,2},?\s+\d{4}\s*[—–-]\s*", "", snippet
-        ).strip()
-        snippet = re.sub(r"^\d{4}年\d{1,2}月\d{1,2}日\s*[—–-]?\s*", "", snippet).strip()
+            r"\bWeb Result with Site Links\b", " ", snippet, flags=re.IGNORECASE
+        )
+        snippet = _normalize_whitespace(snippet)
 
+        normalized_site_title = _normalize_whitespace(site_title)
+        if normalized_site_title:
+            site_prefix_re = re.compile(
+                rf"^{re.escape(normalized_site_title)}(?:\s+(?:{'|'.join(_DATE_PREFIX_PATTERNS)}))?\s*[—–-]?\s*",
+                re.IGNORECASE,
+            )
+            snippet = site_prefix_re.sub("", snippet)
+
+        extracted_time, remainder = self._split_leading_time_info(snippet)
+        if extracted_time:
+            snippet = remainder
+        elif time_info and snippet.startswith(time_info):
+            snippet = snippet[len(time_info) :].lstrip(" \t\n·—-–:：.。")
+
+        for prefix in [title, site_title, displayed_url]:
+            normalized_prefix = _normalize_whitespace(prefix)
+            if normalized_prefix and snippet.startswith(normalized_prefix):
+                snippet = snippet[len(normalized_prefix) :].lstrip(" \t\n·—-–:：.。>")
+
+        snippet = re.sub(r"^https?://\S+\s*(?:>|›)?\s*", "", snippet)
+        snippet = re.sub(r"\s+", " ", snippet).strip(" ·—-–:：.。")
+
+        if _is_noise_text(snippet) or snippet in {title, site_title, displayed_url}:
+            return ""
         return snippet
 
-    def _clean_video_title(self, title: str) -> str:
-        """清理视频标题：去除平台名、频道名、时间等元数据后缀。
+    def _split_leading_time_info(self, text: str) -> tuple[str, str]:
+        normalized = _normalize_whitespace(text)
+        match = _LEADING_TIME_RE.match(normalized)
+        if not match:
+            return "", normalized
+        return match.group("time"), _normalize_whitespace(match.group("rest"))
 
-        Google 搜索结果中视频标题常包含：
-        - "YouTube·频道名·3 hours ago"
-        - "YouTube频道名3小时前"
-        - "Bilibili·UP主名"
-        """
+    def _extract_video_title(self, anchor: Tag, container: Optional[Tag]) -> str:
+        h3 = anchor.find("h3")
+        if h3:
+            return _normalize_whitespace(h3.get_text(" ", strip=True))
+
+        for selector in [
+            "span.cHaqb",
+            "span.QOGdqf",
+            "div[role='heading']",
+            "span[role='heading']",
+        ]:
+            node = anchor.select_one(selector)
+            if node:
+                text = _normalize_whitespace(node.get_text(" ", strip=True))
+                if text and not _is_noise_text(text):
+                    return text
+
+        label = _normalize_whitespace(anchor.get("aria-label", ""))
+        if " by " in label:
+            return label.split(" by ", 1)[0].strip(" .")
+
+        text = _normalize_whitespace(anchor.get_text(" ", strip=True))
+        if " · " in text:
+            text = text.split(" · ", 1)[0]
+        return self._clean_video_title(text)
+
+    def _clean_video_title(self, title: str) -> str:
         if not title:
             return ""
-
-        # 去除 "YouTube" + 后面的元数据（中间可能是 ·、空格、|）
-        # 如 "标题YouTube·Wanderbots·3 hours ago" → "标题"
-        title = re.sub(r"YouTube[·|\s].*$", "", title).strip()
-        title = re.sub(r"Bilibili[·|\s].*$", "", title).strip()
-        title = re.sub(r"Vimeo[·|\s].*$", "", title).strip()
-
-        # 去除末尾的时间信息（如 "3 hours ago"、"2天前"）
+        title = _normalize_whitespace(title)
+        title = re.sub(r"\s*YouTube[·|\s].*$", "", title, flags=re.IGNORECASE).strip()
+        title = re.sub(r"\s*Bilibili[·|\s].*$", "", title, flags=re.IGNORECASE).strip()
+        title = re.sub(r"\s*Vimeo[·|\s].*$", "", title, flags=re.IGNORECASE).strip()
         title = re.sub(
             r"\s*·?\s*\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago\s*$",
             "",
@@ -652,9 +918,36 @@ class GoogleResultParser:
             flags=re.IGNORECASE,
         ).strip()
         title = re.sub(
-            r"\s*·?\s*\d+\s*(?:秒|分钟|小时|天|周|个月|年)前\s*$",
-            "",
-            title,
+            r"\s*·?\s*\d+\s*(?:秒|分钟|小时|天|周|个月|年)前\s*$", "", title
         ).strip()
-
         return title
+
+    def _clean_site_title_candidate(self, text: str, title: str) -> str:
+        cleaned = _normalize_display_text(text)
+        if not cleaned:
+            return ""
+        if title and cleaned.startswith(title):
+            cleaned = cleaned[len(title) :].lstrip(" ·—–-:：")
+        trailing_time = _extract_inline_time_info(cleaned.split(" > ")[-1])
+        if trailing_time and cleaned.endswith(trailing_time):
+            cleaned = cleaned[: -len(trailing_time)].rstrip(" ·—–-:：")
+        return _normalize_whitespace(cleaned)
+
+    def _extract_text_without_links(self, tag: Tag) -> str:
+        clone = BeautifulSoup(str(tag), "html.parser")
+        for removable in clone.find_all(["a", "button", "svg", "img", "cite"]):
+            removable.decompose()
+        return _normalize_whitespace(clone.get_text(" ", strip=True))
+
+    def _format_display_url_from_url(self, url: str) -> str:
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return _normalize_display_text(url)
+
+        if not parsed.scheme or not parsed.hostname:
+            return _normalize_display_text(url)
+
+        parts = [f"{parsed.scheme}://{parsed.hostname}"]
+        parts.extend(part for part in parsed.path.split("/") if part)
+        return _normalize_display_text(" > ".join(parts))

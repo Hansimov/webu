@@ -110,6 +110,184 @@ REDIRECT_HTML = """
 </html>
 """
 
+RICH_RESULT_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="A6K0A" data-rpos="0">
+        <div class="tF2Cxc asEBEc">
+          <div class="N54PNb BToiNc">
+            <div class="kb0PBd A9Y9g jGGQ5e">
+              <div class="yuRUbf">
+                <div class="b8lM7">
+                  <a href="https://developers.google.com/edu/python">
+                    <h3>Google's Python Class | Python Education</h3>
+                    <div class="notranslate ESMNde HGLrXd ojE3Fb">
+                      <div class="q0vns">
+                        <div class="CA5RN">
+                          <div><span class="VuuXrf">Google for Developers</span></div>
+                          <div class="byrV5b">
+                            <cite>https://developers.google.com<span> › edu › python</span></cite>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </a>
+                </div>
+              </div>
+            </div>
+            <div class="kb0PBd A9Y9g" data-sncf="1">
+              <div class="VwiC3b yXK7lf p4wth r025kc Hdw6tb">
+                <span class="YrbPuc"><span>23 Jul 2024</span> — </span>
+                <span>Welcome to Google's Python Class -- this is a free class for people with a little bit of programming experience who want to learn Python.</span>
+                <a href="https://developers.google.com/edu/python#:~:text=Welcome">Read more</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+VIDEO_META_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="ULSxyf">
+      <div class="MjjYud">
+        <div class="A6K0A" data-rpos="18">
+          <div class="vtSz8d">
+            <div class="KYaZsb">
+              <div class="rtvRGe">
+                <div class="ObbMBf">
+                  <a class="rIRoqf" href="https://www.youtube.com/watch?v=K5KVEU3aaeQ">
+                    <div class="V5XKdd" aria-level="3" role="heading">
+                      <div class="ZxS7Db">
+                        <div class="tNxQIb ynAwRc OSrXXb">
+                          <span class="cHaqb QOGdqf">Python Full Course for Beginners</span>
+                        </div>
+                      </div>
+                      <div class="ZtihLe YrbPuc">
+                        <div class="Foqdsf">
+                          <span class="Sg4azc"><span>YouTube</span><span><span aria-hidden="true"> ·</span> Programming with Mosh</span></span>
+                          <div><span>12 Feb 2025</span></div>
+                        </div>
+                      </div>
+                    </div>
+                  </a>
+                </div>
+                <div class="kb0PBd A9Y9g" data-sncf="1">
+                  <div class="VwiC3b"><span>A complete beginner-friendly Python course with projects and exercises.</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+METRIC_VIDEO_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="A6K0A" data-rpos="18">
+        <div class="wHYlTd Ww4FFb tF2Cxc asEBEc vt6azd">
+          <div class="N54PNb BToiNc">
+            <div class="kb0PBd A9Y9g jGGQ5e">
+              <div class="yuRUbf">
+                <div class="b8lM7">
+                  <a href="https://www.youtube.com/watch?v=_uQrJ0TkZlc&vl=en">
+                    <h3>Python Full Course for Beginners</h3>
+                    <div class="notranslate ESMNde HGLrXd ojE3Fb">
+                      <div class="q0vns">
+                        <div class="CA5RN">
+                          <div><span class="VuuXrf">YouTube · Programming with Mosh</span></div>
+                          <div class="byrV5b"><cite>47.2M+ views · 7 years ago</cite></div>
+                        </div>
+                      </div>
+                    </div>
+                  </a>
+                </div>
+              </div>
+            </div>
+            <div class="iHxmLe">
+              <a class="rIRoqf" href="https://www.youtube.com/watch?v=_uQrJ0TkZlc&vl=en">
+                <div class="fzUZNc">
+                  <div class="ITCGwe">
+                    <div class="ITZIwc p4wth">Learn Python for AI, machine learning, and web development with this beginner-friendly course.</div>
+                  </div>
+                </div>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+NOISY_SNIPPET_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="A6K0A" data-rpos="0">
+        <div class="tF2Cxc asEBEc">
+          <div class="N54PNb BToiNc">
+            <div class="kb0PBd A9Y9g jGGQ5e">
+              <div class="yuRUbf">
+                <div class="b8lM7">
+                  <a href="https://developers.google.com/edu/python">
+                    <h3>Google's Python Class | Python Education</h3>
+                    <div class="notranslate ESMNde HGLrXd ojE3Fb">
+                      <div class="q0vns">
+                        <div class="CA5RN">
+                          <div><span class="VuuXrf">Google for Developers</span></div>
+                          <div class="byrV5b"><cite>https://developers.google.com<span> › edu › python</span></cite></div>
+                        </div>
+                      </div>
+                    </div>
+                  </a>
+                </div>
+              </div>
+            </div>
+            <div class="kb0PBd A9Y9g" data-sncf="1">
+              <div class="VwiC3b yXK7lf p4wth r025kc Hdw6tb">
+                <span>Web Result with Site Links Google for Developers Jul 23, 2024 — A free class for people with a little bit of programming experience who want to learn Python.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
 
 # ═══════════════════════════════════════════════════════════════
 # 测试
@@ -208,6 +386,16 @@ class TestGoogleResultParser:
         assert d["result_count"] == 3
         assert isinstance(d["results"], list)
         assert d["results"][0]["title"] == "Example Page One - Test Result"
+
+    def test_extract_site_title_and_time_info(self):
+        response = self.parser.parse(RICH_RESULT_HTML, query="python class")
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.site_title == "Google for Developers"
+        assert result.displayed_url == "https://developers.google.com > edu > python"
+        assert result.time_info == "23 Jul 2024"
+        assert result.snippet.startswith("Welcome to Google's Python Class")
+        assert "Read more" not in result.snippet
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -398,6 +586,32 @@ class TestVideoResults:
             if "youtube.com" in r.url and r.title != "Python Full Course":
                 # 没有 h3 的 YouTube 链接由视频策略提取
                 assert r.result_type == "video"
+
+    def test_video_extracts_site_title_and_time(self):
+        response = self.parser.parse(VIDEO_META_HTML, query="python full course")
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.result_type == "video"
+        assert result.title == "Python Full Course for Beginners"
+        assert result.site_title == "YouTube · Programming with Mosh"
+        assert result.time_info == "12 Feb 2025"
+        assert "beginner-friendly" in result.snippet
+
+    def test_metric_cite_falls_back_to_formatted_url(self):
+        response = self.parser.parse(METRIC_VIDEO_HTML, query="python full course")
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.displayed_url == "https://www.youtube.com > watch"
+        assert result.time_info == "7 years ago"
+        assert result.site_title == "YouTube · Programming with Mosh"
+        assert "beginner-friendly" in result.snippet
+
+    def test_snippet_removes_site_links_noise(self):
+        response = self.parser.parse(NOISY_SNIPPET_HTML, query="python class")
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert "Web Result with Site Links" not in result.snippet
+        assert result.snippet.startswith("A free class")
 
 
 class TestHelperFunctions:

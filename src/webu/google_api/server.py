@@ -63,9 +63,12 @@ class SearchResultItem(BaseModel):
 
     title: str = ""
     url: str = ""
+    site_title: str = ""
     displayed_url: str = ""
     snippet: str = ""
+    time_info: str = ""
     position: int = 0
+    result_type: str = "organic"
 
 
 class SearchResponse(BaseModel):
@@ -396,12 +399,45 @@ def create_google_search_server(
         q: str = Query(..., description="搜索关键词", min_length=1),
         num: int = Query(10, description="结果数量", ge=1, le=50),
         lang: str = Query("en", description="搜索语言"),
+        proxy_url: str | None = Query(None, description="指定代理 URL（可选）"),
         api_token: str | None = Query(None, description="搜索接口 token，可选"),
         x_api_token: str | None = Header(default=None, alias="X-Api-Token"),
     ):
         """GET 方式执行 Google 搜索。"""
-        req = SearchRequest(query=q, num=num, lang=lang)
+        req = SearchRequest(query=q, num=num, lang=lang, proxy_url=proxy_url)
         return await search(req, api_token=api_token, x_api_token=x_api_token)
+
+    @app.get("/search_raw", tags=["搜索", "调试"])
+    async def search_raw(
+        q: str = Query(..., description="搜索关键词", min_length=1),
+        num: int = Query(10, description="结果数量", ge=1, le=50),
+        lang: str = Query("en", description="搜索语言"),
+        proxy_url: str | None = Query(None, description="指定代理 URL（可选）"),
+        api_token: str | None = Query(None, description="搜索接口 token，可选"),
+        x_api_token: str | None = Header(default=None, alias="X-Api-Token"),
+    ):
+        """抓取 Google 搜索结果原始 HTML，用于本地调试解析器。"""
+        _ensure_ready()
+        _require_search_token(x_api_token, api_token)
+
+        raw = await scraper.fetch_raw_html(
+            query=q,
+            num=num,
+            lang=lang,
+            proxy_url=proxy_url,
+        )
+        return Response(
+            content=raw.html,
+            media_type="text/html",
+            headers={
+                "X-Query": raw.query,
+                "X-Final-Url": raw.final_url,
+                "X-Proxy-Url": raw.proxy_url,
+                "X-Elapsed-Ms": str(raw.elapsed_ms),
+                "X-Has-Captcha": "1" if raw.has_captcha else "0",
+                "X-Raw-Error": raw.error,
+            },
+        )
 
     # ── 代理状态接口 ──────────────────────────────────────────
 

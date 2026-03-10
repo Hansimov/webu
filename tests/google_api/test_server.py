@@ -92,6 +92,17 @@ class _FakeSearchResult:
         self.error = ""
 
 
+class _FakeRawHtmlResult:
+    def __init__(self, query=""):
+        self.query = query
+        self.html = "<html><body><div id='search'>fake html</div></body></html>"
+        self.final_url = "https://www.google.com/search?q=fake"
+        self.proxy_url = "http://127.0.0.1:11119"
+        self.elapsed_ms = 123
+        self.has_captcha = False
+        self.error = ""
+
+
 class _FakeGoogleScraper:
     def __init__(
         self, proxy_manager=None, headless=True, profile_dir=None, screenshot_dir=None
@@ -107,6 +118,12 @@ class _FakeGoogleScraper:
     async def search(self, query, num=10, lang="en", proxy_url=None):
         result = _FakeSearchResult()
         result.query = query
+        return result
+
+    async def fetch_raw_html(self, query, num=10, lang="en", proxy_url=None):
+        result = _FakeRawHtmlResult(query=query)
+        if proxy_url:
+            result.proxy_url = proxy_url
         return result
 
 
@@ -150,6 +167,14 @@ class TestGoogleSearchServerUnit:
         resp = client.get("/search")
         # Should return 422 or handle gracefully
         assert resp.status_code in (200, 422)
+
+    def test_search_raw_html(self, client):
+        resp = client.get("/search_raw?q=test&proxy_url=http://127.0.0.1:11119")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert resp.headers["x-query"] == "test"
+        assert resp.headers["x-proxy-url"] == "http://127.0.0.1:11119"
+        assert "fake html" in resp.text
 
     def test_search_requires_api_token_when_configured(self, monkeypatch, tmp_path):
         config_dir = tmp_path / "configs"

@@ -19,6 +19,7 @@ import random
 import shutil
 import time
 
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, Playwright
@@ -50,6 +51,20 @@ TZ_SHANGHAI = timezone(timedelta(hours=8))
 DEFAULT_PROFILE_DIR = Path("data/google_api/chrome_profile")
 CAPTCHA_BYPASS_TIMEOUT_SEC = 45.0
 CAPTCHA_BYPASS_MAX_VLM_REQUESTS = 10
+
+
+@dataclass
+class GoogleRawHtmlResponse:
+    query: str = ""
+    html: str = ""
+    final_url: str = ""
+    proxy_url: str = ""
+    elapsed_ms: int = 0
+    has_captcha: bool = False
+    error: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -408,6 +423,63 @@ class GoogleScraper:
 
         return result
 
+    async def fetch_raw_html(
+        self,
+        query: str,
+        num: int = 10,
+        lang: str = "en",
+        proxy_url: str = None,
+        retry_count: int = 2,
+    ) -> GoogleRawHtmlResponse:
+        """抓取搜索结果原始 HTML，用于本地调试解析器。"""
+        await self._ensure_browser()
+
+        original_proxy = proxy_url or self._fixed_proxy
+        requested_proxy = original_proxy
+
+        for attempt in range(retry_count + 1):
+            if requested_proxy == "direct":
+                current_proxy = None
+            elif requested_proxy:
+                current_proxy = requested_proxy
+            elif self.proxy_manager:
+                current_proxy = self.proxy_manager.get_proxy()
+            else:
+                current_proxy = (
+                    original_proxy
+                    if original_proxy and original_proxy != "direct"
+                    else None
+                )
+
+            result = await self._do_fetch_raw_html(
+                query=query,
+                num=num,
+                lang=lang,
+                proxy_url=current_proxy,
+            )
+
+            if result.html and not result.has_captcha:
+                if current_proxy and self.proxy_manager:
+                    self.proxy_manager.report_success(current_proxy)
+                return result
+
+            if result.has_captcha and current_proxy and self.proxy_manager:
+                self.proxy_manager.report_failure(current_proxy)
+            if result.has_captcha and self.proxy_manager:
+                requested_proxy = None
+                continue
+            if result.html:
+                return result
+
+            if attempt < retry_count:
+                if current_proxy and self.proxy_manager:
+                    self.proxy_manager.report_failure(current_proxy)
+                if self.proxy_manager:
+                    requested_proxy = None
+                await asyncio.sleep(random.uniform(1, 3))
+
+        return result
+
     async def _do_search(
         self,
         query: str,
@@ -429,116 +501,14 @@ class GoogleScraper:
 
         try:
             search_perf.start("context_setup")
-            ua = random.choice(USER_AGENTS)
-            viewport = random.choice(VIEWPORT_SIZES)
-            locale = random.choice(LOCALES)
-
-            context_opts = {
-                "user_agent": ua,
-                "viewport": viewport,
-                "locale": locale,
-                "ignore_https_errors": True,
-            }
-            if proxy_url:
-                context_opts["proxy"] = {"server": proxy_url}
-
-            context = await self._browser.new_context(**context_opts)
-
-            # 恢复已持久化的 Cookie（CAPTCHA 绕过状态等）
-            await self._load_cookies(context)
-
-            page = await context.new_page()
-            if self.verbose:
-                proxy_display = proxy_url or "direct"
-                logger.mesg(
-                    f"  ◆ Context created (proxy: {logstr.file(proxy_display)})"
-                )
+            context, page = await self._create_search_context(proxy_url)
             search_perf.stop()
 
-            # 注入额外的反检测脚本
-            await page.add_init_script(
-                """
-                // 隐藏 webdriver 属性
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined,
-                });
-                // 伪造 plugins
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5],
-                });
-                // 伪造 languages
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en'],
-                });
-                // 隐藏 chrome 自动化标志
-                window.chrome = {
-                    runtime: {},
-                };
-            """
-            )
-
-            # 构建搜索 URL
-            params = {"q": query, "num": num, "hl": lang}
-            url = f"{GOOGLE_SEARCH_URL}?{urlencode(params)}"
-
-            # 添加随机延迟（模拟人类行为）— 首次搜索稍长，后续减少
-            if self._search_count == 0:
-                await asyncio.sleep(random.uniform(0.5, 1.5))
-            else:
-                await asyncio.sleep(random.uniform(0.2, 0.8))
-
-            # 导航到搜索页
             search_perf.start("page_navigation")
-            start_time = time.time()
-            if self.verbose:
-                logger.mesg(f"  → Navigating: {logstr.file(url[:100])}")
-
-            await page.goto(
-                url, timeout=self.timeout * 1000, wait_until="domcontentloaded"
-            )
-
-            # 检查是否被重定向（consent / sorry 页面）
-            current_url = page.url
-            if current_url != url and self.verbose:
-                logger.mesg(f"  ↪ Redirected: {logstr.file(current_url[:100])}")
-
-            # 处理 Google Cookie 同意弹窗（EU 地区代理常见）
-            consent_dismissed = await self._dismiss_consent(page)
-            if consent_dismissed:
-                # 同意弹窗已关闭，等待页面刷新/重新渲染
-                await asyncio.sleep(1.0)
-
-            # 快速检测 "无结果" 页面，避免等待 8s selector 超时
-            # Google "no results" 页面有 #search 但 div 为空，selector 会超时
-            no_results_early = await self._detect_no_results_early(page)
-
-            # 等待搜索结果渲染（较短超时，页面已完成 DOM 加载）
-            if no_results_early:
-                # 已确认无结果，跳过 selector 等待
-                if self.verbose:
-                    elapsed_ms = int((time.time() - start_time) * 1000)
-                    logger.mesg(f"  ⏳ Google returned no results ({elapsed_ms}ms)")
-            else:
-                selector_timeout = min(self.timeout, 8)
-                try:
-                    await page.wait_for_selector(
-                        "#search, #rso, div.g",
-                        timeout=selector_timeout * 1000,
-                    )
-                except Exception:
-                    elapsed_ms = int((time.time() - start_time) * 1000)
-                    if self.verbose:
-                        logger.mesg(
-                            f"  ⏳ No search results found "
-                            f"({elapsed_ms}ms, url={logstr.file(page.url[:80])})"
-                        )
+            html, elapsed_ms, _ = await self._load_search_page(page, query, num, lang)
             search_perf.stop()
 
-            elapsed_ms = int((time.time() - start_time) * 1000)
-
-            # 获取页面 HTML
             search_perf.start("get_html")
-            html = await page.content()
             response.raw_html_length = len(html)
             search_perf.stop()
 
@@ -682,6 +652,138 @@ class GoogleScraper:
             logger.mesg(f"  Search timing:\n{search_perf.summary()}")
 
         return response
+
+    async def _do_fetch_raw_html(
+        self,
+        query: str,
+        num: int,
+        lang: str,
+        proxy_url: str = None,
+    ) -> GoogleRawHtmlResponse:
+        context = None
+        page = None
+        response = GoogleRawHtmlResponse(query=query, proxy_url=proxy_url or "direct")
+
+        try:
+            context, page = await self._create_search_context(proxy_url)
+            html, elapsed_ms, final_url = await self._load_search_page(
+                page, query, num, lang
+            )
+            response.html = html
+            response.elapsed_ms = elapsed_ms
+            response.final_url = final_url
+            response.has_captcha = self.parser.detect_captcha(html)
+            self._search_count += 1
+        except Exception as e:
+            response.error = str(e)[:300]
+        finally:
+            if context:
+                await self._save_cookies(context)
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+        return response
+
+    async def _create_search_context(self, proxy_url: str | None):
+        ua = random.choice(USER_AGENTS)
+        viewport = random.choice(VIEWPORT_SIZES)
+        locale = random.choice(LOCALES)
+
+        context_opts = {
+            "user_agent": ua,
+            "viewport": viewport,
+            "locale": locale,
+            "ignore_https_errors": True,
+        }
+        if proxy_url:
+            context_opts["proxy"] = {"server": proxy_url}
+
+        context = await self._browser.new_context(**context_opts)
+        await self._load_cookies(context)
+        page = await context.new_page()
+
+        if self.verbose:
+            proxy_display = proxy_url or "direct"
+            logger.mesg(f"  ◆ Context created (proxy: {logstr.file(proxy_display)})")
+
+        await page.add_init_script(
+            """
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+            window.chrome = {
+                runtime: {},
+            };
+        """
+        )
+
+        return context, page
+
+    async def _load_search_page(self, page, query: str, num: int, lang: str):
+        params = {"q": query, "num": num, "hl": lang}
+        url = f"{GOOGLE_SEARCH_URL}?{urlencode(params)}"
+
+        if self._search_count == 0:
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+        else:
+            await asyncio.sleep(random.uniform(0.2, 0.8))
+
+        start_time = time.time()
+        if self.verbose:
+            logger.mesg(f"  → Navigating: {logstr.file(url[:100])}")
+
+        await page.goto(url, timeout=self.timeout * 1000, wait_until="domcontentloaded")
+
+        current_url = page.url
+        if current_url != url and self.verbose:
+            logger.mesg(f"  ↪ Redirected: {logstr.file(current_url[:100])}")
+
+        consent_dismissed = await self._dismiss_consent(page)
+        if consent_dismissed:
+            await asyncio.sleep(1.0)
+
+        no_results_early = await self._detect_no_results_early(page)
+        if no_results_early:
+            if self.verbose:
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                logger.mesg(f"  ⏳ Google returned no results ({elapsed_ms}ms)")
+        else:
+            selector_timeout = min(self.timeout, 8)
+            try:
+                await page.wait_for_selector(
+                    "#search, #rso, div.g",
+                    timeout=selector_timeout * 1000,
+                )
+            except Exception:
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                if self.verbose:
+                    logger.mesg(
+                        f"  ⏳ No search results found "
+                        f"({elapsed_ms}ms, url={logstr.file(page.url[:80])})"
+                    )
+
+        html = await page.content()
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        if self.verbose:
+            logger.mesg(
+                f"  Page loaded: {logstr.mesg(f'{len(html)} bytes')} "
+                f"in {logstr.mesg(f'{elapsed_ms}ms')}"
+            )
+        return html, elapsed_ms, page.url
 
     # ── Cookie 持久化 ─────────────────────────────────────────
 
