@@ -145,9 +145,10 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-page-size .dash-radioitems {{ display: flex; flex-wrap: wrap; gap: 6px; }}
             .dash-page-size label {{ display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12px; cursor: pointer; }}
             .dash-page-size input {{ margin: 0; accent-color: var(--accent); }}
-            .dash-button {{ padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }}
-            .dash-button:hover {{ border-color: rgba(52,211,153,0.45); background: rgba(52,211,153,0.08); }}
-            .dash-button:disabled {{ opacity: 0.45; cursor: default; }}
+            .dash-button {{ appearance: none; -webkit-appearance: none; padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(255,255,255,0.03); color: var(--text) !important; font-size: 12px; font-weight: 600; cursor: pointer; }}
+            .dash-button:hover {{ border-color: rgba(52,211,153,0.45); background: rgba(52,211,153,0.08); color: var(--text) !important; }}
+            .dash-button:focus, .dash-button:active {{ color: var(--text) !important; }}
+            .dash-button:disabled {{ opacity: 0.45; cursor: default; color: var(--muted) !important; -webkit-text-fill-color: var(--muted); }}
             .dash-auth-card {{ display: flex; flex-direction: column; gap: 14px; }}
             .dash-auth-form {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }}
             .dash-auth-input {{ flex: 1 1 240px; min-width: 200px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: rgba(15,23,42,0.72); color: var(--text); font-size: 13px; }}
@@ -269,7 +270,9 @@ def create_dash_app(*, name: str, title: str, panel_path: str) -> Dash:
             .dash-controls-card .dash-action-status {{ margin-top: 2px; }}
             .dash-action-status {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
             .dash-action-status.ok {{ color: var(--accent); }}
+            .dash-action-status.pending {{ color: var(--info); }}
             .dash-action-status.fail {{ color: var(--danger); }}
+            .dash-action-summary {{ margin-top: 8px; }}
             .dash-table-panel {{ width: 100%; }}
             .dash-table-wrap {{ width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }}
             .dash-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
@@ -760,13 +763,7 @@ def instance_card(
         )
         for label, value in stats
     ]
-    tag_items = [
-        html.Span(
-            status_label or ("healthy" if healthy else "unhealthy"),
-            className="dash-tag",
-            style=_tag_style(tone),
-        )
-    ]
+    tag_items = []
     for text, tag_tone in list(tags or []):
         if not str(text).strip():
             continue
@@ -777,6 +774,13 @@ def instance_card(
                 style=_tag_style(str(tag_tone or "neutral")),
             )
         )
+    tag_items.append(
+        html.Span(
+            status_label or ("healthy" if healthy else "unhealthy"),
+            className="dash-tag",
+            style=_tag_style(tone),
+        )
+    )
     return html.Div(
         [
             html.Div(

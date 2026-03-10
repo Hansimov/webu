@@ -253,19 +253,19 @@ def build_backend_instance_cards(instances: list[dict], control_factory=None) ->
         instances,
         key=lambda item: (
             not bool(item.get("enabled", True)),
-            not bool(item.get("healthy", False)),
+            not bool(item.get("is_running", item.get("healthy", False))),
             str(item.get("name", "")),
         ),
     )
     for item in ordered_instances:
         enabled = bool(item.get("enabled", True))
-        healthy = bool(item.get("healthy")) and enabled
-        if not enabled:
-            status_label = "disabled"
-            status_tone = "neutral"
-        else:
-            status_label = "healthy" if healthy else "unhealthy"
-            status_tone = "accent" if healthy else "danger"
+        healthy = bool(item.get("is_running", item.get("healthy"))) and enabled
+        status_label = str(item.get("status_label", "")).strip() or (
+            "DISABLED" if not enabled else ("RUNNING" if healthy else "UNREACHABLE")
+        )
+        status_tone = str(item.get("status_tone", "")).strip() or (
+            "neutral" if not enabled else ("accent" if healthy else "danger")
+        )
         tag_items: list[tuple[str, str]] = []
         if healthy:
             endpoint_tag = _build_ipv4_tag(

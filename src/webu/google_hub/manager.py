@@ -25,6 +25,66 @@ from webu.runtime_settings import (
     resolve_hf_space_settings,
 )
 
+HF_SPACE_RUNNING_STAGES = {"RUNNING"}
+HF_SPACE_TRANSITION_STAGES = {
+    "BUILDING",
+    "RUNNING_BUILDING",
+    "APP_STARTING",
+    "RUNNING_APP_STARTING",
+    "STARTING",
+    "RESTARTING",
+    "RUNNING_RESTARTING",
+}
+HF_SPACE_ERROR_STAGES = {
+    "NO_APP_FILE",
+    "CONFIG_ERROR",
+    "BUILD_ERROR",
+    "RUNTIME_ERROR",
+    "DELETING",
+    "STOPPED",
+    "PAUSED",
+}
+HF_SPACE_RUNTIME_REFRESH_TIMEOUT_SEC = 1.5
+
+
+def _normalize_runtime_stage(stage: str | None) -> str:
+    return str(stage or "").strip().upper()
+
+
+def _classify_backend_status(state: "BackendRuntimeState") -> tuple[str, str, bool]:
+    if not state.backend.enabled:
+        return ("DISABLED", "neutral", False)
+
+    if state.backend.kind != "hf-space":
+        if state.healthy:
+            return ("RUNNING", "accent", True)
+        return ("UNREACHABLE", "danger", False)
+
+    runtime_stage = _normalize_runtime_stage(state.runtime_stage)
+    if state.healthy and runtime_stage in HF_SPACE_RUNNING_STAGES:
+        return (runtime_stage, "accent", True)
+    if state.healthy and not runtime_stage:
+        return ("RUNNING", "accent", True)
+    if runtime_stage in HF_SPACE_TRANSITION_STAGES:
+        return (runtime_stage, "info", False)
+    if runtime_stage in HF_SPACE_ERROR_STAGES:
+        return (runtime_stage, "danger", False)
+    if state.last_error:
+        return ("UNREACHABLE", "danger", False)
+    if runtime_stage:
+        return (runtime_stage, "danger", False)
+    return ("UNKNOWN", "danger", False)
+
+
+def _should_refresh_runtime_stage(
+    state: "BackendRuntimeState", *, fetch_runtime_stage: bool
+) -> bool:
+    if state.backend.kind != "hf-space":
+        return False
+    if fetch_runtime_stage:
+        return True
+    return _normalize_runtime_stage(state.runtime_stage) in HF_SPACE_TRANSITION_STAGES
+
 
 @dataclass(frozen=True)
 class GoogleHubBackend:
@@ -146,6 +206,7 @@ class BackendRuntimeState:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        status_label, status_tone, is_running = _classify_backend_status(self)
         success_rate = (
             (self.successful_requests / self.request_count * 100.0)
             if self.request_count
@@ -186,6 +247,9 @@ class BackendRuntimeState:
             "last_request_latency_ms": self.last_request_latency_ms,
             "latency_ewma_ms": self.latency_ewma_ms,
             "selection_score": self.compute_selection_score(),
+            "status_label": status_label,
+            "status_tone": status_tone,
+            "is_running": is_running,
             "last_checked_ts": self.last_checked_ts,
             "last_selected_ts": self.last_selected_ts,
             "last_success_ts": self.last_success_ts,
@@ -511,7 +575,7 @@ class GoogleHubManager:
         self.request_metrics = RequestMetrics()
 
     async def start(self):
-        await self.refresh_all_health()
+        await self.refresh_all_health(fetch_runtime_stage=False)
         self._health_task = asyncio.create_task(self._health_loop())
 
     async def stop(self):
@@ -525,7 +589,7 @@ class GoogleHubManager:
     async def _health_loop(self):
         while True:
             try:
-                await self.refresh_all_health()
+                await self.refresh_all_health(fetch_runtime_stage=False)
             finally:
                 has_unhealthy = any(
                     s.backend.enabled and not s.healthy for s in self.states.values()
@@ -537,11 +601,19 @@ class GoogleHubManager:
                 )
                 await asyncio.sleep(interval)
 
-    async def refresh_all_health(self):
+    async def refresh_all_health(self, *, fetch_runtime_stage: bool = True):
         for state in self.states.values():
-            await self.refresh_backend_health(state.backend.name)
+            await self.refresh_backend_health(
+                state.backend.name,
+                fetch_runtime_stage=fetch_runtime_stage,
+            )
 
-    async def refresh_backend_health(self, backend_name: str) -> dict[str, Any]:
+    async def refresh_backend_health(
+        self,
+        backend_name: str,
+        *,
+        fetch_runtime_stage: bool = True,
+    ) -> dict[str, Any]:
         state = self.states[backend_name]
         backend = state.backend
         if not backend.enabled:
@@ -554,12 +626,42 @@ class GoogleHubManager:
             return state.to_dict()
 
         started = time.perf_counter()
+        runtime_stage_error = ""
+        previous_runtime_stage = _normalize_runtime_stage(state.runtime_stage)
+        should_refresh_runtime_stage = _should_refresh_runtime_stage(
+            state,
+            fetch_runtime_stage=fetch_runtime_stage,
+        )
         try:
-            if backend.kind == "hf-space":
-                runtime_stage = str(state.runtime_stage or "").strip().upper()
-                if runtime_stage in {"PAUSED", "STOPPED"}:
+            if should_refresh_runtime_stage:
+                try:
+                    runtime_stage, sleep_time = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self._get_space_runtime_state,
+                            backend.space_name,
+                        ),
+                        timeout=min(
+                            float(self.settings.health_timeout_sec),
+                            HF_SPACE_RUNTIME_REFRESH_TIMEOUT_SEC,
+                        ),
+                    )
+                    state.runtime_stage = _normalize_runtime_stage(runtime_stage)
+                    state.runtime_sleep_time = int(sleep_time or 0)
+                except Exception as exc:
+                    runtime_stage_error = str(exc)
+                    state.runtime_stage = previous_runtime_stage
+
+                runtime_stage = _normalize_runtime_stage(state.runtime_stage)
+                if runtime_stage in HF_SPACE_ERROR_STAGES:
                     state.healthy = False
                     state.resolved_ipv4 = ""
+                    state.last_error = runtime_stage.lower()
+                    state.latency_ms = int((time.perf_counter() - started) * 1000)
+                    state.last_checked_ts = time.time()
+                    state.selection_score = state.compute_selection_score()
+                    return state.to_dict()
+                if runtime_stage in HF_SPACE_TRANSITION_STAGES:
+                    state.healthy = False
                     state.last_error = runtime_stage.lower()
                     state.latency_ms = int((time.perf_counter() - started) * 1000)
                     state.last_checked_ts = time.time()
@@ -571,7 +673,13 @@ class GoogleHubManager:
                 timeout=self.settings.health_timeout_sec,
             )
             response.raise_for_status()
-            state.healthy = True
+            runtime_stage = _normalize_runtime_stage(state.runtime_stage)
+            if backend.kind != "hf-space":
+                state.healthy = True
+            elif runtime_stage in HF_SPACE_RUNNING_STAGES or not runtime_stage:
+                state.healthy = True
+            else:
+                state.healthy = False
             state.last_error = ""
             state.consecutive_failures = 0
             state.latency_ms = int((time.perf_counter() - started) * 1000)
@@ -584,9 +692,18 @@ class GoogleHubManager:
                 state.runtime_stage = ""
                 state.runtime_sleep_time = 0
         except Exception as exc:
-            state.healthy = False
+            runtime_stage = _normalize_runtime_stage(state.runtime_stage)
+            can_grace_running = (
+                backend.kind == "hf-space"
+                and (
+                    runtime_stage in HF_SPACE_RUNNING_STAGES
+                    or (not runtime_stage and state.healthy)
+                )
+                and state.consecutive_failures < 1
+            )
+            state.healthy = can_grace_running
             state.resolved_ipv4 = ""
-            state.last_error = str(exc)
+            state.last_error = runtime_stage_error or str(exc)
             state.consecutive_failures += 1
             state.last_failure_ts = time.time()
             state.latency_ms = int((time.perf_counter() - started) * 1000)
@@ -760,19 +877,31 @@ class GoogleHubManager:
         }
 
     async def control_all_backends(self, action: str) -> dict[str, Any]:
+        action_name = str(action or "").strip().lower()
         targets = [
             state.backend.name
             for state in self.states.values()
-            if state.backend.kind == "hf-space" and state.backend.space_name
+            if state.backend.kind == "hf-space"
+            and state.backend.space_name
+            and (
+                action_name not in {"restart-bad", "rebuild-bad"}
+                or not _classify_backend_status(state)[2]
+            )
         ]
         results = []
+        backend_action = action_name.replace("-bad", "")
         for backend_name in targets:
-            results.append(await self.control_backend(backend_name, action))
+            results.append(await self.control_backend(backend_name, backend_action))
+        target_label = (
+            "non-running HF space(s)"
+            if action_name in {"restart-bad", "rebuild-bad"}
+            else "HF space(s)"
+        )
         return {
-            "action": str(action or "").strip().lower(),
+            "action": action_name,
             "count": len(results),
             "results": results,
-            "message": f"{str(action or '').strip().lower()} requested for {len(results)} HF space(s)",
+            "message": f"{action_name} requested for {len(results)} {target_label}",
         }
 
     def _eligible_states(self) -> list[BackendRuntimeState]:

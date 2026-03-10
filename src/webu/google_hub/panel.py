@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import os
+import time
 
 from urllib.parse import urlsplit
 
@@ -77,11 +78,15 @@ def _panel_ids(prefix: str) -> dict[str, str]:
         "search_backend": f"{prefix}-search-backend",
         "search_submit": f"{prefix}-search-submit",
         "search_status": f"{prefix}-search-status",
+        "control_request": f"{prefix}-control-request",
         "control_state": f"{prefix}-control-state",
+        "control_preview": f"{prefix}-control-preview",
         "control_start_all": f"{prefix}-control-start-all",
         "control_stop_all": f"{prefix}-control-stop-all",
         "control_restart_all": f"{prefix}-control-restart-all",
         "control_rebuild_all": f"{prefix}-control-rebuild-all",
+        "control_restart_bad": f"{prefix}-control-restart-bad",
+        "control_rebuild_bad": f"{prefix}-control-rebuild-bad",
         "control_squash_all": f"{prefix}-control-squash-all",
         "root": f"{prefix}-root",
     }
@@ -126,7 +131,6 @@ def _build_search_card(
     snapshot: dict,
     search_state: dict,
 ):
-    del snapshot
     query_value = str(search_state.get("query", ""))
 
     status = str(search_state.get("status", "idle")).strip().lower() or "idle"
@@ -137,17 +141,20 @@ def _build_search_card(
         result_payload.get("query", search_state.get("query", ""))
     ).strip()
     selected_backend_name = str(result_payload.get("backend", "")).strip()
-    selection_mode = str(result_payload.get("selection_mode", "auto")).strip() or "auto"
+    pending_backend_name = _resolve_search_route_name(
+        snapshot,
+        str(search_state.get("backend", "")).strip(),
+    )
 
     status_class = "dash-search-status"
     status_text = ""
     if is_searching:
         status_class += " pending"
-        status_text = "Submitted. Searching across hub routing..."
+        status_text = f"Searching via Route {pending_backend_name or 'hub routing'} ..."
     elif status == "ok":
         status_class += " ok"
         status_text = (
-            f"Resolved via {selected_backend_name or 'hub routing'}"
+            f"Resolved via Route {selected_backend_name or 'hub routing'}"
             f" · {result_payload.get('result_count', 0)} results"
         )
     elif status == "error" and error_text:
@@ -163,24 +170,11 @@ def _build_search_card(
     if is_searching:
         result_children = [
             html.Div(
-                f"Searching for {query_value}...",
+                f"Searching for {query_value} via Route {pending_backend_name or 'hub routing'}...",
                 className="dash-search-empty",
             )
         ]
     elif status == "ok":
-        chips = [
-            result_query or query_value,
-            f"Results {result_payload.get('result_count', 0)}",
-        ]
-        if selected_backend_name:
-            chips.append(selected_backend_name)
-        elif selection_mode != "auto":
-            chips.append("manual")
-        total_results_text = str(result_payload.get("total_results_text", "")).strip()
-        if total_results_text:
-            chips.append(total_results_text)
-        if bool(result_payload.get("has_captcha", False)):
-            chips.append("Captcha detected")
         result_items = []
         for index, item in enumerate(list(result_payload.get("results", [])), start=1):
             title = str(item.get("title", "")).strip() or f"Result {index}"
@@ -188,7 +182,6 @@ def _build_search_card(
             displayed_url = str(item.get("displayed_url", "")).strip() or url
             snippet = str(item.get("snippet", "")).strip()
             position = int(item.get("position", index) or index)
-            result_type = str(item.get("result_type", "organic")).strip() or "organic"
             result_items.append(
                 html.Div(
                     [
@@ -236,7 +229,6 @@ def _build_search_card(
                 )
             )
         result_children = [
-            meta_row(chips),
             html.Div(
                 result_items
                 or [
@@ -386,6 +378,212 @@ def _resolve_search_state(
         }
 
 
+def _friendly_control_action(action: str) -> str:
+    labels = {
+        "toggle": "Toggle",
+        "restart": "Restart",
+        "rebuild": "Rebuild",
+        "squash": "Squash",
+        "start-all": "Start All",
+        "stop-all": "Stop All",
+        "restart-all": "Restart All",
+        "rebuild-all": "Rebuild All",
+        "restart-bad-all": "Restart Bad",
+        "rebuild-bad-all": "Rebuild Bad",
+        "squash-all": "Squash All",
+        "restart-bad": "Restart Bad",
+        "rebuild-bad": "Rebuild Bad",
+    }
+    return labels.get(str(action or "").strip().lower(), str(action or "").strip())
+
+
+def _resolve_toggle_label(runtime_stage: str) -> str:
+    normalized_stage = str(runtime_stage or "").strip().upper()
+    return "Start" if normalized_stage in {"PAUSED", "STOPPED"} else "Stop"
+
+
+def _resolve_control_state(
+    request_id: int | None,
+    action: str | None,
+    backend_name: str | None,
+    control_provider: ControlProvider,
+    *,
+    unlocked: bool,
+) -> dict[str, object]:
+    if int(request_id or 0) <= 0:
+        raise PreventUpdate
+
+    normalized_action = str(action or "").strip()
+    normalized_backend = str(backend_name or "").strip()
+    if not normalized_action:
+        raise PreventUpdate
+
+    if not unlocked:
+        return {
+            "status": "error",
+            "message": "Unlock access to run HF control actions.",
+            "action": normalized_action,
+            "backend": normalized_backend,
+            "count": 0,
+            "results": [],
+        }
+
+    try:
+        result = control_provider(normalized_action, normalized_backend)
+        return {
+            "status": "ok",
+            "message": str(result.get("message", "Action requested")).strip(),
+            "action": str(result.get("action", normalized_action)).strip(),
+            "backend": str(result.get("backend", normalized_backend)).strip(),
+            "count": int(result.get("count", 0) or 0),
+            "results": list(result.get("results", [])),
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": sanitize_hf_control_error(str(exc)),
+            "action": normalized_action,
+            "backend": normalized_backend,
+            "count": 0,
+            "results": [],
+        }
+
+
+def _resolve_search_route_name(snapshot: dict, requested_backend: str = "") -> str:
+    requested_name = str(requested_backend or "").strip()
+    backends = list(snapshot.get("backends", []))
+    if requested_name:
+        for item in backends:
+            if str(item.get("name", "")).strip() == requested_name:
+                return requested_name
+
+    now_ts = time.time()
+
+    def _is_running(item: dict) -> bool:
+        return bool(item.get("is_running", item.get("healthy", False)))
+
+    def _not_cooling(item: dict) -> bool:
+        return float(item.get("search_cooldown_until_ts", 0.0) or 0.0) <= now_ts
+
+    def _rank(item: dict) -> tuple:
+        weight = max(1, int(item.get("weight", 1) or 1))
+        return (
+            float(item.get("selection_score", 0.0) or 0.0),
+            float(item.get("inflight", 0) or 0.0) / weight,
+            int(item.get("consecutive_failures", 0) or 0),
+            float(item.get("last_selected_ts", 0.0) or 0.0),
+            str(item.get("name", "")),
+        )
+
+    enabled = [item for item in backends if bool(item.get("enabled", True))]
+    running = [item for item in enabled if _is_running(item)]
+    ready_running = [item for item in running if _not_cooling(item)]
+    candidates = ready_running or running or enabled
+    if not candidates:
+        return ""
+    return str(sorted(candidates, key=_rank)[0].get("name", "")).strip()
+
+
+def _control_result_for_backend(control_state: dict, backend_name: str) -> dict | None:
+    normalized_backend = str(backend_name or "").strip()
+    if not normalized_backend:
+        return None
+    for item in list(control_state.get("results", []) or []):
+        if str(item.get("backend", "")).strip() == normalized_backend:
+            return dict(item)
+    if str(control_state.get("backend", "")).strip() == normalized_backend:
+        return dict(control_state)
+    return None
+
+
+def _instance_control_feedback(
+    backend_name: str,
+    control_state: dict | None,
+    *,
+    toggle_label: str,
+):
+    state = dict(control_state or {})
+    if not backend_name:
+        return None
+    status = str(state.get("status", "")).strip().lower()
+    action = str(state.get("action", "")).strip().lower()
+    targeted_backend = str(state.get("backend", "")).strip()
+    friendly_action = (
+        toggle_label if action == "toggle" else _friendly_control_action(action)
+    )
+    matched_result = _control_result_for_backend(state, backend_name)
+
+    feedback_text = ""
+    feedback_class = "dash-action-status"
+    if status == "pending":
+        if targeted_backend == backend_name:
+            feedback_text = f"Requesting {friendly_action}..."
+            feedback_class += " pending"
+    elif status == "ok":
+        if matched_result:
+            runtime_stage = str(matched_result.get("runtime_stage", "")).strip()
+            feedback_text = f"{friendly_action} requested"
+            if runtime_stage:
+                feedback_text = f"{feedback_text} · {runtime_stage}"
+            feedback_class += " ok"
+    elif status == "error":
+        if targeted_backend == backend_name or not targeted_backend:
+            feedback_text = str(state.get("message", "")).strip()
+            if feedback_text:
+                feedback_class += " fail"
+
+    if not feedback_text:
+        return None
+    return html.Div(feedback_text, className=feedback_class)
+
+
+def _resolve_effective_control_state(
+    control_state: dict | None,
+    control_preview: dict | None,
+) -> dict:
+    finalized = dict(control_state or {})
+    preview = dict(control_preview or {})
+    if str(preview.get("status", "")).strip().lower() != "pending":
+        return finalized
+
+    preview_started_ts = float(preview.get("started_ts", 0.0) or 0.0)
+    if preview_started_ts > 0 and (time.time() - preview_started_ts) > 20.0:
+        return finalized
+
+    preview_action = str(preview.get("action", "")).strip().lower()
+    preview_backend = str(preview.get("backend", "")).strip()
+    final_status = str(finalized.get("status", "")).strip().lower()
+    final_action = str(finalized.get("action", "")).strip().lower()
+    final_backend = str(finalized.get("backend", "")).strip()
+    if (
+        final_status in {"ok", "error"}
+        and final_action == preview_action
+        and final_backend == preview_backend
+    ):
+        return finalized
+    return preview
+
+
+def _summarize_control_results(control_state: dict):
+    results = list(control_state.get("results", []) or [])
+    chips = []
+    for item in results[:4]:
+        backend_name = str(item.get("space_name") or item.get("backend", "")).strip()
+        runtime_stage = str(item.get("runtime_stage", "")).strip()
+        if backend_name and runtime_stage:
+            chips.append(f"{backend_name} -> {runtime_stage}")
+        elif backend_name:
+            chips.append(backend_name)
+    extra_count = len(results) - len(chips)
+    if extra_count > 0:
+        chips.append(f"+{extra_count} more")
+    summary = meta_row(chips)
+    if summary is None:
+        return None
+    summary.className = f"{summary.className} dash-action-summary"
+    return summary
+
+
 def _build_history_content(
     request_log: list[dict],
     *,
@@ -408,106 +606,223 @@ def _build_history_content(
     )
 
 
-def _build_global_controls_card(ids: dict[str, str], control_state: dict | None):
+def _build_global_controls_card(
+    ids: dict[str, str],
+    control_state: dict | None,
+    snapshot: dict | None = None,
+):
     control_state = dict(control_state or {})
     status = str(control_state.get("status", "idle")).strip().lower()
     message = str(control_state.get("message", "")).strip()
+    pending = status == "pending"
+    pending_action = str(control_state.get("action", "")).strip().lower()
+    pending_backend = str(control_state.get("backend", "")).strip()
+    pending_action_label = _friendly_control_action(pending_action)
+    if pending_action == "toggle" and pending_backend:
+        runtime_stage = ""
+        for item in list((snapshot or {}).get("backends", []) or []):
+            if str(item.get("name", "")).strip() == pending_backend:
+                runtime_stage = str(item.get("runtime_stage", "")).strip()
+                break
+        pending_action_label = _resolve_toggle_label(runtime_stage)
+
     status_class = "dash-action-status"
-    if status == "error" and message:
+    if status == "ok" and message:
+        status_class += " ok"
+    elif status == "error" and message:
         status_class += " fail"
+    pending_message = ""
+    if pending and pending_action_label:
+        if pending_backend:
+            pending_message = (
+                f"Requesting {pending_action_label} for {pending_backend}..."
+            )
+        elif pending_action in {"restart-bad-all", "rebuild-bad-all"}:
+            pending_message = (
+                f"Requesting {pending_action_label} across matching instances..."
+            )
+        else:
+            pending_message = f"Requesting {pending_action_label}..."
     message_node = (
-        html.Div(message, className=status_class)
-        if status == "error" and message
-        else None
+        html.Div(message, className=status_class) if (message and not pending) else None
     )
+    result_summary = _summarize_control_results(control_state)
     return html.Div(
         [
             html.Div(
                 [
                     html.Button(
-                        "Start All",
+                        (
+                            "Starting all..."
+                            if pending
+                            and str(control_state.get("action", "")) == "start-all"
+                            else "Start All"
+                        ),
                         id=ids["control_start_all"],
                         n_clicks=0,
                         className="dash-button",
+                        disabled=pending,
                     ),
                     html.Button(
-                        "Stop All",
+                        (
+                            "Stopping all..."
+                            if pending
+                            and str(control_state.get("action", "")) == "stop-all"
+                            else "Stop All"
+                        ),
                         id=ids["control_stop_all"],
                         n_clicks=0,
                         className="dash-button",
+                        disabled=pending,
                     ),
                     html.Button(
-                        "Restart All",
+                        (
+                            "Restarting..."
+                            if pending
+                            and str(control_state.get("action", "")) == "restart-all"
+                            else "Restart All"
+                        ),
                         id=ids["control_restart_all"],
                         n_clicks=0,
                         className="dash-button",
+                        disabled=pending,
                     ),
                     html.Button(
-                        "Rebuild All",
+                        (
+                            "Rebuilding..."
+                            if pending
+                            and str(control_state.get("action", "")) == "rebuild-all"
+                            else "Rebuild All"
+                        ),
                         id=ids["control_rebuild_all"],
                         n_clicks=0,
                         className="dash-button",
+                        disabled=pending,
                     ),
                     html.Button(
-                        "Squash All",
+                        (
+                            "Restarting bad..."
+                            if pending
+                            and str(control_state.get("action", ""))
+                            == "restart-bad-all"
+                            else "Restart Bad"
+                        ),
+                        id=ids["control_restart_bad"],
+                        n_clicks=0,
+                        className="dash-button",
+                        disabled=pending,
+                    ),
+                    html.Button(
+                        (
+                            "Rebuilding bad..."
+                            if pending
+                            and str(control_state.get("action", ""))
+                            == "rebuild-bad-all"
+                            else "Rebuild Bad"
+                        ),
+                        id=ids["control_rebuild_bad"],
+                        n_clicks=0,
+                        className="dash-button",
+                        disabled=pending,
+                    ),
+                    html.Button(
+                        (
+                            "Squashing..."
+                            if pending
+                            and str(control_state.get("action", "")) == "squash-all"
+                            else "Squash All"
+                        ),
                         id=ids["control_squash_all"],
                         n_clicks=0,
                         className="dash-button",
+                        disabled=pending,
                     ),
                 ],
                 className="dash-action-row",
             ),
+            (
+                html.Div(
+                    pending_message,
+                    className="dash-action-status pending",
+                )
+                if pending_message
+                else None
+            ),
             message_node,
+            result_summary,
         ],
         className="dash-card dash-controls-card",
     )
 
 
-def _build_instance_controls(item: dict):
+def _build_instance_controls(item: dict, control_state: dict | None = None):
     backend_name = str(item.get("name", "")).strip()
     if not backend_name:
         return None
     is_hf_space = str(item.get("kind", "")).strip() == "hf-space"
     runtime_stage = str(item.get("runtime_stage", "")).strip().upper()
-    toggle_label = "Start" if runtime_stage in {"PAUSED", "STOPPED"} else "Stop"
-    disabled = not is_hf_space
+    toggle_label = _resolve_toggle_label(runtime_stage)
+    state = dict(control_state or {})
+    pending = str(state.get("status", "")).strip().lower() == "pending"
+    pending_action = str(state.get("action", "")).strip().lower()
+    pending_backend = str(state.get("backend", "")).strip()
+    disabled = (not is_hf_space) or pending
     disabled_style = {"opacity": 0.45, "cursor": "default"} if disabled else None
+
+    def _button_label(default_label: str, action_name: str) -> str:
+        if (
+            pending
+            and pending_backend == backend_name
+            and pending_action == action_name
+        ):
+            return f"{default_label}..."
+        return default_label
+
     return html.Div(
         [
-            html.Button(
-                toggle_label,
-                id=_backend_action_id("toggle", backend_name),
-                n_clicks=0,
-                className="dash-button",
-                disabled=disabled,
-                style=disabled_style,
+            html.Div(
+                [
+                    html.Button(
+                        _button_label(toggle_label, "toggle"),
+                        id=_backend_action_id("toggle", backend_name),
+                        n_clicks=0,
+                        className="dash-button",
+                        disabled=disabled,
+                        style=disabled_style,
+                    ),
+                    html.Button(
+                        _button_label("Restart", "restart"),
+                        id=_backend_action_id("restart", backend_name),
+                        n_clicks=0,
+                        className="dash-button",
+                        disabled=disabled,
+                        style=disabled_style,
+                    ),
+                    html.Button(
+                        _button_label("Rebuild", "rebuild"),
+                        id=_backend_action_id("rebuild", backend_name),
+                        n_clicks=0,
+                        className="dash-button",
+                        disabled=disabled,
+                        style=disabled_style,
+                    ),
+                    html.Button(
+                        _button_label("Squash", "squash"),
+                        id=_backend_action_id("squash", backend_name),
+                        n_clicks=0,
+                        className="dash-button",
+                        disabled=disabled,
+                        style=disabled_style,
+                    ),
+                ],
+                className="dash-action-row dash-action-row-compact",
             ),
-            html.Button(
-                "Restart",
-                id=_backend_action_id("restart", backend_name),
-                n_clicks=0,
-                className="dash-button",
-                disabled=disabled,
-                style=disabled_style,
-            ),
-            html.Button(
-                "Rebuild",
-                id=_backend_action_id("rebuild", backend_name),
-                n_clicks=0,
-                className="dash-button",
-                disabled=disabled,
-                style=disabled_style,
-            ),
-            html.Button(
-                "Squash",
-                id=_backend_action_id("squash", backend_name),
-                n_clicks=0,
-                className="dash-button",
-                disabled=disabled,
-                style=disabled_style,
+            _instance_control_feedback(
+                backend_name,
+                state,
+                toggle_label=toggle_label,
             ),
         ],
-        className="dash-action-row dash-action-row-compact",
     )
 
 
@@ -521,6 +836,7 @@ def _build_body(
     ids: dict[str, str] | None = None,
     search_state: dict | None = None,
     control_state: dict | None = None,
+    control_preview: dict | None = None,
 ):
     ids = ids or _panel_ids("google-hub-panel")
     requests = snapshot.get("requests", {})
@@ -528,6 +844,21 @@ def _build_body(
     instances = list(snapshot.get("backends", []))
     node = dict(snapshot.get("node", {}))
     request_log = list(requests.get("request_log", []))
+    effective_search_state = dict(search_state or {})
+    effective_control_state = _resolve_effective_control_state(
+        control_state,
+        control_preview,
+    )
+
+    if (
+        str(effective_search_state.get("status", "")).strip().lower() == "pending"
+        and str(effective_control_state.get("status", "")).strip().lower() == "ok"
+    ):
+        effective_control_state = {
+            **effective_control_state,
+            "message": "",
+            "results": [],
+        }
 
     node["value"] = mask_private_value(
         str(node.get("label", "")),
@@ -564,7 +895,7 @@ def _build_body(
                     _build_search_card(
                         ids,
                         snapshot,
-                        dict(search_state or {}),
+                        effective_search_state,
                     )
                 ],
                 kind="search",
@@ -580,7 +911,10 @@ def _build_body(
             section(
                 "Instances",
                 build_backend_instance_cards(
-                    instances, control_factory=_build_instance_controls
+                    instances,
+                    control_factory=lambda item: _build_instance_controls(
+                        item, effective_control_state
+                    ),
                 ),
                 kind="instance",
                 collapsible=True,
@@ -589,7 +923,7 @@ def _build_body(
             ),
             section(
                 "Controls",
-                [_build_global_controls_card(ids, control_state)],
+                [_build_global_controls_card(ids, effective_control_state, snapshot)],
                 kind="search",
                 collapsible=True,
                 open=False,
@@ -665,7 +999,17 @@ def mount_google_hub_panel(
                 data={"request_id": 0, "query": "", "backend": ""},
             ),
             dcc.Store(
+                id=ids["control_request"],
+                storage_type="memory",
+                data={"request_id": 0, "action": "", "backend": ""},
+            ),
+            dcc.Store(
                 id=ids["control_state"],
+                storage_type="memory",
+                data={"status": "idle", "message": ""},
+            ),
+            dcc.Store(
+                id=ids["control_preview"],
                 storage_type="memory",
                 data={"status": "idle", "message": ""},
             ),
@@ -863,21 +1207,104 @@ def mount_google_hub_panel(
         prevent_initial_call=True,
     )
 
-    # Instant DOM feedback: update search status text directly on click
-    # This bypasses the server round-trip, giving immediate visual feedback
     dash_app.clientside_callback(
-        """
-        function(n_clicks, query) {
-            if (!Number(n_clicks || 0) || !String(query || '').trim()) {
+        f"""
+        function(startAll, stopAll, restartAll, rebuildAll, restartBad, rebuildBad, squashAll, backendClicks, currentRequest, currentPreview) {{
+            const trigger = dash_clientside.callback_context.triggered_id;
+            const triggered = (dash_clientside.callback_context.triggered || [])[0] || null;
+            if (!trigger) {{
                 return [window.dash_clientside.no_update, window.dash_clientside.no_update];
-            }
-            return ['Submitted. Searching across hub routing...', 'dash-search-status pending'];
-        }
+            }}
+            let action = '';
+            let backend = '';
+            if (typeof trigger === 'object') {{
+                action = String(trigger.action || '');
+                backend = String(trigger.backend || '');
+            }} else if (trigger === {ids['control_start_all']!r}) {{
+                action = 'start-all';
+            }} else if (trigger === {ids['control_stop_all']!r}) {{
+                action = 'stop-all';
+            }} else if (trigger === {ids['control_restart_all']!r}) {{
+                action = 'restart-all';
+            }} else if (trigger === {ids['control_rebuild_all']!r}) {{
+                action = 'rebuild-all';
+            }} else if (trigger === {ids['control_restart_bad']!r}) {{
+                action = 'restart-bad-all';
+            }} else if (trigger === {ids['control_rebuild_bad']!r}) {{
+                action = 'rebuild-bad-all';
+            }} else if (trigger === {ids['control_squash_all']!r}) {{
+                action = 'squash-all';
+            }}
+            if (!action) {{
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }}
+            const clickCount = Number((triggered && triggered.value) || 0);
+            if (!clickCount) {{
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }}
+            const currentQueued = currentRequest || {{}};
+            const current = currentPreview || {{}};
+            if (
+                Number(currentQueued.request_id || 0) === clickCount &&
+                String(currentQueued.action || '') === action &&
+                String(currentQueued.backend || '') === backend
+            ) {{
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }}
+            if (
+                String(current.action || '') === action &&
+                String(current.backend || '') === backend &&
+                Number(current.click_count || 0) >= clickCount
+            ) {{
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }}
+            const labelMap = {{
+                'toggle': 'Toggle',
+                'restart': 'Restart',
+                'rebuild': 'Rebuild',
+                'squash': 'Squash',
+                'start-all': 'Start All',
+                'stop-all': 'Stop All',
+                'restart-all': 'Restart All',
+                'rebuild-all': 'Rebuild All',
+                'restart-bad-all': 'Restart Bad',
+                'rebuild-bad-all': 'Rebuild Bad',
+                'squash-all': 'Squash All'
+            }};
+            const targetText = backend ? (' for ' + backend) : '';
+            const request = {{
+                request_id: clickCount,
+                action: action,
+                backend: backend,
+            }};
+            const pending = {{
+                status: 'pending',
+                action: action,
+                backend: backend,
+                count: 0,
+                results: [],
+                click_count: clickCount,
+                started_ts: Date.now() / 1000,
+                message: 'Requesting ' + String(labelMap[action] || action) + targetText + '...'
+            }};
+            return [request, pending];
+        }}
         """,
-        Output(ids["search_status"], "children", allow_duplicate=True),
-        Output(ids["search_status"], "className", allow_duplicate=True),
-        Input(ids["search_submit"], "n_clicks"),
-        State(ids["search_query"], "value"),
+        Output(ids["control_request"], "data"),
+        Output(ids["control_preview"], "data"),
+        Input(ids["control_start_all"], "n_clicks"),
+        Input(ids["control_stop_all"], "n_clicks"),
+        Input(ids["control_restart_all"], "n_clicks"),
+        Input(ids["control_rebuild_all"], "n_clicks"),
+        Input(ids["control_restart_bad"], "n_clicks"),
+        Input(ids["control_rebuild_bad"], "n_clicks"),
+        Input(ids["control_squash_all"], "n_clicks"),
+        Input(
+            {"type": "google-hub-panel-backend-action", "action": ALL, "backend": ALL},
+            "n_clicks",
+        ),
+        State(ids["control_request"], "data"),
+        State(ids["control_preview"], "data"),
         prevent_initial_call=True,
     )
 
@@ -900,70 +1327,37 @@ def mount_google_hub_panel(
 
     @dash_app.callback(
         Output(ids["control_state"], "data"),
-        Input(ids["control_start_all"], "n_clicks"),
-        Input(ids["control_stop_all"], "n_clicks"),
-        Input(ids["control_restart_all"], "n_clicks"),
-        Input(ids["control_rebuild_all"], "n_clicks"),
-        Input(ids["control_squash_all"], "n_clicks"),
-        Input(
-            {"type": "google-hub-panel-backend-action", "action": ALL, "backend": ALL},
-            "n_clicks",
-        ),
+        Input(ids["control_request"], "data"),
         State(ids["access_state"], "data"),
         prevent_initial_call=True,
     )
     def run_control_action(
-        start_all_clicks: int,
-        stop_all_clicks: int,
-        restart_all_clicks: int,
-        rebuild_all_clicks: int,
-        squash_all_clicks: int,
-        backend_action_clicks: list[int],
+        control_request: dict | None,
         access_state: dict | None,
     ):
-        del (
-            start_all_clicks,
-            stop_all_clicks,
-            restart_all_clicks,
-            rebuild_all_clicks,
-            squash_all_clicks,
-            backend_action_clicks,
-        )
         unlocked = bool(dict(access_state or {}).get("unlocked")) or not bool(
             admin_token
         )
-        if not unlocked:
-            return {
-                "status": "error",
-                "message": "Unlock access to run HF control actions.",
-            }
-
-        trigger = callback_context.triggered_id
         try:
-            if isinstance(trigger, dict):
-                result = control_provider(
-                    str(trigger.get("action", "")), str(trigger.get("backend", ""))
-                )
-            elif trigger == ids["control_start_all"]:
-                result = control_provider("start-all", "")
-            elif trigger == ids["control_stop_all"]:
-                result = control_provider("stop-all", "")
-            elif trigger == ids["control_restart_all"]:
-                result = control_provider("restart-all", "")
-            elif trigger == ids["control_rebuild_all"]:
-                result = control_provider("rebuild-all", "")
-            elif trigger == ids["control_squash_all"]:
-                result = control_provider("squash-all", "")
-            else:
-                raise PreventUpdate
-            return {
-                "status": "ok",
-                "message": str(result.get("message", "Action requested")).strip(),
-            }
+            request = dict(control_request or {})
+            return _resolve_control_state(
+                int(request.get("request_id", 0) or 0),
+                request.get("action"),
+                request.get("backend"),
+                control_provider,
+                unlocked=unlocked,
+            )
         except PreventUpdate:
             raise
         except Exception as exc:
-            return {"status": "error", "message": sanitize_hf_control_error(str(exc))}
+            return {
+                "status": "error",
+                "message": sanitize_hf_control_error(str(exc)),
+                "action": "",
+                "backend": "",
+                "count": 0,
+                "results": [],
+            }
 
     @dash_app.callback(
         Output(ids["root"], "children"),
@@ -973,6 +1367,7 @@ def mount_google_hub_panel(
         Input(ids["page_size_state"], "data"),
         Input(ids["search_state"], "data"),
         Input(ids["control_state"], "data"),
+        Input(ids["control_preview"], "data"),
     )
     def refresh_panel(
         _n_intervals: int,
@@ -981,6 +1376,7 @@ def mount_google_hub_panel(
         page_size: int | None,
         search_state: dict | None,
         control_state: dict | None,
+        control_preview: dict | None,
     ):
         state = dict(access_state or default_access_state)
         return _build_body(
@@ -992,6 +1388,7 @@ def mount_google_hub_panel(
             ids=ids,
             search_state=dict(search_state or {}),
             control_state=dict(control_state or {}),
+            control_preview=dict(control_preview or {}),
         )
 
     app.mount(DEFAULT_GOOGLE_API_PANEL_PATH, WSGIMiddleware(dash_app.server))

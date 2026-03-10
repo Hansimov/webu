@@ -20,6 +20,7 @@ from webu.google_hub.manager import (
 )
 from webu.google_hub.panel import _accepted_admin_tokens
 from webu.google_hub.panel import _build_body as build_google_hub_panel_body
+from webu.google_hub.panel import _resolve_control_state
 from webu.google_hub.panel import _resolve_search_state
 from webu.google_hub.server import create_google_hub_server
 
@@ -418,6 +419,49 @@ def test_hub_search_requires_real_submit_click():
     assert result["backend"] == "space1"
 
 
+def test_hub_control_requires_real_request_and_unlock():
+    calls = []
+
+    def _control_provider(action, backend):
+        calls.append((action, backend))
+        return {
+            "message": f"{action} requested for {backend or 'all'}",
+            "action": action,
+            "backend": backend,
+            "count": 1,
+            "results": [],
+        }
+
+    with pytest.raises(PreventUpdate):
+        _resolve_control_state(0, "toggle", "remote", _control_provider, unlocked=True)
+
+    with pytest.raises(PreventUpdate):
+        _resolve_control_state(1, "", "remote", _control_provider, unlocked=True)
+
+    locked = _resolve_control_state(
+        1,
+        "toggle",
+        "remote",
+        _control_provider,
+        unlocked=False,
+    )
+    assert locked["status"] == "error"
+    assert locked["message"] == "Unlock access to run HF control actions."
+    assert calls == []
+
+    result = _resolve_control_state(
+        2,
+        "toggle",
+        "remote",
+        _control_provider,
+        unlocked=True,
+    )
+    assert result["status"] == "ok"
+    assert result["action"] == "toggle"
+    assert result["backend"] == "remote"
+    assert calls == [("toggle", "remote")]
+
+
 def test_sanitize_hub_search_error_scrubs_legacy_timeout_string():
     message = (
         "all hub backends failed: HTTPSConnectionPool(host='owner-b-space4.hf.space', "
@@ -513,7 +557,23 @@ def test_hub_panel_shows_pending_search_feedback():
             "history": [],
             "request_log": [],
         },
-        "backends": [],
+        "backends": [
+            {
+                "name": "route-alpha",
+                "space_name": "owner/route-alpha",
+                "kind": "hf-space",
+                "base_url": "https://owner-route-alpha.hf.space",
+                "resolved_ipv4": "10.20.30.40",
+                "runtime_stage": "RUNNING",
+                "healthy": True,
+                "enabled": True,
+                "disabled_reason": "",
+                "request_count": 3,
+                "success_rate": 100.0,
+                "avg_request_latency_ms": 180.0,
+                "selection_score": 180.0,
+            }
+        ],
     }
     body = build_google_hub_panel_body(
         snapshot,
@@ -530,11 +590,19 @@ def test_hub_panel_shows_pending_search_feedback():
             "error": "",
         },
         control_state={"status": "ok", "message": "start requested for 4 HF space(s)"},
+        control_preview={
+            "status": "pending",
+            "action": "restart",
+            "backend": "route-alpha",
+            "message": "Requesting Restart for route-alpha...",
+            "results": [],
+        },
     )
     text_values = _collect_text(body)
-    assert "Submitted. Searching across hub routing..." in text_values
-    assert "Searching for OpenAI news..." in text_values
+    assert "Searching via Route route-alpha ..." in text_values
+    assert "Searching for OpenAI news via Route route-alpha..." in text_values
     assert "start requested for 4 HF space(s)" not in text_values
+    assert "Requesting Restart for route-alpha..." in text_values
 
 
 def test_hub_search_falls_back_to_next_backend(monkeypatch, tmp_path):
@@ -871,12 +939,18 @@ def test_hub_health_refresh_resolves_ipv4_for_healthy_hf_backend(monkeypatch):
         "webu.google_hub.manager.socket.gethostbyname",
         lambda hostname: "10.20.30.40",
     )
+    monkeypatch.setattr(
+        "webu.google_hub.manager.GoogleHubManager._get_space_runtime_state",
+        lambda self, space_name: ("RUNNING", 7200),
+    )
 
     manager = GoogleHubManager(settings)
     snapshot = asyncio.run(manager.refresh_backend_health("space1"))
 
     assert snapshot["healthy"] is True
     assert snapshot["resolved_ipv4"] == "10.20.30.40"
+    assert snapshot["runtime_stage"] == "RUNNING"
+    assert snapshot["status_label"] == "RUNNING"
 
 
 def test_hub_control_backend_toggle_start_for_paused_space(monkeypatch):
@@ -949,6 +1023,199 @@ def test_hub_control_backend_toggle_start_for_paused_space(monkeypatch):
     assert result["action"] == "start"
     assert result["backend"] == "space1"
     assert result["snapshot"]["runtime_stage"] == "RUNNING"
+
+
+def test_hub_health_refresh_marks_building_space_as_transition(monkeypatch):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            )
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    monkeypatch.setattr(
+        "webu.google_hub.manager.GoogleHubManager._get_space_runtime_state",
+        lambda self, space_name: ("RUNNING_BUILDING", 7200),
+    )
+
+    manager = GoogleHubManager(settings)
+    snapshot = asyncio.run(manager.refresh_backend_health("space1"))
+
+    assert snapshot["healthy"] is False
+    assert snapshot["runtime_stage"] == "RUNNING_BUILDING"
+    assert snapshot["status_label"] == "RUNNING_BUILDING"
+    assert snapshot["status_tone"] == "info"
+
+
+def test_hub_health_refresh_updates_transition_stage_during_background_poll(
+    monkeypatch,
+):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            )
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    monkeypatch.setattr(
+        "webu.google_hub.manager.GoogleHubManager._get_space_runtime_state",
+        lambda self, space_name: ("RUNNING", 7200),
+    )
+    monkeypatch.setattr(
+        "webu.google_hub.manager.requests.get",
+        lambda url, timeout=None: _Response(200, {"status": "ok"}),
+    )
+    monkeypatch.setattr(
+        "webu.google_hub.manager.socket.gethostbyname",
+        lambda hostname: "10.20.30.40",
+    )
+
+    manager = GoogleHubManager(settings)
+    manager.states["space1"].runtime_stage = "APP_STARTING"
+    manager.states["space1"].healthy = False
+
+    snapshot = asyncio.run(
+        manager.refresh_backend_health("space1", fetch_runtime_stage=False)
+    )
+
+    assert snapshot["healthy"] is True
+    assert snapshot["runtime_stage"] == "RUNNING"
+    assert snapshot["status_label"] == "RUNNING"
+    assert snapshot["status_tone"] == "accent"
+
+
+def test_hub_health_refresh_gracefully_keeps_running_space_healthy_on_single_probe_failure(
+    monkeypatch,
+):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            )
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    monkeypatch.setattr(
+        "webu.google_hub.manager.GoogleHubManager._get_space_runtime_state",
+        lambda self, space_name: ("RUNNING", 7200),
+    )
+    monkeypatch.setattr(
+        "webu.google_hub.manager.requests.get",
+        lambda url, timeout=None: (_ for _ in ()).throw(RuntimeError("probe timeout")),
+    )
+
+    manager = GoogleHubManager(settings)
+    snapshot = asyncio.run(manager.refresh_backend_health("space1"))
+
+    assert snapshot["healthy"] is True
+    assert snapshot["status_label"] == "RUNNING"
+    assert snapshot["status_tone"] == "accent"
+
+
+def test_hub_control_all_bad_targets_only_non_running_spaces(monkeypatch):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            ),
+            GoogleHubBackend(
+                name="space2",
+                kind="hf-space",
+                base_url="https://owner-space2.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space2",
+            ),
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    manager = GoogleHubManager(settings)
+    manager.states["space1"].runtime_stage = "RUNNING"
+    manager.states["space1"].healthy = True
+    manager.states["space2"].runtime_stage = "PAUSED"
+    manager.states["space2"].healthy = False
+
+    called = []
+
+    async def _fake_control_backend(backend_name, action):
+        called.append((backend_name, action))
+        return {
+            "backend": backend_name,
+            "space_name": f"owner/{backend_name}",
+            "action": action,
+            "runtime_stage": "RUNNING",
+            "runtime_sleep_time": 7200,
+        }
+
+    monkeypatch.setattr(manager, "control_backend", _fake_control_backend)
+
+    result = asyncio.run(manager.control_all_backends("restart-bad"))
+
+    assert called == [("space2", "restart")]
+    assert result["count"] == 1
+    assert "non-running HF space(s)" in result["message"]
 
 
 def test_sanitize_hf_control_error_scrubs_network_failure():
@@ -1093,7 +1360,7 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert any("dash-strip-card" in value for value in class_names)
     assert "UPTIME" in text_values
     assert "1h 0m 0s" in text_values
-    assert "disabled" in text_values
+    assert "DISABLED" in text_values
     assert "10.20.30.40" in text_values
     assert "127.0.0.1" not in text_values
     assert "OpenAI news headline | short snippet | example.com" in text_values
@@ -1104,6 +1371,8 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "Stop All" in text_values
     assert "Restart All" in text_values
     assert "Rebuild All" in text_values
+    assert "Restart Bad" in text_values
+    assert "Rebuild Bad" in text_values
     assert "Squash All" in text_values
     assert "Restart" in text_values
     assert "dash-action-row dash-action-row-compact" in class_names
@@ -1131,36 +1400,115 @@ def test_hub_panel_body_includes_uptime_and_status_bars():
     assert "Query OpenAI news" not in text_values
     assert "Mode manual" not in text_values
     assert "Instance remote" not in text_values
-    assert "OpenAI news" in text_values
-    assert "remote" in text_values
+    assert "Results 1" not in text_values
+    assert "RUNNING" in text_values
+    assert text_values.index("10.20.30.40") < text_values.index("RUNNING")
 
-    search_details = [
-        detail
-        for detail in _collect_details_with_class_token(body, "dash-collapse")
-        if _detail_contains_component_id(detail, "google-hub-panel-search-query")
-    ]
-    section_details = _collect_details_with_class_token(body, "dash-section-collapse")
-    assert search_details and search_details[0].open is False
-    assert search_details[0].__dict__["data-webu-collapse-key"] == "google-hub-search"
-    assert search_details[0].__dict__["data-webu-collapse-open"] == "0"
-    keyed_details = {
-        str(detail.__dict__.get("data-webu-collapse-key", "")): detail
-        for detail in section_details
+
+def test_hub_panel_shows_instance_and_global_control_feedback():
+    snapshot = {
+        "updated_at_human": "2026-03-09 09:00:00",
+        "current_time_human": "2026-03-09 09:00:00",
+        "timezone_human": "UTC+08 Shanghai",
+        "started_at_human": "2026-03-09 08:00:00",
+        "uptime_human": "1h 0m 0s",
+        "strategy": "adaptive",
+        "node": {"label": "Server IP", "value": "1.2.3.4"},
+        "health": {"healthy_backends": 1, "backend_count": 1, "enabled_backends": 1},
+        "requests": {
+            "accepted_requests": 0,
+            "successful_requests": 0,
+            "failed_requests": 0,
+            "success_rate": 0.0,
+            "avg_latency_ms": 0.0,
+            "median_latency_ms": 0.0,
+            "recent_latency_ms": 0.0,
+            "last_latency_ms": 0.0,
+            "history": [],
+            "request_log": [],
+        },
+        "backends": [
+            {
+                "name": "remote",
+                "space_name": "owner/space",
+                "kind": "hf-space",
+                "base_url": "https://owner-space.hf.space",
+                "resolved_ipv4": "10.20.30.40",
+                "runtime_stage": "RUNNING",
+                "healthy": True,
+                "enabled": True,
+                "disabled_reason": "",
+                "request_count": 3,
+                "success_rate": 66.7,
+                "avg_request_latency_ms": 260.0,
+            },
+        ],
     }
-    assert keyed_details["google-hub-controls"].open is False
-    assert (
-        keyed_details["google-hub-controls"].__dict__["data-webu-collapse-open"] == "0"
+
+    pending_body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=True,
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+        control_preview={
+            "status": "pending",
+            "action": "restart-bad-all",
+            "backend": "",
+            "message": "Requesting Restart Bad...",
+            "results": [],
+        },
     )
-    assert keyed_details["google-hub-trends"].open is True
-    assert keyed_details["google-hub-trends"].__dict__["data-webu-collapse-open"] == "1"
-    assert keyed_details["google-hub-instances"].open is True
-    assert (
-        keyed_details["google-hub-instances"].__dict__["data-webu-collapse-open"] == "1"
+    pending_text = _collect_text(pending_body)
+    assert "Restarting bad..." in pending_text
+    assert "Requesting Restart Bad across matching instances..." in pending_text
+
+    success_body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=True,
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+        control_state={
+            "status": "ok",
+            "action": "restart",
+            "backend": "remote",
+            "message": "restart requested for remote",
+            "results": [
+                {
+                    "backend": "remote",
+                    "space_name": "owner/space",
+                    "action": "restart",
+                    "runtime_stage": "RUNNING",
+                }
+            ],
+        },
     )
-    assert keyed_details["google-hub-requests"].open is True
-    assert (
-        keyed_details["google-hub-requests"].__dict__["data-webu-collapse-open"] == "1"
+    success_text = _collect_text(success_body)
+    assert "restart requested for remote" in success_text
+    assert "Restart requested · RUNNING" in success_text
+
+    targeted_pending_body = build_google_hub_panel_body(
+        snapshot,
+        auth_unlocked=True,
+        admin_token_configured=True,
+        page=1,
+        page_size=10,
+        control_preview={
+            "status": "pending",
+            "action": "toggle",
+            "backend": "remote",
+            "message": "Requesting Toggle for remote...",
+            "click_count": 1,
+            "started_ts": time.time(),
+            "results": [],
+        },
     )
+    targeted_pending_text = _collect_text(targeted_pending_body)
+    assert "Requesting Stop for remote..." in targeted_pending_text
+    assert "Requesting Stop..." in targeted_pending_text
+    assert "Toggle is in progress." not in targeted_pending_text
+    assert "Requesting Toggle for remote..." not in targeted_pending_text
 
 
 def test_hub_panel_masks_server_ip_and_hides_request_history_when_locked():
