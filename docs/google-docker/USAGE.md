@@ -150,6 +150,26 @@ ggdk hf-sync-all --restart
 ggdk hf-sync-all --max-workers 4
 ```
 
+### 发布后检查
+
+完成 `hf-sync-all --restart` 后，推荐立刻执行：
+
+```bash
+# 1. 检查本地 hub 是否已感知 8 个健康后端
+gghb check
+
+# 2. 对本地 hub 和全部远端 HF Spaces 做真实搜索巡检
+gghb audit --target all
+
+# 3. 如需保留完整报告，写入 JSON 文件
+gghb audit --target all --output data/debug/google_api_hub_and_spaces_audit.json
+
+# 4. 确认无误后再压缩 Space 历史
+ggdk hf-super-squash
+```
+
+推荐把 `gghb audit --target all` 视为 HF 发布后的固定步骤，而不是临时调试命令。
+
 ### `hf-status`
 
 查看 HF Space 运行状态。

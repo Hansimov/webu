@@ -156,6 +156,36 @@ RICH_RESULT_HTML = """
 </html>
 """
 
+GOOGLE_PLAY_RESULT_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="A6K0A">
+        <a href="https://www.wikipedia.org/">
+          <h3>Wikipedia</h3>
+        </a>
+        <div><cite>www.wikipedia.org</cite></div>
+        <div data-sncf="1"><span>The free encyclopedia.</span></div>
+      </div>
+    </div>
+    <div class="MjjYud">
+      <div class="A6K0A">
+        <a href="https://play.google.com/store/apps/details?id=org.wikipedia">
+          <h3>Wikipedia - Apps on Google Play</h3>
+        </a>
+        <div><cite>play.google.com > store > apps</cite></div>
+        <div data-sncf="1"><span>The official Wikipedia Android app.</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
 VIDEO_META_HTML = """
 <!DOCTYPE html>
 <html>
@@ -341,6 +371,55 @@ CLUSTERED_VIDEO_HTML = """
             <div><span>740+ likes</span><span> · </span><span>17 hours ago</span></div>
             <div><span>DeItaone · X</span></div>
           </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+THUMBNAIL_SIBLING_VIDEO_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="A6K0A">
+        <div class="PmEWq wHYlTd Ww4FFb vt6azd">
+          <div>
+            <div class="xe8e1b">
+              <div>
+                <div class="b8lM7">
+                  <span class="V9tjod">
+                    <a class="zReHs" href="https://www.youtube.com/watch?v=j5ymFPuQDuE">
+                      <h3>OpenAI executives pivot on expanding Stargate to put ...</h3>
+                      <div class="notranslate ESMNde HGLrXd ojE3Fb">
+                        <div class="q0vns">
+                          <div class="CA5RN">
+                            <div><span class="VuuXrf">YouTube · CNBC Television</span></div>
+                            <div class="byrV5b"><cite>8K+ views · 22 hours ago</cite></div>
+                          </div>
+                        </div>
+                      </div>
+                    </a>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="iHxmLe">
+            <a class="rIRoqf" href="https://www.youtube.com/watch?v=j5ymFPuQDuE" aria-label="OpenAI executives pivot on expanding Stargate to put ... by CNBC Television on YouTube. Play on YouTube. 2:32">
+              <div class="gY2b2c">
+                <div><span>2:32</span></div>
+              </div>
+            </a>
+            <div class="ITCGwe">
+              <div class="ITZIwc p4wth">CNBC's Deirdre Bosa reports on news regarding OpenAI. OpenAI executives pivot on expanding Stargate to put capacity in other locations.</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -560,6 +639,15 @@ class TestGoogleResultParser:
         assert result.time_info == "23 Jul 2024"
         assert result.snippet.startswith("Welcome to Google's Python Class")
         assert "Read more" not in result.snippet
+
+    def test_play_google_result_is_not_treated_as_internal(self):
+        response = self.parser.parse(GOOGLE_PLAY_RESULT_HTML, query="wikipedia")
+        assert len(response.results) == 2
+        assert response.results[1].title == "Wikipedia - Apps on Google Play"
+        assert (
+            response.results[1].url
+            == "https://play.google.com/store/apps/details?id=org.wikipedia"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -806,6 +894,22 @@ class TestVideoResults:
         assert result.time_info == "1 day ago"
         assert result.snippet == "New York Times podcast collection"
 
+    def test_video_snippet_can_come_from_thumbnail_sibling_block(self):
+        response = self.parser.parse(
+            THUMBNAIL_SIBLING_VIDEO_HTML, query="openai youtube news"
+        )
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert (
+            result.title == "OpenAI executives pivot on expanding Stargate to put ..."
+        )
+        assert result.site_title == "YouTube · CNBC Television"
+        assert result.time_info == "22 hours ago"
+        assert (
+            result.snippet
+            == "CNBC's Deirdre Bosa reports on news regarding OpenAI. OpenAI executives pivot on expanding Stargate to put capacity in other locations"
+        )
+
     def test_sitelinks_inherit_parent_site_title(self):
         response = self.parser.parse(
             SITELINK_INHERITANCE_HTML, query="google python class"
@@ -836,6 +940,9 @@ class TestHelperFunctions:
         """测试允许的 Google 子域（有实际内容的）。"""
         assert not _is_google_internal("https://developers.google.com/edu/python")
         assert not _is_google_internal("https://cloud.google.com/products")
+        assert not _is_google_internal(
+            "https://play.google.com/store/apps/details?id=org.wikipedia"
+        )
 
     def test_external_urls_not_internal(self):
         """测试外部 URL 不被判定为 Google 内部。"""

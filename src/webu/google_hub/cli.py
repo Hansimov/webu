@@ -20,6 +20,7 @@ from webu.cli_support import (
     tail_service_log,
     write_pid,
 )
+from webu.google_api.audit import audit_has_failures, format_audit_summary, run_audit
 from webu.google_hub.benchmark import run_http_benchmark
 from webu.google_hub.manager import resolve_google_hub_settings
 from webu.runtime_settings import get_workspace_paths
@@ -255,6 +256,24 @@ def cmd_benchmark(args):
     print(json.dumps(summary.to_dict(), indent=2, ensure_ascii=False))
 
 
+def cmd_audit(args):
+    payload = run_audit(
+        target=args.target,
+        hub_url=args.hub_url,
+        output_path=args.output,
+    )
+    output_format = str(args.format or "summary").strip().lower()
+    if output_format == "json":
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    elif output_format == "both":
+        print(format_audit_summary(payload))
+        print()
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(format_audit_summary(payload))
+    return 1 if audit_has_failures(payload) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gghb",
@@ -307,6 +326,34 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--lang", default="en")
     search.add_argument("--timeout", type=int, default=60)
     search.set_defaults(func=cmd_search)
+
+    audit = subparsers.add_parser(
+        "audit",
+        help="审计本地 hub 与远端 HF Spaces 的真实搜索可用性",
+    )
+    audit.add_argument(
+        "--target",
+        choices=["spaces", "hub", "all"],
+        default="all",
+        help="审计目标：只查 spaces、只查 hub，或一起查",
+    )
+    audit.add_argument(
+        "--hub-url",
+        default="",
+        help="覆盖本地 hub 地址，默认读取 configs/google_hub.json",
+    )
+    audit.add_argument(
+        "--output",
+        default="",
+        help="可选：将完整 JSON 报告写入指定路径",
+    )
+    audit.add_argument(
+        "--format",
+        choices=["summary", "json", "both"],
+        default="summary",
+        help="stdout 输出格式，默认显示人类可读摘要",
+    )
+    audit.set_defaults(func=cmd_audit)
 
     benchmark = subparsers.add_parser("benchmark", help="对本地 hub 执行并发 benchmark")
     benchmark.add_argument("--port", type=int, default=DEFAULT_PORT)

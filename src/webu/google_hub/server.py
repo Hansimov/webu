@@ -112,7 +112,8 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
     async def search(
         q: str = Query(..., min_length=1),
         num: int = Query(10, ge=1, le=50),
-        lang: str = Query("en"),
+        lang: str | None = Query(None),
+        locale: str | None = Query(None),
         backend: str = Query(""),
     ):
         try:
@@ -120,6 +121,7 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
                 query=q,
                 num=num,
                 lang=lang,
+                locale=locale,
                 backend_name=backend,
             )
             return HubSearchResponse(**payload)
@@ -223,6 +225,7 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
                 query=query,
                 num=num,
                 lang=lang,
+                locale=None,
                 backend_name=backend_name,
             )
         ),

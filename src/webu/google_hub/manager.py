@@ -45,6 +45,7 @@ HF_SPACE_ERROR_STAGES = {
     "PAUSED",
 }
 HF_SPACE_RUNTIME_REFRESH_TIMEOUT_SEC = 1.5
+HF_SPACE_RUNTIME_REFRESH_INTERVAL_SEC = 15.0
 
 
 def _normalize_runtime_stage(stage: str | None) -> str:
@@ -83,7 +84,14 @@ def _should_refresh_runtime_stage(
         return False
     if fetch_runtime_stage:
         return True
-    return _normalize_runtime_stage(state.runtime_stage) in HF_SPACE_TRANSITION_STAGES
+    if _normalize_runtime_stage(state.runtime_stage) in HF_SPACE_TRANSITION_STAGES:
+        return True
+    if state.last_runtime_stage_refresh_ts <= 0:
+        return True
+    return (
+        time.time() - state.last_runtime_stage_refresh_ts
+        >= HF_SPACE_RUNTIME_REFRESH_INTERVAL_SEC
+    )
 
 
 @dataclass(frozen=True)
@@ -139,6 +147,7 @@ class BackendRuntimeState:
     latency_ewma_ms: float = 0.0
     selection_score: float = 0.0
     last_checked_ts: float = 0.0
+    last_runtime_stage_refresh_ts: float = 0.0
     last_selected_ts: float = 0.0
     last_success_ts: float = 0.0
     last_failure_ts: float = 0.0
@@ -251,6 +260,7 @@ class BackendRuntimeState:
             "status_tone": status_tone,
             "is_running": is_running,
             "last_checked_ts": self.last_checked_ts,
+            "last_runtime_stage_refresh_ts": self.last_runtime_stage_refresh_ts,
             "last_selected_ts": self.last_selected_ts,
             "last_success_ts": self.last_success_ts,
             "last_failure_ts": self.last_failure_ts,
@@ -594,11 +604,17 @@ class GoogleHubManager:
                 has_unhealthy = any(
                     s.backend.enabled and not s.healthy for s in self.states.values()
                 )
+                has_hf_backends = any(
+                    s.backend.enabled and s.backend.kind == "hf-space"
+                    for s in self.states.values()
+                )
                 interval = (
                     min(10, self.settings.health_interval_sec)
                     if has_unhealthy
                     else self.settings.health_interval_sec
                 )
+                if has_hf_backends:
+                    interval = min(interval, HF_SPACE_RUNTIME_REFRESH_INTERVAL_SEC)
                 await asyncio.sleep(interval)
 
     async def refresh_all_health(self, *, fetch_runtime_stage: bool = True):
@@ -647,8 +663,10 @@ class GoogleHubManager:
                     )
                     state.runtime_stage = _normalize_runtime_stage(runtime_stage)
                     state.runtime_sleep_time = int(sleep_time or 0)
+                    state.last_runtime_stage_refresh_ts = time.time()
                 except Exception as exc:
                     runtime_stage_error = str(exc)
+                    state.last_runtime_stage_refresh_ts = time.time()
                     state.runtime_stage = previous_runtime_stage
 
                 runtime_stage = _normalize_runtime_stage(state.runtime_stage)
@@ -1051,7 +1069,8 @@ class GoogleHubManager:
         *,
         query: str,
         num: int,
-        lang: str,
+        lang: str | None,
+        locale: str | None = None,
         backend_name: str = "",
     ) -> dict[str, Any]:
         requested_name = str(backend_name or "").strip()
@@ -1078,10 +1097,15 @@ class GoogleHubManager:
                 headers = {}
                 if state.backend.search_api_token:
                     headers["X-Api-Token"] = state.backend.search_api_token
+                params = {"q": query, "num": num}
+                if lang:
+                    params["lang"] = lang
+                if locale:
+                    params["locale"] = locale
                 response = await asyncio.to_thread(
                     requests.get,
                     f"{state.backend.base_url}/search",
-                    params={"q": query, "num": num, "lang": lang},
+                    params=params,
                     headers=headers or None,
                     timeout=attempt_timeout_sec,
                 )

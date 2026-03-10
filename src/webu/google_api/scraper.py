@@ -32,8 +32,8 @@ from .constants import (
     SEARCH_TIMEOUT,
     USER_AGENTS,
     VIEWPORT_SIZES,
-    LOCALES,
 )
+from .locale import SearchLocaleProfile, resolve_search_locale_profile
 from .parser import GoogleResultParser, GoogleSearchResponse
 from .profile_assets import (
     resolve_bootstrap_secret,
@@ -310,7 +310,8 @@ class GoogleScraper:
         self,
         query: str,
         num: int = 10,
-        lang: str = "en",
+        lang: str | None = None,
+        locale: str | None = None,
         proxy_url: str = None,
         retry_count: int = 2,
     ) -> GoogleSearchResponse:
@@ -372,6 +373,7 @@ class GoogleScraper:
                 query=query,
                 num=num,
                 lang=lang,
+                locale=locale,
                 proxy_url=current_proxy,
             )
 
@@ -427,7 +429,8 @@ class GoogleScraper:
         self,
         query: str,
         num: int = 10,
-        lang: str = "en",
+        lang: str | None = None,
+        locale: str | None = None,
         proxy_url: str = None,
         retry_count: int = 2,
     ) -> GoogleRawHtmlResponse:
@@ -455,6 +458,7 @@ class GoogleScraper:
                 query=query,
                 num=num,
                 lang=lang,
+                locale=locale,
                 proxy_url=current_proxy,
             )
 
@@ -484,7 +488,8 @@ class GoogleScraper:
         self,
         query: str,
         num: int,
-        lang: str,
+        lang: str | None,
+        locale: str | None,
         proxy_url: str = None,
     ) -> GoogleSearchResponse:
         """执行单次搜索（内部方法）。
@@ -500,12 +505,25 @@ class GoogleScraper:
         response = GoogleSearchResponse(query=query)
 
         try:
+            locale_profile = resolve_search_locale_profile(
+                query,
+                lang=lang,
+                locale=locale,
+            )
             search_perf.start("context_setup")
-            context, page = await self._create_search_context(proxy_url)
+            context, page = await self._create_search_context(
+                proxy_url,
+                locale_profile,
+            )
             search_perf.stop()
 
             search_perf.start("page_navigation")
-            html, elapsed_ms, _ = await self._load_search_page(page, query, num, lang)
+            html, elapsed_ms, _ = await self._load_search_page(
+                page,
+                query,
+                num,
+                locale_profile,
+            )
             search_perf.stop()
 
             search_perf.start("get_html")
@@ -657,7 +675,8 @@ class GoogleScraper:
         self,
         query: str,
         num: int,
-        lang: str,
+        lang: str | None,
+        locale: str | None,
         proxy_url: str = None,
     ) -> GoogleRawHtmlResponse:
         context = None
@@ -665,9 +684,14 @@ class GoogleScraper:
         response = GoogleRawHtmlResponse(query=query, proxy_url=proxy_url or "direct")
 
         try:
-            context, page = await self._create_search_context(proxy_url)
+            locale_profile = resolve_search_locale_profile(
+                query,
+                lang=lang,
+                locale=locale,
+            )
+            context, page = await self._create_search_context(proxy_url, locale_profile)
             html, elapsed_ms, final_url = await self._load_search_page(
-                page, query, num, lang
+                page, query, num, locale_profile
             )
             response.html = html
             response.elapsed_ms = elapsed_ms
@@ -692,16 +716,22 @@ class GoogleScraper:
 
         return response
 
-    async def _create_search_context(self, proxy_url: str | None):
+    async def _create_search_context(
+        self,
+        proxy_url: str | None,
+        locale_profile: SearchLocaleProfile,
+    ):
         ua = random.choice(USER_AGENTS)
         viewport = random.choice(VIEWPORT_SIZES)
-        locale = random.choice(LOCALES)
 
         context_opts = {
             "user_agent": ua,
             "viewport": viewport,
-            "locale": locale,
+            "locale": locale_profile.locale,
             "ignore_https_errors": True,
+            "extra_http_headers": {
+                "Accept-Language": locale_profile.accept_language_header,
+            },
         }
         if proxy_url:
             context_opts["proxy"] = {"server": proxy_url}
@@ -714,8 +744,8 @@ class GoogleScraper:
             proxy_display = proxy_url or "direct"
             logger.mesg(f"  ◆ Context created (proxy: {logstr.file(proxy_display)})")
 
-        await page.add_init_script(
-            """
+        navigator_languages_json = json.dumps(locale_profile.navigator_languages)
+        init_script = """
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined,
             });
@@ -723,18 +753,26 @@ class GoogleScraper:
                 get: () => [1, 2, 3, 4, 5],
             });
             Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en'],
+                get: () => __NAVIGATOR_LANGUAGES__,
             });
             window.chrome = {
                 runtime: {},
             };
-        """
+        """.replace(
+            "__NAVIGATOR_LANGUAGES__", navigator_languages_json
         )
+        await page.add_init_script(init_script)
 
         return context, page
 
-    async def _load_search_page(self, page, query: str, num: int, lang: str):
-        params = {"q": query, "num": num, "hl": lang}
+    async def _load_search_page(
+        self,
+        page,
+        query: str,
+        num: int,
+        locale_profile: SearchLocaleProfile,
+    ):
+        params = {"q": query, "num": num, "hl": locale_profile.lang}
         url = f"{GOOGLE_SEARCH_URL}?{urlencode(params)}"
 
         if self._search_count == 0:
@@ -915,7 +953,8 @@ class GoogleScraper:
         self,
         queries: list[str],
         num: int = 10,
-        lang: str = "en",
+        lang: str | None = None,
+        locale: str | None = None,
         delay_range: tuple = (2, 5),
     ) -> list[GoogleSearchResponse]:
         """批量搜索（顺序执行，带随机延迟）。"""
@@ -926,7 +965,12 @@ class GoogleScraper:
 
         for i, query in enumerate(queries):
             logger.note(f"> [{i + 1}/{total}] Searching: {logstr.mesg(query)}")
-            result = await self.search(query=query, num=num, lang=lang)
+            result = await self.search(
+                query=query,
+                num=num,
+                lang=lang,
+                locale=locale,
+            )
             results.append(result)
 
             if i < total - 1:

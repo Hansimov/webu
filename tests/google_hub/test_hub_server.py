@@ -1116,6 +1116,103 @@ def test_hub_health_refresh_updates_transition_stage_during_background_poll(
     assert snapshot["status_tone"] == "accent"
 
 
+def test_hub_health_refresh_periodically_detects_running_to_building(monkeypatch):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            )
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    monkeypatch.setattr(
+        "webu.google_hub.manager.GoogleHubManager._get_space_runtime_state",
+        lambda self, space_name: ("BUILDING", 7200),
+    )
+
+    manager = GoogleHubManager(settings)
+    manager.states["space1"].runtime_stage = "RUNNING"
+    manager.states["space1"].healthy = True
+    manager.states["space1"].last_runtime_stage_refresh_ts = 0.0
+
+    snapshot = asyncio.run(
+        manager.refresh_backend_health("space1", fetch_runtime_stage=False)
+    )
+
+    assert snapshot["healthy"] is False
+    assert snapshot["runtime_stage"] == "BUILDING"
+    assert snapshot["status_label"] == "BUILDING"
+
+
+def test_hub_manager_search_omits_lang_when_not_explicit(monkeypatch):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=30,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="space1",
+                kind="hf-space",
+                base_url="https://owner-space1.hf.space",
+                enabled=True,
+                weight=1,
+                space_name="owner/space1",
+            )
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/search"):
+            assert params == {"q": "wikipedia", "num": 10, "locale": "fr-FR"}
+            return _Response(
+                200,
+                {
+                    "success": True,
+                    "query": "wikipedia",
+                    "results": [],
+                    "result_count": 0,
+                    "total_results_text": "",
+                    "has_captcha": False,
+                    "error": "",
+                },
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    manager = GoogleHubManager(settings)
+    manager.states["space1"].healthy = True
+    manager.states["space1"].runtime_stage = "RUNNING"
+
+    payload = asyncio.run(
+        manager.search(query="wikipedia", num=10, lang=None, locale="fr-FR")
+    )
+
+    assert payload["backend"] == "space1"
+
+
 def test_hub_health_refresh_gracefully_keeps_running_space_healthy_on_single_probe_failure(
     monkeypatch,
 ):

@@ -38,12 +38,15 @@ ggsc stop
 3. Docker 容器生命周期。
 4. HF Space 同步和远端诊断。
 
+远端 HF Spaces 和 hub 的发布后巡检请使用 `gghb audit`，不要在 `debugs/` 里维护长期复用脚本。
+
 ## 相关 CLI
 
 ```bash
 # 本地 hub 调试、查询、benchmark
 gghb check
 gghb search "OpenAI news"
+gghb audit --target all
 gghb benchmark --query "OpenAI news" --requests 20 --concurrency 5
 
 # Docker / HF / 配置管理

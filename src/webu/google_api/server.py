@@ -10,6 +10,8 @@ import tempfile
 import time
 import uvicorn
 
+from urllib.parse import quote
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pathlib import Path
@@ -54,7 +56,8 @@ class SearchRequest(BaseModel):
 
     query: str = Field(..., description="搜索关键词", min_length=1, max_length=500)
     num: int = Field(10, description="期望的搜索结果数量", ge=1, le=50)
-    lang: str = Field("en", description="搜索语言")
+    lang: Optional[str] = Field(None, description="搜索语言；留空时自动推断")
+    locale: Optional[str] = Field(None, description="浏览器 locale；留空时自动推断")
     proxy_url: Optional[str] = Field(None, description="指定代理 URL（可选）")
 
 
@@ -167,6 +170,17 @@ def _response_model_to_dict(response_model: BaseModel) -> dict:
     if hasattr(response_model, "model_dump"):
         return response_model.model_dump()
     return response_model.dict()
+
+
+def _safe_ascii_header_value(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    try:
+        text.encode("latin-1")
+        return text
+    except UnicodeEncodeError:
+        return quote(text, safe="")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -313,6 +327,7 @@ def create_google_search_server(
                 query=req.query,
                 num=req.num,
                 lang=req.lang,
+                locale=req.locale,
                 proxy_url=req.proxy_url,
             )
             success = not result.has_captcha and not bool(
@@ -398,20 +413,28 @@ def create_google_search_server(
     async def search_get(
         q: str = Query(..., description="搜索关键词", min_length=1),
         num: int = Query(10, description="结果数量", ge=1, le=50),
-        lang: str = Query("en", description="搜索语言"),
+        lang: str | None = Query(None, description="搜索语言；留空时自动推断"),
+        locale: str | None = Query(None, description="浏览器 locale；留空时自动推断"),
         proxy_url: str | None = Query(None, description="指定代理 URL（可选）"),
         api_token: str | None = Query(None, description="搜索接口 token，可选"),
         x_api_token: str | None = Header(default=None, alias="X-Api-Token"),
     ):
         """GET 方式执行 Google 搜索。"""
-        req = SearchRequest(query=q, num=num, lang=lang, proxy_url=proxy_url)
+        req = SearchRequest(
+            query=q,
+            num=num,
+            lang=lang,
+            locale=locale,
+            proxy_url=proxy_url,
+        )
         return await search(req, api_token=api_token, x_api_token=x_api_token)
 
     @app.get("/search_raw", tags=["搜索", "调试"])
     async def search_raw(
         q: str = Query(..., description="搜索关键词", min_length=1),
         num: int = Query(10, description="结果数量", ge=1, le=50),
-        lang: str = Query("en", description="搜索语言"),
+        lang: str | None = Query(None, description="搜索语言；留空时自动推断"),
+        locale: str | None = Query(None, description="浏览器 locale；留空时自动推断"),
         proxy_url: str | None = Query(None, description="指定代理 URL（可选）"),
         api_token: str | None = Query(None, description="搜索接口 token，可选"),
         x_api_token: str | None = Header(default=None, alias="X-Api-Token"),
@@ -424,13 +447,14 @@ def create_google_search_server(
             query=q,
             num=num,
             lang=lang,
+            locale=locale,
             proxy_url=proxy_url,
         )
         return Response(
             content=raw.html,
             media_type="text/html",
             headers={
-                "X-Query": raw.query,
+                "X-Query": _safe_ascii_header_value(raw.query),
                 "X-Final-Url": raw.final_url,
                 "X-Proxy-Url": raw.proxy_url,
                 "X-Elapsed-Ms": str(raw.elapsed_ms),

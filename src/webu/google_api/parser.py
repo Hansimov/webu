@@ -51,6 +51,10 @@ _ALLOWED_GOOGLE_SUBDOMAINS = {
     "cloud.google.com",
     "ai.google.dev",
     "colab.research.google.com",
+    "play.google.com",
+    "books.google.com",
+    "patents.google.com",
+    "scholar.google.com",
 }
 
 _RESULT_CONTAINER_CLASS_HINTS = {
@@ -929,7 +933,7 @@ class GoogleResultParser:
             for depth, parent in enumerate(primary_anchor.parents, start=1):
                 if not isinstance(parent, Tag):
                     continue
-                if depth > 4:
+                if depth > 6:
                     break
                 for anchor in parent.find_all("a", href=True):
                     if anchor == primary_anchor:
@@ -948,6 +952,35 @@ class GoogleResultParser:
                         if site_title and site_title in text:
                             continue
                         add_candidate(text, 3)
+
+                    related_roots = [
+                        candidate
+                        for candidate in [
+                            anchor.parent,
+                            anchor.parent.parent if anchor.parent else None,
+                        ]
+                        if isinstance(candidate, Tag)
+                    ]
+                    for related_root in related_roots:
+                        for node in related_root.find_all(
+                            ["div", "span", "p"], limit=80
+                        ):
+                            if anchor in node.parents:
+                                continue
+                            if node.find(["div", "span", "p"]):
+                                continue
+                            text = self._extract_text_without_links(node)
+                            if not text or len(text) < 15 or len(text) > 250:
+                                continue
+                            if title and title in text:
+                                continue
+                            if site_title and site_title in text:
+                                continue
+                            if _looks_like_metric_text(text) or _looks_like_time_info(
+                                text
+                            ):
+                                continue
+                            add_candidate(text, 2)
 
         for node in container.find_all(["div", "span", "p"], limit=120):
             if primary_anchor is not None and primary_anchor in node.parents:
@@ -1013,6 +1046,8 @@ class GoogleResultParser:
 
         snippet = re.sub(r"^https?://\S+\s*(?:>|›)?\s*", "", snippet)
         snippet = re.sub(r"\s+", " ", snippet).strip(" ·—-–:：.。")
+        snippet = re.sub(r"(?:^|\s)\d+(?:\.\d+)?[kmb]\+?$", "", snippet, flags=re.I)
+        snippet = snippet.strip(" ·—-–:：.。")
 
         if _is_noise_text(snippet) or snippet in {title, site_title, displayed_url}:
             return ""

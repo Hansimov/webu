@@ -4,6 +4,7 @@
 """
 
 import pytest
+from urllib.parse import quote
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 
@@ -104,6 +105,9 @@ class _FakeRawHtmlResult:
 
 
 class _FakeGoogleScraper:
+    last_search_call = None
+    last_raw_call = None
+
     def __init__(
         self, proxy_manager=None, headless=True, profile_dir=None, screenshot_dir=None
     ):
@@ -115,12 +119,33 @@ class _FakeGoogleScraper:
     async def stop(self):
         return None
 
-    async def search(self, query, num=10, lang="en", proxy_url=None):
+    async def search(self, query, num=10, lang=None, locale=None, proxy_url=None):
+        _FakeGoogleScraper.last_search_call = {
+            "query": query,
+            "num": num,
+            "lang": lang,
+            "locale": locale,
+            "proxy_url": proxy_url,
+        }
         result = _FakeSearchResult()
         result.query = query
         return result
 
-    async def fetch_raw_html(self, query, num=10, lang="en", proxy_url=None):
+    async def fetch_raw_html(
+        self,
+        query,
+        num=10,
+        lang=None,
+        locale=None,
+        proxy_url=None,
+    ):
+        _FakeGoogleScraper.last_raw_call = {
+            "query": query,
+            "num": num,
+            "lang": lang,
+            "locale": locale,
+            "proxy_url": proxy_url,
+        }
         result = _FakeRawHtmlResult(query=query)
         if proxy_url:
             result.proxy_url = proxy_url
@@ -132,6 +157,8 @@ class TestGoogleSearchServerUnit:
 
     @pytest.fixture
     def client(self):
+        _FakeGoogleScraper.last_search_call = None
+        _FakeGoogleScraper.last_raw_call = None
         with patch("webu.google_api.server.ProxyManager", _FakeProxyManager):
             with patch("webu.google_api.server.GoogleScraper", _FakeGoogleScraper):
                 app = create_google_search_server(headless=True)
@@ -175,6 +202,34 @@ class TestGoogleSearchServerUnit:
         assert resp.headers["x-query"] == "test"
         assert resp.headers["x-proxy-url"] == "http://127.0.0.1:11119"
         assert "fake html" in resp.text
+
+    def test_search_raw_html_non_ascii_query_header_is_encoded(self, client):
+        query = "玩机器切片"
+        resp = client.get(f"/search_raw?q={quote(query)}")
+        assert resp.status_code == 200
+        assert resp.headers["x-query"] == quote(query, safe="")
+
+    def test_search_auto_infers_lang_and_locale_from_query(self, client):
+        resp = client.get(f"/search?q={quote('玩机器切片')}")
+        assert resp.status_code == 200
+        assert _FakeGoogleScraper.last_search_call == {
+            "query": "玩机器切片",
+            "num": 10,
+            "lang": None,
+            "locale": None,
+            "proxy_url": None,
+        }
+
+    def test_search_raw_accepts_explicit_locale(self, client):
+        resp = client.get("/search_raw?q=wikipedia&lang=fr&locale=fr-FR")
+        assert resp.status_code == 200
+        assert _FakeGoogleScraper.last_raw_call == {
+            "query": "wikipedia",
+            "num": 10,
+            "lang": "fr",
+            "locale": "fr-FR",
+            "proxy_url": None,
+        }
 
     def test_search_requires_api_token_when_configured(self, monkeypatch, tmp_path):
         config_dir = tmp_path / "configs"

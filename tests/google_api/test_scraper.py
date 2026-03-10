@@ -8,6 +8,7 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from webu.google_api.locale import resolve_search_locale_profile
 from webu.google_api.scraper import GoogleScraper
 from webu.google_api.proxy_manager import ProxyManager
 from webu.google_api.parser import GoogleSearchResponse, GoogleSearchResult
@@ -96,6 +97,29 @@ class TestScraperParserIntegration:
         scraper = GoogleScraper(proxy_manager=manager, verbose=False)
         assert scraper._search_count == 0
         assert scraper._max_searches_before_restart == 200
+
+
+class TestSearchLocaleProfile:
+    def test_infers_simplified_chinese_defaults(self):
+        profile = resolve_search_locale_profile("玩机器切片")
+        assert profile.lang == "zh-CN"
+        assert profile.locale == "zh-CN"
+        assert profile.navigator_languages[:2] == ["zh-CN", "zh"]
+
+    def test_infers_japanese_from_kana(self):
+        profile = resolve_search_locale_profile("東京の天気予報")
+        assert profile.lang == "ja"
+        assert profile.locale == "ja-JP"
+
+    def test_explicit_locale_overrides_inference(self):
+        profile = resolve_search_locale_profile(
+            "wikipedia",
+            lang="fr",
+            locale="fr-CA",
+        )
+        assert profile.lang == "fr"
+        assert profile.locale == "fr-CA"
+        assert profile.navigator_languages[0] == "fr-CA"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -256,6 +280,7 @@ class TestPerfTimer:
                     query="captcha test",
                     num=10,
                     lang="en",
+                    locale=None,
                     proxy_url="direct",
                 )
 
