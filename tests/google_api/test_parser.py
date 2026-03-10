@@ -246,6 +246,110 @@ METRIC_VIDEO_HTML = """
 </html>
 """
 
+DURATION_VIDEO_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="vtSz8d">
+        <a href="https://www.youtube.com/watch?v=JT_jySzWEco">
+          <div aria-level="3" role="heading">Millions Cancel ChatGPT: Sam Altman \"In Pain\"</div>
+          <div>
+            <span>25:51</span>
+          </div>
+          <div>
+            <span>YouTube</span>
+            <span>5 days ago</span>
+          </div>
+        </a>
+        <div data-sncf="1">
+          <span>Big Tech can see your AI data. Don't let them.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+ROOT_HOMEPAGE_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="A6K0A">
+        <div class="tF2Cxc asEBEc">
+          <div class="N54PNb BToiNc">
+            <div class="kb0PBd A9Y9g jGGQ5e">
+              <div class="yuRUbf">
+                <div class="b8lM7">
+                  <a href="https://openai.com/">
+                    <h3>OpenAI</h3>
+                    <div class="notranslate ESMNde HGLrXd ojE3Fb">
+                      <div class="q0vns">
+                        <div class="CA5RN">
+                          <div><span class="VuuXrf">OpenAI</span></div>
+                          <div class="byrV5b"><cite>https://openai.com</cite></div>
+                        </div>
+                      </div>
+                    </div>
+                  </a>
+                </div>
+              </div>
+            </div>
+            <div class="kb0PBd A9Y9g" data-sncf="1">
+              <div class="VwiC3b"><span>Research, products, and stories from OpenAI.</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+CLUSTERED_VIDEO_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="A6K0A">
+        <div>What people are saying</div>
+        <div class="BRBF4d kno-fb-ctx">
+          <a href="https://www.youtube.com/watch?v=FSNexK7syFE">
+            <div class="MBOAae">
+              <div><span>28:24</span></div>
+              <div aria-level="3" role="heading">Anthropic vs. the Pentagon: Inside the Battle Over A.I. Warfare</div>
+              <div><span>45K+ views</span><span> · </span><span>1 day ago</span></div>
+              <div><span>New York Times Podcasts · YouTube</span></div>
+              <div><span>New York Times podcast collection</span></div>
+            </div>
+          </a>
+        </div>
+        <div>
+          <a href="https://x.com/some-post">
+            <div>WHITE HOUSE READIES EXECUTIVE ORDER TO WEED OUT ANTHROPIC - AXIOS</div>
+            <div><span>740+ likes</span><span> · </span><span>17 hours ago</span></div>
+            <div><span>DeItaone · X</span></div>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
 NOISY_SNIPPET_HTML = """
 <!DOCTYPE html>
 <html>
@@ -277,6 +381,66 @@ NOISY_SNIPPET_HTML = """
               <div class="VwiC3b yXK7lf p4wth r025kc Hdw6tb">
                 <span>Web Result with Site Links Google for Developers Jul 23, 2024 — A free class for people with a little bit of programming experience who want to learn Python.</span>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+SITELINK_INHERITANCE_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div id="search">
+  <div id="rso">
+    <div class="MjjYud">
+      <div class="BYM4Nd">
+        <div class="tF2Cxc">
+          <div class="yuRUbf">
+            <div class="b8lM7">
+              <a href="https://developers.google.com/edu/python">
+                <h3>Google's Python Class | Python Education</h3>
+                <div>
+                  <span class="VuuXrf">Google for Developers</span>
+                </div>
+                <div>
+                  <cite>https://developers.google.com<span> › edu › python</span></cite>
+                </div>
+              </a>
+            </div>
+          </div>
+          <div data-sncf="1">
+            <span>A free class for people with a little bit of programming experience who want to learn Python.</span>
+          </div>
+        </div>
+        <div class="usJj9c">
+          <div>
+            <div class="VttTV">
+              <a href="https://developers.google.com/edu/python/set-up">
+                <h3>Python Set Up</h3>
+              </a>
+              <div><span>The Google Python Class uses a simple, standard Python environment.</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="VttTV">
+              <a href="https://developers.google.com/edu/python/exercises/basic">
+                <h3>Basic Exercises</h3>
+              </a>
+              <div><span>There are 3 exercises that go with the first sections of Google's Python class.</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="VttTV">
+              <a href="https://developers.google.com/edu/python/introduction">
+                <h3>Python Introduction</h3>
+              </a>
+              <div><span>Welcome to Google's Python online tutorial.</span></div>
             </div>
           </div>
         </div>
@@ -612,6 +776,49 @@ class TestVideoResults:
         result = response.results[0]
         assert "Web Result with Site Links" not in result.snippet
         assert result.snippet.startswith("A free class")
+
+    def test_video_duration_is_not_used_as_site_title(self):
+        response = self.parser.parse(DURATION_VIDEO_HTML, query="openai news")
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.title == 'Millions Cancel ChatGPT: Sam Altman "In Pain"'
+        assert result.site_title == "YouTube"
+        assert result.time_info == "5 days ago"
+        assert result.displayed_url == "https://www.youtube.com > watch"
+
+    def test_root_homepage_can_keep_title_as_site_title(self):
+        response = self.parser.parse(ROOT_HOMEPAGE_HTML, query="openai")
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.title == "OpenAI"
+        assert result.site_title == "OpenAI"
+        assert result.displayed_url == "https://openai.com"
+
+    def test_clustered_video_uses_local_container(self):
+        response = self.parser.parse(CLUSTERED_VIDEO_HTML, query="anthropic news")
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert (
+            result.title
+            == "Anthropic vs. the Pentagon: Inside the Battle Over A.I. Warfare"
+        )
+        assert result.site_title == "New York Times Podcasts · YouTube"
+        assert result.time_info == "1 day ago"
+        assert result.snippet == "New York Times podcast collection"
+
+    def test_sitelinks_inherit_parent_site_title(self):
+        response = self.parser.parse(
+            SITELINK_INHERITANCE_HTML, query="google python class"
+        )
+        assert len(response.results) == 4
+        parent, child1, child2, child3 = response.results
+        assert parent.site_title == "Google for Developers"
+        assert child1.title == "Python Set Up"
+        assert child2.title == "Basic Exercises"
+        assert child3.title == "Python Introduction"
+        assert child1.site_title == "Google for Developers"
+        assert child2.site_title == "Google for Developers"
+        assert child3.site_title == "Google for Developers"
 
 
 class TestHelperFunctions:

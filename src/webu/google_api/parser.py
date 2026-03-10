@@ -116,6 +116,8 @@ _EMBEDDED_TIME_RE = re.compile(
     re.IGNORECASE,
 )
 
+_VIDEO_DURATION_RE = re.compile(r"^(?:\d+:)?\d{1,2}:\d{2}$")
+
 
 def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").replace("\xa0", " ")).strip()
@@ -176,6 +178,14 @@ def _looks_like_metric_text(text: str) -> bool:
     if any(word in normalized for word in _METRIC_WORDS):
         return True
     return bool(re.search(r"\b\d+\s+years?\s+ago\b", normalized))
+
+
+def _looks_like_video_duration(text: str) -> bool:
+    return bool(_VIDEO_DURATION_RE.match(_normalize_whitespace(text)))
+
+
+def _normalized_alnum(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
 def _is_noise_text(text: str) -> bool:
@@ -388,6 +398,8 @@ class GoogleResultParser:
         if not results:
             results = self._parse_fallback_links(scope)
 
+        self._inherit_sitelink_site_titles(results)
+
         if not results:
             no_results_msg = self._detect_no_results(soup)
             if no_results_msg:
@@ -447,7 +459,7 @@ class GoogleResultParser:
 
             anchor = self._find_primary_anchor(container, clean_url) or anchor
             meta = self._extract_result_metadata(container, anchor, title, clean_url)
-            if not title or title == meta["site_title"]:
+            if not title:
                 continue
 
             seen_urls.add(key)
@@ -608,6 +620,8 @@ class GoogleResultParser:
                 score += 3
             if external_links:
                 score += 1
+            if len(external_links) == 1:
+                score += 2
             if url and any(
                 _clean_url(self._resolve_href(candidate.get("href", ""))) == url
                 for candidate in external_links
@@ -620,6 +634,8 @@ class GoogleResultParser:
             if heading_count > 1:
                 score -= min(heading_count - 1, 4) * 2
             if len(external_links) > 8:
+                score -= 2
+            elif len(external_links) > 1 and text_len > 900:
                 score -= 2
             if depth > 2:
                 score -= min(depth - 2, 4)
@@ -664,6 +680,8 @@ class GoogleResultParser:
         site_title = self._extract_site_title(
             container, primary_anchor, title, displayed_url
         )
+        if not site_title:
+            site_title = self._infer_root_site_title(title, url)
         time_info = self._extract_time_info(
             container, primary_anchor, title, site_title, displayed_url
         )
@@ -676,6 +694,83 @@ class GoogleResultParser:
             "snippet": snippet,
             "time_info": time_info,
         }
+
+    def _inherit_sitelink_site_titles(self, results: list[GoogleSearchResult]) -> None:
+        for index, result in enumerate(results):
+            if result.site_title or result.result_type != "organic":
+                continue
+
+            parent = self._find_parent_result_for_sitelink(results, index)
+            if parent is not None:
+                result.site_title = parent.site_title
+
+    def _find_parent_result_for_sitelink(
+        self, results: list[GoogleSearchResult], index: int
+    ) -> Optional[GoogleSearchResult]:
+        current = results[index]
+        try:
+            current_parts = urlparse(current.url)
+        except Exception:
+            return None
+
+        current_host = (current_parts.hostname or "").lower()
+        current_path = current_parts.path.rstrip("/")
+        if not current_host or not current_path:
+            return None
+
+        current_displayed_url = _normalize_display_text(current.displayed_url)
+        search_start = max(0, index - 6)
+        for candidate in reversed(results[search_start:index]):
+            if not candidate.site_title or candidate.result_type != "organic":
+                continue
+
+            try:
+                candidate_parts = urlparse(candidate.url)
+            except Exception:
+                continue
+
+            candidate_host = (candidate_parts.hostname or "").lower()
+            candidate_path = candidate_parts.path.rstrip("/")
+            if candidate_host != current_host or not candidate_path:
+                continue
+            if current_path == candidate_path:
+                continue
+            if not current_path.startswith(candidate_path + "/"):
+                continue
+
+            candidate_displayed_url = _normalize_display_text(candidate.displayed_url)
+            if (
+                current_displayed_url
+                and candidate_displayed_url
+                and not current_displayed_url.startswith(candidate_displayed_url)
+            ):
+                continue
+
+            return candidate
+
+        return None
+
+    def _infer_root_site_title(self, title: str, url: str) -> str:
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return ""
+
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.strip("/")
+        if not host or path:
+            return ""
+
+        candidate = _normalize_whitespace(title)
+        candidate = re.sub(r"^Home\s*[\\/|:-]\s*", "", candidate, flags=re.I)
+        if not candidate or len(candidate) > 60:
+            return ""
+
+        host_parts = host.split(".")
+        brand = host_parts[-2] if len(host_parts) >= 2 else host_parts[0]
+        if _normalized_alnum(candidate) == _normalized_alnum(brand):
+            return candidate
+        return ""
 
     def _extract_displayed_url(
         self,
@@ -721,37 +816,42 @@ class GoogleResultParser:
                     return text
 
         seen: set[str] = set()
-        for root in [primary_anchor, container]:
-            if root is None:
-                continue
-            for node in root.find_all(["span", "div"], limit=80):
-                text = self._clean_site_title_candidate(
-                    node.get_text(" ", strip=True), title
-                )
-                if text in seen:
+        for leaf_only in [True, False]:
+            for root in [primary_anchor, container]:
+                if root is None:
                     continue
-                seen.add(text)
-                if not text or len(text) > 80:
-                    continue
-                if text.endswith("..."):
-                    continue
-                if len(text.split()) > 6 and " · " not in text:
-                    continue
-                if text == title or text == displayed_url:
-                    continue
-                if (
-                    _is_noise_text(text)
-                    or _looks_like_url_or_path(text)
-                    or _looks_like_time_info(text)
-                ):
-                    continue
-                if " · " in text and text.split(" · ", 1)[0].lower() in {
-                    "youtube",
-                    "vimeo",
-                }:
-                    return text
-                if len(text) >= 2:
-                    return text
+                for node in root.find_all(["span", "div"], limit=80):
+                    if leaf_only and node.find(["span", "div"]):
+                        continue
+                    text = self._clean_site_title_candidate(
+                        node.get_text(" ", strip=True), title
+                    )
+                    if text in seen:
+                        continue
+                    seen.add(text)
+                    if not text or len(text) > 80:
+                        continue
+                    if text.endswith("..."):
+                        continue
+                    if len(text.split()) >= 6 and " · " not in text:
+                        continue
+                    if text == title or text == displayed_url:
+                        continue
+                    if (
+                        _is_noise_text(text)
+                        or _looks_like_url_or_path(text)
+                        or _looks_like_metric_text(text)
+                        or _looks_like_time_info(text)
+                        or _looks_like_video_duration(text)
+                    ):
+                        continue
+                    if " · " in text and text.split(" · ", 1)[0].lower() in {
+                        "youtube",
+                        "vimeo",
+                    }:
+                        return text
+                    if len(text) >= 2:
+                        return text
         return ""
 
     def _extract_time_info(
@@ -795,7 +895,11 @@ class GoogleResultParser:
         displayed_url: str,
         time_info: str,
     ) -> str:
-        candidates: list[str] = []
+        candidates: list[tuple[int, str]] = []
+
+        def add_candidate(text: str, priority: int) -> None:
+            if text:
+                candidates.append((priority, text))
 
         prioritized = [
             container.find(attrs={"data-sncf": True}),
@@ -806,7 +910,44 @@ class GoogleResultParser:
                 continue
             text = self._extract_text_without_links(candidate)
             if text:
-                candidates.append(text)
+                add_candidate(text, 4)
+
+        if primary_anchor is not None:
+            for node in primary_anchor.find_all(["div", "span", "p"], limit=80):
+                if node.find(["div", "span", "p"]):
+                    continue
+                text = self._extract_text_without_links(node)
+                if not text or len(text) < 15 or len(text) > 250:
+                    continue
+                if title and title in text:
+                    continue
+                if site_title and site_title in text:
+                    continue
+                add_candidate(text, 3)
+
+            primary_url = _clean_url(self._resolve_href(primary_anchor.get("href", "")))
+            for depth, parent in enumerate(primary_anchor.parents, start=1):
+                if not isinstance(parent, Tag):
+                    continue
+                if depth > 4:
+                    break
+                for anchor in parent.find_all("a", href=True):
+                    if anchor == primary_anchor:
+                        continue
+                    href = _clean_url(self._resolve_href(anchor.get("href", "")))
+                    if not href or href != primary_url:
+                        continue
+                    for node in anchor.find_all(["div", "span", "p"], limit=60):
+                        if node.find(["div", "span", "p"]):
+                            continue
+                        text = self._extract_text_without_links(node)
+                        if not text or len(text) < 15 or len(text) > 250:
+                            continue
+                        if title and title in text:
+                            continue
+                        if site_title and site_title in text:
+                            continue
+                        add_candidate(text, 3)
 
         for node in container.find_all(["div", "span", "p"], limit=120):
             if primary_anchor is not None and primary_anchor in node.parents:
@@ -814,15 +955,21 @@ class GoogleResultParser:
             text = self._extract_text_without_links(node)
             if not text or len(text) < 25 or len(text) > 450:
                 continue
-            candidates.append(text)
+            add_candidate(text, 1)
 
         best = ""
-        for candidate in candidates:
+        best_priority = -1
+        for priority, candidate in candidates:
             cleaned = self._clean_snippet(
                 candidate, title, site_title, displayed_url, time_info
             )
-            if len(cleaned) > len(best):
+            if not cleaned:
+                continue
+            if priority > best_priority or (
+                priority == best_priority and len(cleaned) > len(best)
+            ):
                 best = cleaned
+                best_priority = priority
         return best
 
     def _clean_snippet(
