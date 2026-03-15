@@ -7,13 +7,16 @@ from webu.clis import print_json
 
 from .helptext import COMMAND_HELP, command_epilog, root_description, root_help_epilog
 from .operations import (
+    access_diagnose,
     apply_tunnel,
     config_check,
     config_init,
     config_schema_json,
     docs_sync,
+    edge_trace,
     ensure_token,
     migrate_dns_to_cloudflare,
+    page_audit,
     tunnel_status,
 )
 
@@ -65,6 +68,22 @@ def cmd_token_ensure(args):
             cf_token_mode=args.cf_token_mode,
             save_config=args.save_config,
         )
+    )
+
+
+def cmd_access_diagnose(args):
+    print_json(access_diagnose(tunnel_name=args.name, hostname=args.hostname))
+
+
+def cmd_page_audit(args):
+    print_json(
+        page_audit(tunnel_name=args.name, hostname=args.hostname, path=args.path)
+    )
+
+
+def cmd_edge_trace(args):
+    print_json(
+        edge_trace(tunnel_name=args.name, hostname=args.hostname, path=args.path)
     )
 
 
@@ -138,6 +157,38 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
     )
     tunnel_status_parser.set_defaults(func=cmd_tunnel_status)
+
+    access_diagnose_parser = subparsers.add_parser(
+        "access-diagnose",
+        help=COMMAND_HELP["access-diagnose"]["summary"],
+        epilog=command_epilog("access-diagnose"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    access_diagnose_parser.add_argument("--name", default="")
+    access_diagnose_parser.add_argument("--hostname", default="")
+    access_diagnose_parser.set_defaults(func=cmd_access_diagnose)
+
+    page_audit_parser = subparsers.add_parser(
+        "page-audit",
+        help=COMMAND_HELP["page-audit"]["summary"],
+        epilog=command_epilog("page-audit"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    page_audit_parser.add_argument("--name", default="")
+    page_audit_parser.add_argument("--hostname", default="")
+    page_audit_parser.add_argument("--path", default="/")
+    page_audit_parser.set_defaults(func=cmd_page_audit)
+
+    edge_trace_parser = subparsers.add_parser(
+        "edge-trace",
+        help=COMMAND_HELP["edge-trace"]["summary"],
+        epilog=command_epilog("edge-trace"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    edge_trace_parser.add_argument("--name", default="")
+    edge_trace_parser.add_argument("--hostname", default="")
+    edge_trace_parser.add_argument("--path", default="/cdn-cgi/trace")
+    edge_trace_parser.set_defaults(func=cmd_edge_trace)
 
     token_ensure_parser = subparsers.add_parser(
         "token-ensure",

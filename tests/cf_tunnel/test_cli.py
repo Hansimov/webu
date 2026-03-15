@@ -5,10 +5,13 @@ from pathlib import Path
 
 from webu.cf_tunnel.cli import build_parser
 from webu.cf_tunnel.operations import (
+    access_diagnose,
     apply_tunnel,
     config_init,
     docs_sync,
+    edge_trace,
     migrate_dns_to_cloudflare,
+    page_audit,
 )
 
 
@@ -46,6 +49,9 @@ def test_parser_supports_dns_and_tunnel_commands():
     token_args = parser.parse_args(
         ["token-ensure", "--zone-name", domain_name, "--cf-token-mode", "manual"]
     )
+    diagnose_args = parser.parse_args(["access-diagnose", "--name", tunnel_name])
+    page_audit_args = parser.parse_args(["page-audit", "--name", tunnel_name])
+    edge_trace_args = parser.parse_args(["edge-trace", "--name", tunnel_name])
 
     assert dns_args.domain_name == domain_name
     assert dns_args.cf_token_mode == "auto"
@@ -53,6 +59,9 @@ def test_parser_supports_dns_and_tunnel_commands():
     assert tunnel_args.install_service is True
     assert token_args.zone_name == domain_name
     assert token_args.cf_token_mode == "manual"
+    assert diagnose_args.name == tunnel_name
+    assert page_audit_args.name == tunnel_name
+    assert edge_trace_args.name == tunnel_name
 
 
 def test_config_init_writes_project_config(monkeypatch, tmp_path):
@@ -198,6 +207,197 @@ def test_apply_tunnel_updates_config_without_printing_secret(monkeypatch, tmp_pa
     assert saved["cf_tunnels"][0]["tunnel_token"] == "secret-token"
     assert result[0]["domain_name"] == domain_name
     assert result[0]["zone_name"] == zone_name
+
+
+def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations._resolve_system_addresses",
+        lambda hostname: ["203.0.113.10"],
+    )
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations._authoritative_dns_records",
+        lambda payload, hostname: [
+            {
+                "type": "CNAME",
+                "name": hostname,
+                "content": "example-tunnel.cfargotunnel.com",
+                "proxied": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations._resolve_cloudflare_addresses",
+        lambda hostname, record_type="A": (
+            ["104.21.57.71"] if record_type == "A" else []
+        ),
+    )
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations._resolve_authoritative_nameserver_addresses",
+        lambda payload, hostname, record_type="A": ["104.21.57.71"],
+    )
+
+    def fake_probe(hostname, ip_address):
+        if ip_address == "203.0.113.10":
+            return {"ip": ip_address, "success": False, "error": "tls failed"}
+        return {
+            "ip": ip_address,
+            "success": True,
+            "tls_version": "TLSv1.3",
+            "status_code": 404,
+            "subject_alt_names": [hostname],
+        }
+
+    monkeypatch.setattr("webu.cf_tunnel.operations._probe_https_endpoint", fake_probe)
+
+    result = access_diagnose(tunnel_name=tunnel["tunnel_name"], hostname=None)
+
+    assert result["hostname"] == tunnel["domain_name"]
+    assert result["dns"]["mismatch"] is True
+    assert result["dns"]["cloudflare_authoritative"]["records"][0]["proxied"] is True
+    assert result["https"]["system_resolver"][0]["success"] is False
+    assert result["https"]["cloudflare_doh"][0]["success"] is True
+    assert any("DNS" in item for item in result["diagnosis"])
+
+
+def test_page_audit_flags_dev_server_and_broken_assets(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.access_diagnose",
+        lambda tunnel_name=None, hostname=None: {
+            "hostname": tunnel["domain_name"],
+            "tunnel_name": tunnel["tunnel_name"],
+            "dns": {
+                "system_resolver": {"addresses": ["203.0.113.10"]},
+                "cloudflare_doh": {"addresses": ["104.21.57.71"]},
+                "cloudflare_authoritative_ns": {"addresses": ["104.21.57.71"]},
+            },
+        },
+    )
+
+    def fake_fetch(hostname, ip_address, path="/", method="GET", max_body_bytes=262144):
+        if path == "/":
+            return {
+                "ip": ip_address,
+                "path": path,
+                "method": method,
+                "success": True,
+                "status_code": 200,
+                "content_type": "text/html",
+                "body_preview": '<html><head><script type="module" src="/@vite/client"></script><script type="module" src="/.quasar/client-entry.js"></script></head><body><img src="http://cdn.example.com/logo.png"></body></html>',
+            }
+        return {
+            "ip": ip_address,
+            "path": path,
+            "method": method,
+            "success": True,
+            "status_code": 404,
+            "content_type": "text/javascript",
+            "body_preview": "",
+        }
+
+    monkeypatch.setattr("webu.cf_tunnel.operations._fetch_https_endpoint", fake_fetch)
+
+    result = page_audit(tunnel_name=tunnel["tunnel_name"], hostname=None, path="/")
+
+    assert result["fetches"]["selected_source"] == "cloudflare_authoritative_ns"
+    assert result["page"]["findings"]["development_markers"]
+    assert result["page"]["findings"]["explicit_insecure_refs"] == [
+        "http://cdn.example.com/logo.png"
+    ]
+    assert any("development entrypoint" in item for item in result["diagnosis"])
+    assert any("4xx" in item for item in result["diagnosis"])
+
+
+def test_edge_trace_reports_colos_and_measurement_guidance(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.access_diagnose",
+        lambda tunnel_name=None, hostname=None: {
+            "hostname": tunnel["domain_name"],
+            "tunnel_name": tunnel["tunnel_name"],
+            "dns": {
+                "system_resolver": {"addresses": ["104.21.57.71"]},
+                "cloudflare_doh": {"addresses": ["172.67.160.241"]},
+                "cloudflare_authoritative_ns": {"addresses": ["104.21.57.71"]},
+            },
+        },
+    )
+
+    def fake_fetch(
+        hostname, ip_address, path="/cdn-cgi/trace", method="GET", max_body_bytes=32768
+    ):
+        if ip_address == "104.21.57.71":
+            return {
+                "ip": ip_address,
+                "success": True,
+                "status_code": 200,
+                "content_type": "text/plain",
+                "headers": {"cf-ray": "abc123-HKG", "server": "cloudflare"},
+                "body_preview": "fl=29f1\nh=example.com\nip=198.51.100.1\ncolo=HKG\nhttp=http/2\ntls=TLSv1.3\n",
+            }
+        return {
+            "ip": ip_address,
+            "success": True,
+            "status_code": 200,
+            "content_type": "text/plain",
+            "headers": {"cf-ray": "def456-NRT", "server": "cloudflare"},
+            "body_preview": "fl=29f1\nh=example.com\nip=198.51.100.1\ncolo=NRT\nhttp=http/2\ntls=TLSv1.3\n",
+        }
+
+    monkeypatch.setattr("webu.cf_tunnel.operations._fetch_https_endpoint", fake_fetch)
+
+    result = edge_trace(tunnel_name=tunnel["tunnel_name"], hostname=None)
+
+    assert result["hostname"] == tunnel["domain_name"]
+    assert {item["colo"] for item in result["unique_edge_results"]} == {"HKG", "NRT"}
+    assert any("Anycast" in item for item in result["diagnosis"])
+    assert any("measurement-only" in item for item in result["recommendations"])
 
 
 def test_docs_sync_writes_markdown(monkeypatch, tmp_path):
