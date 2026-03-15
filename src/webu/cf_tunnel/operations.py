@@ -6,6 +6,7 @@ import socket
 import ssl
 import shutil
 import subprocess
+from collections import defaultdict
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -760,6 +761,127 @@ def _parse_key_value_lines(text: str) -> dict[str, str]:
     return result
 
 
+def _ip_family(ip_address: str) -> str:
+    return "ipv6" if ":" in str(ip_address) else "ipv4"
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _platform_instructions(
+    hostname: str, candidates: list[dict[str, Any]]
+) -> dict[str, Any]:
+    hosts_lines = [item["hosts_line"] for item in candidates]
+    return {
+        "windows": {
+            "supported": True,
+            "method": "hosts-file",
+            "hosts_path": r"C:\Windows\System32\drivers\etc\hosts",
+            "hosts_lines": hosts_lines,
+            "flush_commands": ["ipconfig /flushdns"],
+            "verify": [
+                f"curl -I https://{hostname} --max-time 20",
+                f"curl https://{hostname}/cdn-cgi/trace --max-time 20",
+            ],
+        },
+        "macos": {
+            "supported": True,
+            "method": "hosts-file",
+            "hosts_path": "/etc/hosts",
+            "hosts_lines": hosts_lines,
+            "flush_commands": [
+                "sudo dscacheutil -flushcache",
+                "sudo killall -HUP mDNSResponder",
+            ],
+            "verify": [
+                f"curl -I https://{hostname} --max-time 20",
+                f"curl https://{hostname}/cdn-cgi/trace --max-time 20",
+            ],
+        },
+        "linux": {
+            "supported": True,
+            "method": "hosts-file",
+            "hosts_path": "/etc/hosts",
+            "hosts_lines": hosts_lines,
+            "flush_commands": [
+                "sudo resolvectl flush-caches",
+                "sudo systemd-resolve --flush-caches",
+                "sudo service nscd restart",
+            ],
+            "verify": [
+                f"getent ahosts {hostname}",
+                f"curl -I https://{hostname} --max-time 20",
+                f"curl https://{hostname}/cdn-cgi/trace --max-time 20",
+            ],
+        },
+        "android": {
+            "supported": True,
+            "method": "local-dns-override",
+            "note": "Stock Android generally cannot edit per-host hosts mappings without root. Use a canary Wi-Fi/router DNS override or a device-local DNS tool that supports host overrides.",
+            "dns_override": {"hostname": hostname, "records": hosts_lines},
+            "verify": [
+                f"https://{hostname}",
+                f"https://{hostname}/cdn-cgi/trace",
+            ],
+        },
+        "ios": {
+            "supported": True,
+            "method": "local-dns-override",
+            "note": "Stock iOS generally cannot edit per-host hosts mappings directly. Use a controlled Wi-Fi/router DNS override or a device-local DNS profile/tool that supports host overrides.",
+            "dns_override": {"hostname": hostname, "records": hosts_lines},
+            "verify": [
+                f"https://{hostname}",
+                f"https://{hostname}/cdn-cgi/trace",
+            ],
+        },
+    }
+
+
+def _default_client_report(
+    hostname: str,
+    tunnel_name: str,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "hostname": hostname,
+        "tunnel_name": tunnel_name,
+        "report_version": 1,
+        "reports": [
+            {
+                "region": "",
+                "city": "",
+                "isp": "",
+                "network_type": "broadband|5g|4g|wifi",
+                "platform": "windows|macos|linux|android|ios",
+                "device_model": "",
+                "ip_family": item["family"],
+                "candidate_ip": item["ip"],
+                "candidate_colo": item["colo"],
+                "success": None,
+                "ttfb_ms": None,
+                "page_ok": None,
+                "trace_colo": "",
+                "trace_loc": "",
+                "cf_ray": "",
+                "notes": "",
+            }
+            for item in candidates
+        ],
+    }
+
+
 def _normalize_asset_path(value: str) -> str:
     item = str(value).strip()
     if not item:
@@ -1055,6 +1177,295 @@ def edge_trace(
         "edge_probes": per_source,
         "unique_edge_results": unique_results,
         "diagnosis": diagnosis_lines,
+        "recommendations": recommendations,
+    }
+
+
+def client_override_plan(
+    *,
+    tunnel_name: str | None,
+    hostname: str | None,
+    prefer_family: str,
+    max_candidates: int,
+) -> dict[str, Any]:
+    trace = edge_trace(tunnel_name=tunnel_name, hostname=hostname)
+    resolved_hostname = trace["hostname"]
+    resolved_tunnel_name = trace["tunnel_name"]
+    allowed_families = {"ipv4", "ipv6"} if prefer_family == "any" else {prefer_family}
+    max_items = max(1, int(max_candidates))
+
+    candidates: list[dict[str, Any]] = []
+    seen_ips: set[str] = set()
+    for item in trace.get("unique_edge_results", []):
+        if not item.get("success"):
+            continue
+        ip_address = str(item.get("ip", "")).strip()
+        if not ip_address or ip_address in seen_ips:
+            continue
+        family = _ip_family(ip_address)
+        if family not in allowed_families:
+            continue
+        seen_ips.add(ip_address)
+        candidates.append(
+            {
+                "ip": ip_address,
+                "family": family,
+                "colo": str(item.get("colo", "")).strip(),
+                "cf_ray": str(item.get("cf_ray", "")).strip(),
+                "hosts_line": f"{ip_address} {resolved_hostname}",
+                "curl_validate": f"curl --resolve {resolved_hostname}:443:{ip_address} https://{resolved_hostname}/cdn-cgi/trace --max-time 20",
+                "curl_head": f"curl --resolve {resolved_hostname}:443:{ip_address} -I https://{resolved_hostname} --max-time 20",
+            }
+        )
+        if len(candidates) >= max_items:
+            break
+
+    diagnosis: list[str] = []
+    recommendations: list[str] = []
+    warnings: list[str] = []
+
+    if candidates:
+        diagnosis.append(
+            "The plan below is suitable for small-batch client-side hosts or local DNS override experiments. It keeps Cloudflare authoritative DNS unchanged and only changes resolution on selected clients."
+        )
+    else:
+        diagnosis.append(
+            "No successful edge candidates were found under the requested IP family filter, so there is nothing safe to export for a client-side override experiment."
+        )
+
+    if prefer_family == "any":
+        recommendations.append(
+            "For mainland users, start with IPv4 canaries first. Add IPv6 only if the user network has proven IPv6 quality; otherwise dual-stack overrides can make behavior less predictable."
+        )
+    elif prefer_family == "ipv6":
+        warnings.append(
+            "IPv6 overrides should only be tested on user networks with confirmed IPv6 reachability and stable routing."
+        )
+
+    recommendations.append(
+        "Roll out to a very small canary group first, for example 3 to 10 users on the same ISP or region, and collect success rate, TTFB, and whether the reported colo improves."
+    )
+    recommendations.append(
+        "Ask canary users to remove existing browser DNS cache, system DNS cache, and any previous hosts overrides before each test round."
+    )
+    recommendations.append(
+        "Validation should use both the main page and /cdn-cgi/trace. The main page confirms application behavior, while trace confirms the actual Cloudflare colo reached by that pinned IP."
+    )
+    recommendations.append(
+        "Do not push these overrides into the public zone. Keep them client-side only, and keep the authoritative record as the proxied Cloudflare tunnel hostname."
+    )
+
+    warnings.append(
+        "Anycast edge behavior is time-dependent and network-dependent. A candidate IP that is good today for one ISP may degrade later or perform worse on another ISP."
+    )
+    warnings.append(
+        "If a client-side preferred IP causes certificate failure, timeout, or a different unexpected hostname, remove the override immediately and fall back to normal DNS resolution."
+    )
+
+    return {
+        "hostname": resolved_hostname,
+        "tunnel_name": resolved_tunnel_name,
+        "prefer_family": prefer_family,
+        "max_candidates": max_items,
+        "edge_trace": trace,
+        "candidates": candidates,
+        "distribution": {
+            "linux_macos_hosts": [item["hosts_line"] for item in candidates],
+            "windows_hosts": [item["hosts_line"] for item in candidates],
+        },
+        "rollback": {
+            "remove_hosts_lines": [item["hosts_line"] for item in candidates],
+            "verify_normal_dns": [
+                f"getent ahosts {resolved_hostname}",
+                f"curl -I https://{resolved_hostname} --max-time 20",
+            ],
+        },
+        "diagnosis": diagnosis,
+        "recommendations": recommendations,
+        "warnings": warnings,
+    }
+
+
+def client_canary_bundle(
+    *,
+    tunnel_name: str | None,
+    hostname: str | None,
+    prefer_family: str,
+    max_candidates: int,
+) -> dict[str, Any]:
+    plan = client_override_plan(
+        tunnel_name=tunnel_name,
+        hostname=hostname,
+        prefer_family=prefer_family,
+        max_candidates=max_candidates,
+    )
+    hostname_value = plan["hostname"]
+    tunnel_name_value = plan["tunnel_name"]
+    candidates = plan["candidates"]
+    return {
+        "hostname": hostname_value,
+        "tunnel_name": tunnel_name_value,
+        "prefer_family": prefer_family,
+        "candidates": candidates,
+        "platforms": _platform_instructions(hostname_value, candidates),
+        "report_template": _default_client_report(
+            hostname_value, tunnel_name_value, candidates
+        ),
+        "rollout": {
+            "canary_group_size": "3-10 users per ISP or region",
+            "stages": [
+                "Run one candidate IP at a time for each ISP or region cohort.",
+                "Collect success, TTFB, page rendering, and /cdn-cgi/trace colo from each client.",
+                "Promote only candidates that are stable across multiple devices on the same ISP.",
+                "Keep a fallback cohort on normal DNS to detect regressions quickly.",
+            ],
+        },
+        "recommendations": [
+            "Prefer ISP-specific and region-specific winners over a single nationwide preferred IP.",
+            "Desktop and mobile should be validated separately because mobile often follows different DNS and transport paths.",
+            "If Android or iOS canaries are required, push the override at the local DNS layer for the test Wi-Fi or test router instead of relying on per-device hosts edits.",
+        ],
+    }
+
+
+def client_report_template(
+    *,
+    tunnel_name: str | None,
+    hostname: str | None,
+    prefer_family: str,
+    max_candidates: int,
+) -> dict[str, Any]:
+    bundle = client_canary_bundle(
+        tunnel_name=tunnel_name,
+        hostname=hostname,
+        prefer_family=prefer_family,
+        max_candidates=max_candidates,
+    )
+    return bundle["report_template"]
+
+
+def client_report_summary(*, report_file: str) -> dict[str, Any]:
+    payload = json.loads(Path(report_file).read_text(encoding="utf-8"))
+    reports = payload.get("reports", []) if isinstance(payload, dict) else payload
+    if not isinstance(reports, list):
+        raise ValueError(
+            "report_file must contain a JSON object with a reports array or a JSON array"
+        )
+
+    by_ip: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_isp: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    by_platform: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+
+    normalized_reports: list[dict[str, Any]] = []
+    for item in reports:
+        if not isinstance(item, dict):
+            continue
+        candidate_ip = str(item.get("candidate_ip", "")).strip()
+        if not candidate_ip:
+            continue
+        success = bool(item.get("success"))
+        ttfb_ms = _safe_float(item.get("ttfb_ms"))
+        record = {
+            "region": str(item.get("region", "")).strip(),
+            "city": str(item.get("city", "")).strip(),
+            "isp": str(item.get("isp", "")).strip() or "unknown",
+            "network_type": str(item.get("network_type", "")).strip(),
+            "platform": str(item.get("platform", "")).strip() or "unknown",
+            "device_model": str(item.get("device_model", "")).strip(),
+            "candidate_ip": candidate_ip,
+            "candidate_colo": str(item.get("candidate_colo", "")).strip(),
+            "success": success,
+            "ttfb_ms": ttfb_ms,
+            "page_ok": (
+                bool(item.get("page_ok")) if item.get("page_ok") is not None else None
+            ),
+            "trace_colo": str(item.get("trace_colo", "")).strip(),
+            "trace_loc": str(item.get("trace_loc", "")).strip(),
+            "cf_ray": str(item.get("cf_ray", "")).strip(),
+            "notes": str(item.get("notes", "")).strip(),
+        }
+        normalized_reports.append(record)
+        by_ip[candidate_ip].append(record)
+        by_isp[record["isp"]][candidate_ip].append(record)
+        by_platform[record["platform"]][candidate_ip].append(record)
+
+    def summarize_group(group: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for candidate_ip, items in group.items():
+            total = len(items)
+            success_count = sum(1 for item in items if item["success"])
+            ttfb_values = [
+                item["ttfb_ms"]
+                for item in items
+                if item["ttfb_ms"] is not None and item["success"]
+            ]
+            avg_ttfb = (
+                _mean([float(item) for item in ttfb_values]) if ttfb_values else None
+            )
+            colos = sorted({item["trace_colo"] for item in items if item["trace_colo"]})
+            score = (success_count / total) * 1000 if total else 0
+            if avg_ttfb is not None:
+                score -= avg_ttfb / 10
+            rows.append(
+                {
+                    "candidate_ip": candidate_ip,
+                    "sample_count": total,
+                    "success_count": success_count,
+                    "success_rate": round(success_count / total, 4) if total else 0,
+                    "avg_ttfb_ms": round(avg_ttfb, 2) if avg_ttfb is not None else None,
+                    "trace_colos": colos,
+                    "score": round(score, 2),
+                }
+            )
+        return sorted(
+            rows,
+            key=lambda item: (
+                -item["score"],
+                -item["success_rate"],
+                item["avg_ttfb_ms"] or 1e9,
+            ),
+        )
+
+    overall = summarize_group(by_ip)
+    per_isp = {isp: summarize_group(group) for isp, group in by_isp.items()}
+    per_platform = {
+        platform: summarize_group(group) for platform, group in by_platform.items()
+    }
+
+    recommendations: list[str] = []
+    if overall:
+        recommendations.append(
+            "Use the overall ranking only as a starting point. Prefer per-ISP winners when the leading candidate differs across carriers."
+        )
+    if any(
+        len(rows) > 1 and rows[0]["candidate_ip"] != overall[0]["candidate_ip"]
+        for rows in per_isp.values()
+        if rows and overall
+    ):
+        recommendations.append(
+            "At least one ISP has a different best candidate from the overall winner. Use ISP-specific distribution instead of a single universal preferred IP."
+        )
+    if any(
+        len(rows) > 1 and rows[0]["candidate_ip"] != overall[0]["candidate_ip"]
+        for rows in per_platform.values()
+        if rows and overall
+    ):
+        recommendations.append(
+            "Desktop and mobile winners are diverging. Keep separate rollout groups for different platforms."
+        )
+    recommendations.append(
+        "Do not promote a candidate to a larger audience until it has successful samples from multiple users in the same ISP and at least two device categories."
+    )
+
+    return {
+        "sample_count": len(normalized_reports),
+        "overall": overall,
+        "per_isp": per_isp,
+        "per_platform": per_platform,
         "recommendations": recommendations,
     }
 

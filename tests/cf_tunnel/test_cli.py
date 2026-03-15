@@ -7,6 +7,10 @@ from webu.cf_tunnel.cli import build_parser
 from webu.cf_tunnel.operations import (
     access_diagnose,
     apply_tunnel,
+    client_canary_bundle,
+    client_override_plan,
+    client_report_summary,
+    client_report_template,
     config_init,
     docs_sync,
     edge_trace,
@@ -52,6 +56,18 @@ def test_parser_supports_dns_and_tunnel_commands():
     diagnose_args = parser.parse_args(["access-diagnose", "--name", tunnel_name])
     page_audit_args = parser.parse_args(["page-audit", "--name", tunnel_name])
     edge_trace_args = parser.parse_args(["edge-trace", "--name", tunnel_name])
+    client_override_args = parser.parse_args(
+        ["client-override-plan", "--name", tunnel_name, "--prefer-family", "ipv4"]
+    )
+    client_bundle_args = parser.parse_args(
+        ["client-canary-bundle", "--name", tunnel_name, "--prefer-family", "ipv4"]
+    )
+    client_template_args = parser.parse_args(
+        ["client-report-template", "--name", tunnel_name, "--prefer-family", "ipv4"]
+    )
+    client_summary_args = parser.parse_args(
+        ["client-report-summary", "reports/client-canary.json"]
+    )
 
     assert dns_args.domain_name == domain_name
     assert dns_args.cf_token_mode == "auto"
@@ -62,6 +78,11 @@ def test_parser_supports_dns_and_tunnel_commands():
     assert diagnose_args.name == tunnel_name
     assert page_audit_args.name == tunnel_name
     assert edge_trace_args.name == tunnel_name
+    assert client_override_args.name == tunnel_name
+    assert client_override_args.prefer_family == "ipv4"
+    assert client_bundle_args.name == tunnel_name
+    assert client_template_args.name == tunnel_name
+    assert client_summary_args.report_file == "reports/client-canary.json"
 
 
 def test_config_init_writes_project_config(monkeypatch, tmp_path):
@@ -398,6 +419,200 @@ def test_edge_trace_reports_colos_and_measurement_guidance(monkeypatch, tmp_path
     assert {item["colo"] for item in result["unique_edge_results"]} == {"HKG", "NRT"}
     assert any("Anycast" in item for item in result["diagnosis"])
     assert any("measurement-only" in item for item in result["recommendations"])
+
+
+def test_client_override_plan_exports_hosts_candidates(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.edge_trace",
+        lambda tunnel_name=None, hostname=None: {
+            "hostname": tunnel["domain_name"],
+            "tunnel_name": tunnel["tunnel_name"],
+            "unique_edge_results": [
+                {
+                    "ip": "172.67.160.241",
+                    "success": True,
+                    "colo": "LAX",
+                    "cf_ray": "abc-LAX",
+                },
+                {
+                    "ip": "2606:4700:3030::ac43:a0f1",
+                    "success": True,
+                    "colo": "LAX",
+                    "cf_ray": "def-LAX",
+                },
+            ],
+        },
+    )
+
+    result = client_override_plan(
+        tunnel_name=tunnel["tunnel_name"],
+        hostname=None,
+        prefer_family="ipv4",
+        max_candidates=2,
+    )
+
+    assert result["hostname"] == tunnel["domain_name"]
+    assert len(result["candidates"]) == 1
+    assert (
+        result["candidates"][0]["hosts_line"]
+        == f"172.67.160.241 {tunnel['domain_name']}"
+    )
+    assert result["distribution"]["linux_macos_hosts"][0].startswith("172.67.160.241 ")
+    assert any("canary" in item for item in result["recommendations"])
+
+
+def test_client_canary_bundle_contains_platform_guides(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.client_override_plan",
+        lambda **kwargs: {
+            "hostname": tunnel["domain_name"],
+            "tunnel_name": tunnel["tunnel_name"],
+            "candidates": [
+                {
+                    "ip": "172.67.160.241",
+                    "family": "ipv4",
+                    "colo": "LAX",
+                    "cf_ray": "abc-LAX",
+                    "hosts_line": f"172.67.160.241 {tunnel['domain_name']}",
+                }
+            ],
+        },
+    )
+
+    result = client_canary_bundle(
+        tunnel_name=tunnel["tunnel_name"],
+        hostname=None,
+        prefer_family="ipv4",
+        max_candidates=1,
+    )
+
+    assert result["platforms"]["windows"]["hosts_lines"][0].startswith(
+        "172.67.160.241 "
+    )
+    assert result["platforms"]["android"]["method"] == "local-dns-override"
+    assert result["report_template"]["reports"][0]["candidate_ip"] == "172.67.160.241"
+
+
+def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
+    report_file = tmp_path / "client-canary.json"
+    report_file.write_text(
+        json.dumps(
+            {
+                "reports": [
+                    {
+                        "isp": "cmcc",
+                        "platform": "windows",
+                        "candidate_ip": "104.21.57.71",
+                        "success": True,
+                        "ttfb_ms": 260,
+                        "trace_colo": "NRT",
+                    },
+                    {
+                        "isp": "cmcc",
+                        "platform": "android",
+                        "candidate_ip": "104.21.57.71",
+                        "success": True,
+                        "ttfb_ms": 280,
+                        "trace_colo": "NRT",
+                    },
+                    {
+                        "isp": "cmcc",
+                        "platform": "windows",
+                        "candidate_ip": "172.67.160.241",
+                        "success": False,
+                        "ttfb_ms": None,
+                        "trace_colo": "",
+                    },
+                    {
+                        "isp": "ctcc",
+                        "platform": "ios",
+                        "candidate_ip": "172.67.160.241",
+                        "success": True,
+                        "ttfb_ms": 190,
+                        "trace_colo": "HKG",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = client_report_summary(report_file=str(report_file))
+
+    assert result["sample_count"] == 4
+    assert result["overall"][0]["candidate_ip"] in {"104.21.57.71", "172.67.160.241"}
+    assert "cmcc" in result["per_isp"]
+    assert "windows" in result["per_platform"]
+
+
+def test_client_report_template_contains_candidates(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.client_canary_bundle",
+        lambda **kwargs: {
+            "report_template": {
+                "hostname": tunnel["domain_name"],
+                "tunnel_name": tunnel["tunnel_name"],
+                "reports": [{"candidate_ip": "104.21.57.71"}],
+            }
+        },
+    )
+
+    result = client_report_template(
+        tunnel_name=tunnel["tunnel_name"],
+        hostname=None,
+        prefer_family="ipv4",
+        max_candidates=1,
+    )
+
+    assert result["reports"][0]["candidate_ip"] == "104.21.57.71"
 
 
 def test_docs_sync_writes_markdown(monkeypatch, tmp_path):

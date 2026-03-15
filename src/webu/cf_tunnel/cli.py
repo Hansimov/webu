@@ -9,6 +9,10 @@ from .helptext import COMMAND_HELP, command_epilog, root_description, root_help_
 from .operations import (
     access_diagnose,
     apply_tunnel,
+    client_canary_bundle,
+    client_override_plan,
+    client_report_summary,
+    client_report_template,
     config_check,
     config_init,
     config_schema_json,
@@ -85,6 +89,43 @@ def cmd_edge_trace(args):
     print_json(
         edge_trace(tunnel_name=args.name, hostname=args.hostname, path=args.path)
     )
+
+
+def cmd_client_override_plan(args):
+    print_json(
+        client_override_plan(
+            tunnel_name=args.name,
+            hostname=args.hostname,
+            prefer_family=args.prefer_family,
+            max_candidates=args.max_candidates,
+        )
+    )
+
+
+def cmd_client_canary_bundle(args):
+    print_json(
+        client_canary_bundle(
+            tunnel_name=args.name,
+            hostname=args.hostname,
+            prefer_family=args.prefer_family,
+            max_candidates=args.max_candidates,
+        )
+    )
+
+
+def cmd_client_report_template(args):
+    print_json(
+        client_report_template(
+            tunnel_name=args.name,
+            hostname=args.hostname,
+            prefer_family=args.prefer_family,
+            max_candidates=args.max_candidates,
+        )
+    )
+
+
+def cmd_client_report_summary(args):
+    print_json(client_report_summary(report_file=args.report_file))
 
 
 def cmd_config_schema(args):
@@ -189,6 +230,63 @@ def build_parser() -> argparse.ArgumentParser:
     edge_trace_parser.add_argument("--hostname", default="")
     edge_trace_parser.add_argument("--path", default="/cdn-cgi/trace")
     edge_trace_parser.set_defaults(func=cmd_edge_trace)
+
+    client_override_parser = subparsers.add_parser(
+        "client-override-plan",
+        help=COMMAND_HELP["client-override-plan"]["summary"],
+        epilog=command_epilog("client-override-plan"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    client_override_parser.add_argument("--name", default="")
+    client_override_parser.add_argument("--hostname", default="")
+    client_override_parser.add_argument(
+        "--prefer-family",
+        choices=["any", "ipv4", "ipv6"],
+        default="ipv4",
+    )
+    client_override_parser.add_argument("--max-candidates", type=int, default=2)
+    client_override_parser.set_defaults(func=cmd_client_override_plan)
+
+    client_bundle_parser = subparsers.add_parser(
+        "client-canary-bundle",
+        help=COMMAND_HELP["client-canary-bundle"]["summary"],
+        epilog=command_epilog("client-canary-bundle"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    client_bundle_parser.add_argument("--name", default="")
+    client_bundle_parser.add_argument("--hostname", default="")
+    client_bundle_parser.add_argument(
+        "--prefer-family",
+        choices=["any", "ipv4", "ipv6"],
+        default="ipv4",
+    )
+    client_bundle_parser.add_argument("--max-candidates", type=int, default=2)
+    client_bundle_parser.set_defaults(func=cmd_client_canary_bundle)
+
+    client_template_parser = subparsers.add_parser(
+        "client-report-template",
+        help=COMMAND_HELP["client-report-template"]["summary"],
+        epilog=command_epilog("client-report-template"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    client_template_parser.add_argument("--name", default="")
+    client_template_parser.add_argument("--hostname", default="")
+    client_template_parser.add_argument(
+        "--prefer-family",
+        choices=["any", "ipv4", "ipv6"],
+        default="ipv4",
+    )
+    client_template_parser.add_argument("--max-candidates", type=int, default=2)
+    client_template_parser.set_defaults(func=cmd_client_report_template)
+
+    client_summary_parser = subparsers.add_parser(
+        "client-report-summary",
+        help=COMMAND_HELP["client-report-summary"]["summary"],
+        epilog=command_epilog("client-report-summary"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    client_summary_parser.add_argument("report_file")
+    client_summary_parser.set_defaults(func=cmd_client_report_summary)
 
     token_ensure_parser = subparsers.add_parser(
         "token-ensure",
