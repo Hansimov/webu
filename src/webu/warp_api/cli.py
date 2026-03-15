@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from tclogger import logger, logstr
 
+from webu.sudo import popen as sudo_popen, signal_process
+
 from .constants import (
     DATA_DIR,
     PID_FILE,
@@ -232,22 +234,23 @@ def cmd_start(args):
     if sudopass and os.geteuid() != 0:
         stdin_pipe = subprocess.PIPE
 
-    proc = subprocess.Popen(
-        cmd,
-        stdin=stdin_pipe,
-        stdout=log_fp,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-
-    # 通过 stdin 传递密码给 sudo -S
-    if stdin_pipe and sudopass:
-        try:
-            proc.stdin.write((sudopass + "\n").encode())
-            proc.stdin.flush()
-            proc.stdin.close()
-        except Exception:
-            pass
+    if cmd and cmd[0] == "sudo":
+        proc = sudo_popen(
+            serve_args and [python_exe] + serve_args,
+            use_sudo=True,
+            preserve_env={"PATH": os.environ.get("PATH", "")},
+            stdout=log_fp,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    else:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=stdin_pipe,
+            stdout=log_fp,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
     managed_pid = _resolve_service_pid(proc.pid)
     _write_pid(managed_pid)
@@ -279,23 +282,8 @@ def cmd_stop(args):
 
     def _kill(pid, sig, group=False):
         """发送信号给进程或进程组（自动提权，使用 SUDOPASS）。"""
-        target = -pgid if group and pgid is not None else pid
-        try:
-            os.kill(target, sig)
-        except PermissionError:
-            sudopass = os.environ.get("SUDOPASS", "")
-            kill_args = ["sudo"] + (["-S"] if sudopass else [])
-            if group and pgid is not None:
-                kill_args += ["kill", f"-{sig}", "--", f"-{pgid}"]
-            else:
-                kill_args += ["kill", f"-{sig}", str(pid)]
-            subprocess.run(
-                kill_args,
-                input=(sudopass + "\n").encode() if sudopass else None,
-                check=False,
-            )
-        except ProcessLookupError:
-            pass
+        target_pid = pgid if group and pgid is not None else pid
+        signal_process(target_pid, sig, process_group=group and pgid is not None)
 
     try:
         # 先尝试终止整个进程组（sudo + python 子进程）

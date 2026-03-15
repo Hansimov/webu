@@ -24,6 +24,8 @@ import subprocess
 
 from tclogger import logger, logstr
 
+from webu.sudo import run as sudo_run
+
 
 TAILSCALE_INTERFACE = "tailscale0"
 WARP_NFT_TABLE = "inet cloudflare-warp"
@@ -37,15 +39,7 @@ TAILSCALE_RULE_PRIORITY = 5200
 
 def _sudo_run(cmd: list[str], check: bool = False) -> tuple[int, str]:
     """运行需要 sudo 的命令，自动使用 SUDOPASS 提权。"""
-    sudopass = os.environ.get("SUDOPASS", "")
-    full_cmd = ["sudo"] + (["-S"] if sudopass else []) + cmd
-
-    result = subprocess.run(
-        full_cmd,
-        input=(sudopass + "\n").encode() if sudopass else None,
-        capture_output=True,
-        timeout=15,
-    )
+    result = sudo_run(cmd, check=check, timeout=15)
     return result.returncode, result.stdout.decode(errors="replace").strip()
 
 
