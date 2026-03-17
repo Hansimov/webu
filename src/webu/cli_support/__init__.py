@@ -9,9 +9,12 @@ from .local_service import (
     tail_service_log,
     write_pid,
 )
+from .service_cli import ManagedServiceSpec, LocalServiceManager
 
 __all__ = [
     "LocalServiceSpec",
+    "ManagedServiceSpec",
+    "LocalServiceManager",
     "is_process_running",
     "read_pid",
     "read_service_log",

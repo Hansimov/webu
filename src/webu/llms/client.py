@@ -108,6 +108,7 @@ class LLMClient:
         stream: bool = None,
         max_tokens: int = None,
         timeout: float = None,
+        extra_body: dict | None = None,
     ):
         headers = {
             "accept": "application/json",
@@ -144,6 +145,8 @@ class LLMClient:
                 payload["thinking"] = {"type": thinking_type}
             else:
                 payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        if extra_body:
+            payload.update(extra_body)
         timeout = timeout if timeout is not None else self.timeout
         req_kwargs = {}
         if timeout is not None:
@@ -346,6 +349,7 @@ class LLMClient:
             seed=seed,
             stream=stream,
             max_tokens=max_tokens,
+            extra_body=None,
         )
 
         # Check HTTP status before parsing
