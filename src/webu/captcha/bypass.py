@@ -182,7 +182,12 @@ class CaptchaBypass:
             return False
 
         # Step 4: 使用 CaptchaSolver 解题（可能多轮）
-        from .solver import CaptchaSolver
+        try:
+            from .solver import CaptchaSolver
+        except ImportError as exc:
+            raise RuntimeError(
+                'CaptchaSolver requires optional dependencies. Install with: pip install "webu[captcha]"'
+            ) from exc
 
         solver = CaptchaSolver(verbose=self.verbose)
 

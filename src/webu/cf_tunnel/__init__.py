@@ -1,36 +1,30 @@
-from .cli import build_parser, main
-from .operations import (
-    access_diagnose,
-    apply_tunnel,
-    client_canary_bundle,
-    client_override_plan,
-    client_report_summary,
-    client_report_template,
-    config_check,
-    config_init,
-    docs_sync,
-    edge_trace,
-    ensure_token,
-    migrate_dns_to_cloudflare,
-    page_audit,
-    tunnel_status,
-)
+from webu._lazy_exports import exported_names, resolve_export
 
-__all__ = [
-    "access_diagnose",
-    "apply_tunnel",
-    "build_parser",
-    "client_canary_bundle",
-    "client_override_plan",
-    "client_report_summary",
-    "client_report_template",
-    "config_check",
-    "config_init",
-    "docs_sync",
-    "edge_trace",
-    "ensure_token",
-    "main",
-    "migrate_dns_to_cloudflare",
-    "page_audit",
-    "tunnel_status",
-]
+_EXPORTS = {
+    "build_parser": (".cli", "build_parser"),
+    "main": (".cli", "main"),
+    "access_diagnose": (".operations", "access_diagnose"),
+    "apply_tunnel": (".operations", "apply_tunnel"),
+    "client_canary_bundle": (".operations", "client_canary_bundle"),
+    "client_override_plan": (".operations", "client_override_plan"),
+    "client_report_summary": (".operations", "client_report_summary"),
+    "client_report_template": (".operations", "client_report_template"),
+    "config_check": (".operations", "config_check"),
+    "config_init": (".operations", "config_init"),
+    "docs_sync": (".operations", "docs_sync"),
+    "edge_trace": (".operations", "edge_trace"),
+    "ensure_token": (".operations", "ensure_token"),
+    "migrate_dns_to_cloudflare": (".operations", "migrate_dns_to_cloudflare"),
+    "page_audit": (".operations", "page_audit"),
+    "tunnel_status": (".operations", "tunnel_status"),
+}
+
+__all__ = exported_names(_EXPORTS)
+
+
+def __getattr__(name: str):
+    return resolve_export(name, __name__, _EXPORTS)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

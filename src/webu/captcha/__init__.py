@@ -11,7 +11,20 @@
   6. 点击 Verify 按钮完成验证
 """
 
-from .bypass import CaptchaBypass
-from .solver import CaptchaSolver, GridAnnotator
+from webu._lazy_exports import exported_names, resolve_export
 
-__all__ = ["CaptchaBypass", "CaptchaSolver", "GridAnnotator"]
+_EXPORTS = {
+    "CaptchaBypass": (".bypass", "CaptchaBypass"),
+    "CaptchaSolver": (".solver", "CaptchaSolver"),
+    "GridAnnotator": (".solver", "GridAnnotator"),
+}
+
+__all__ = exported_names(_EXPORTS)
+
+
+def __getattr__(name: str):
+    return resolve_export(name, __name__, _EXPORTS)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

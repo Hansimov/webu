@@ -9,6 +9,7 @@ import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
+from tclogger import logger
 
 from webu.fastapis.request_metrics import (
     format_dashboard_timestamp,
@@ -16,7 +17,7 @@ from webu.fastapis.request_metrics import (
     format_uptime_human,
     resolve_server_identity,
 )
-from webu.fastapis.styles import setup_root_redirect_page
+from webu.fastapis.styles import setup_root_redirect_page, setup_swagger_ui
 from webu.runtime_settings import DEFAULT_GOOGLE_API_PANEL_PATH, DEFAULT_GOOGLE_HUB_PORT
 
 from .manager import (
@@ -26,7 +27,6 @@ from .manager import (
     sanitize_hf_control_error,
     sanitize_hub_search_error,
 )
-from .panel import mount_google_hub_panel
 
 
 class HubHealthResponse(BaseModel):
@@ -73,6 +73,32 @@ class HubControlResponse(BaseModel):
     results: list[dict] = Field(default_factory=list)
 
 
+def _try_mount_google_hub_panel(
+    app: FastAPI,
+    snapshot_provider,
+    search_handler,
+    control_handler,
+    *,
+    admin_token: str,
+) -> bool:
+    try:
+        from .panel import mount_google_hub_panel
+    except ImportError as exc:
+        logger.warn(
+            f"  × Google Hub panel disabled: install dashboard extras to enable it ({exc})"
+        )
+        return False
+
+    mount_google_hub_panel(
+        app,
+        snapshot_provider,
+        search_handler,
+        control_handler,
+        admin_token=admin_token,
+    )
+    return True
+
+
 def create_google_hub_server(settings: GoogleHubSettings | None = None):
     resolved_settings = settings or resolve_google_hub_settings()
     manager = GoogleHubManager(resolved_settings)
@@ -89,7 +115,6 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         version="0.1.0",
         lifespan=lifespan,
     )
-    setup_root_redirect_page(app, DEFAULT_GOOGLE_API_PANEL_PATH)
     app.state.google_hub_settings = resolved_settings
     app.state.google_hub_manager = manager
 
@@ -217,7 +242,7 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
             "backends": metrics.get("backends", []),
         }
 
-    mount_google_hub_panel(
+    panel_enabled = _try_mount_google_hub_panel(
         app,
         lambda: build_snapshot_payload(asyncio.run(manager.metrics())),
         lambda query, num, lang, backend_name: asyncio.run(
@@ -236,6 +261,11 @@ def create_google_hub_server(settings: GoogleHubSettings | None = None):
         ),
         admin_token=resolved_settings.admin_token,
     )
+
+    if panel_enabled:
+        setup_root_redirect_page(app, DEFAULT_GOOGLE_API_PANEL_PATH)
+    else:
+        setup_swagger_ui(app)
 
     return app
 

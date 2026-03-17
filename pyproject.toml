@@ -12,7 +12,82 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = [ "tclogger", "DrissionPage", "pyvirtualdisplay", "beautifulsoup4", "requests", "netifaces", "fastapi", "uvicorn", "numpy", "playwright", "psutil", "pymongo", "pytest-asyncio", "aiohttp", "aiohttp-socks", "huggingface_hub", "opencv-python-headless", "cryptography", "dash", "a2wsgi"]
+dependencies = ["requests", "tclogger"]
+
+[project.optional-dependencies]
+parsing = ["beautifulsoup4"]
+browser = ["DrissionPage", "pyvirtualdisplay"]
+searches = ["DrissionPage", "pyvirtualdisplay"]
+embed = ["numpy"]
+captcha = ["playwright", "numpy", "opencv-python-headless", "httpx"]
+fastapi = ["fastapi", "uvicorn", "pydantic"]
+dashboard = ["dash", "a2wsgi"]
+proxy = ["aiohttp", "aiohttp-socks", "pymongo"]
+cf-tunnel = ["beautifulsoup4"]
+gemini = ["beautifulsoup4", "playwright", "fastapi", "uvicorn", "pydantic"]
+google-api = [
+    "beautifulsoup4",
+    "cryptography",
+    "playwright",
+    "aiohttp",
+    "aiohttp-socks",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+]
+google-api-panel = ["dash", "a2wsgi"]
+google-docker = [
+    "beautifulsoup4",
+    "cryptography",
+    "playwright",
+    "aiohttp",
+    "aiohttp-socks",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "huggingface_hub",
+]
+google-docker-panel = ["dash", "a2wsgi"]
+google-hub = [
+    "aiohttp",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "huggingface_hub",
+]
+google-hub-panel = ["dash", "a2wsgi"]
+proxy-api = [
+    "aiohttp",
+    "aiohttp-socks",
+    "pymongo",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+]
+warp-api = ["psutil", "fastapi", "uvicorn", "pydantic"]
+ipv6 = ["netifaces", "fastapi", "uvicorn", "pydantic"]
+all = [
+    "DrissionPage",
+    "pyvirtualdisplay",
+    "beautifulsoup4",
+    "numpy",
+    "playwright",
+    "httpx",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "psutil",
+    "pymongo",
+    "aiohttp",
+    "aiohttp-socks",
+    "huggingface_hub",
+    "opencv-python-headless",
+    "cryptography",
+    "dash",
+    "a2wsgi",
+    "netifaces",
+]
+dev = ["pytest", "pytest-asyncio"]
 
 [project.urls]
 Homepage = "https://github.com/Hansimov/webu"

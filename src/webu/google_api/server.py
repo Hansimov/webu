@@ -33,7 +33,6 @@ from webu.runtime_settings import (
     resolve_google_api_settings,
 )
 
-from .panel import mount_google_api_panel
 from .profile_assets import DEFAULT_SHARED_PROFILE_SECRET
 from .profile_bootstrap import create_encrypted_profile_archive
 from .proxy_manager import ProxyManager, DEFAULT_PROXIES
@@ -183,6 +182,24 @@ def _safe_ascii_header_value(value: str) -> str:
         return quote(text, safe="")
 
 
+def _try_mount_google_api_panel(
+    app: FastAPI,
+    snapshot_provider,
+    *,
+    admin_token: str,
+) -> bool:
+    try:
+        from .panel import mount_google_api_panel
+    except ImportError as exc:
+        logger.warn(
+            f"  × Google API panel disabled: install dashboard extras to enable it ({exc})"
+        )
+        return False
+
+    mount_google_api_panel(app, snapshot_provider, admin_token=admin_token)
+    return True
+
+
 # ═══════════════════════════════════════════════════════════════
 # 应用工厂
 # ═══════════════════════════════════════════════════════════════
@@ -258,20 +275,6 @@ def create_google_search_server(
         version="1.1.0",
         lifespan=lifespan,
     )
-    if home_mode == "hidden":
-        setup_root_landing_page(
-            app,
-            title="Workspace Assets",
-            message="Static workspace content is available. Interactive routes are not published from this path.",
-        )
-    elif home_mode == "panel":
-        setup_root_client_redirect_page(
-            app,
-            title="Google Instance Panel",
-            target_path=DEFAULT_GOOGLE_API_PANEL_PATH,
-        )
-    else:
-        setup_swagger_ui(app)
     app.state.google_api_settings = resolved_settings
     app.state.google_api_request_metrics = request_metrics
 
@@ -300,7 +303,26 @@ def create_google_search_server(
             "proxy_stats": proxy_stats,
         }
 
-    mount_google_api_panel(app, _panel_snapshot, admin_token=_resolve_admin_token())
+    panel_enabled = _try_mount_google_api_panel(
+        app,
+        _panel_snapshot,
+        admin_token=_resolve_admin_token(),
+    )
+
+    if home_mode == "hidden":
+        setup_root_landing_page(
+            app,
+            title="Workspace Assets",
+            message="Static workspace content is available. Interactive routes are not published from this path.",
+        )
+    elif home_mode == "panel" and panel_enabled:
+        setup_root_client_redirect_page(
+            app,
+            title="Google Instance Panel",
+            target_path=DEFAULT_GOOGLE_API_PANEL_PATH,
+        )
+    else:
+        setup_swagger_ui(app)
 
     def _require_search_token(
         header_token: str | None,

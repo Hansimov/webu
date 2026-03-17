@@ -5,11 +5,10 @@ __pycache__
 *.log
 data/
 debugs/**
-!debugs/**/
-!debugs/**/*.py
+!debugs/smoke_install_extras.py
+!debugs/smoke_install_extras.sh
 ipv6_mirrors/
 ipv6_global_addrs.json
 .chats
 *.lm
 configs/
-debugs/

@@ -41,7 +41,7 @@ from .profile_assets import (
 )
 from .profile_bootstrap import restore_encrypted_profile_archive
 from .proxy_manager import ProxyManager
-from webu.captcha import CaptchaBypass
+from webu.captcha.bypass import CaptchaBypass
 
 # 截图保存目录
 SCREENSHOT_DIR = Path("data/google_api_screenshots")
