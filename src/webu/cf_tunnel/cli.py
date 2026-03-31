@@ -25,6 +25,16 @@ from .operations import (
 )
 
 
+def _parse_optional_json_object(raw_value: str, *, label: str) -> dict | None:
+    raw_value = str(raw_value or "").strip()
+    if not raw_value:
+        return None
+    parsed = json.loads(raw_value)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return parsed
+
+
 def _add_common_token_mode(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--cf-token-mode",
@@ -57,6 +67,17 @@ def cmd_tunnel_apply(args):
         install_service=args.install_service,
         cf_token_mode=args.cf_token_mode,
         save_config=args.save_config,
+        domain_name=args.domain_name or None,
+        local_url=args.local_url or None,
+        zone_name=args.zone_name or None,
+        origin_request=_parse_optional_json_object(
+            args.origin_request_json,
+            label="--origin-request-json",
+        ),
+        cloudflared_run=_parse_optional_json_object(
+            args.cloudflared_run_json,
+            label="--cloudflared-run-json",
+        ),
     )
     print_json(result)
 
@@ -181,6 +202,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tunnel_apply.add_argument("--name", default="")
     tunnel_apply.add_argument("--all", action="store_true")
+    tunnel_apply.add_argument(
+        "--domain-name", "--domain", dest="domain_name", default=""
+    )
+    tunnel_apply.add_argument("--local-url", default="")
+    tunnel_apply.add_argument("--zone-name", default="")
+    tunnel_apply.add_argument("--origin-request-json", default="")
+    tunnel_apply.add_argument("--cloudflared-run-json", default="")
     tunnel_apply.add_argument("--install-service", action="store_true")
     _add_common_token_mode(tunnel_apply)
     tunnel_apply.set_defaults(func=cmd_tunnel_apply)

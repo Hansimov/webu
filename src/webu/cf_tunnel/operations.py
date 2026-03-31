@@ -8,6 +8,7 @@ import ssl
 import shutil
 import subprocess
 import tempfile
+import time
 from collections import defaultdict
 
 from dataclasses import asdict, dataclass
@@ -41,6 +42,8 @@ from .schema import (
     list_domains,
     list_tunnels,
     load_cf_tunnel_config,
+    normalize_tunnel_cloudflared_run,
+    normalize_tunnel_origin_request,
     save_cf_tunnel_config,
     upsert_domain,
     upsert_tunnel,
@@ -55,6 +58,7 @@ class CloudflareCredentialResolution:
 
 
 CLOUDFLARED_TUNNEL_SERVICE_PREFIX = "cloudflared-tunnel"
+LEGACY_BLDASH_OVERRIDE_FILE_NAME = "10-bldash-transport.conf"
 _CLOUDFLARE_ORIGIN_REQUEST_KEY_MAP = {
     "connect_timeout": "connectTimeout",
     "keep_alive_connections": "keepAliveConnections",
@@ -86,6 +90,15 @@ def _cloudflared_tunnel_service_path(tunnel_name: str) -> Path:
     return Path("/etc/systemd/system") / cloudflared_tunnel_service_name(tunnel_name)
 
 
+def _cloudflared_tunnel_service_override_path(tunnel_name: str) -> Path:
+    service_name = cloudflared_tunnel_service_name(tunnel_name)
+    return (
+        Path("/etc/systemd/system")
+        / f"{service_name}.d"
+        / LEGACY_BLDASH_OVERRIDE_FILE_NAME
+    )
+
+
 def _summarize_completed_process(
     completed: subprocess.CompletedProcess[bytes],
 ) -> dict[str, Any]:
@@ -107,12 +120,25 @@ def _ensure_success(
 
 
 def _render_cloudflared_tunnel_service_unit(
-    *, tunnel_name: str, tunnel_token: str
+    *,
+    tunnel_name: str,
+    tunnel_token: str,
+    cloudflared_run: dict[str, Any] | None = None,
 ) -> str:
+    normalized_cloudflared_run = normalize_tunnel_cloudflared_run(cloudflared_run)
     cloudflared_bin = shutil.which("cloudflared") or "/usr/bin/cloudflared"
-    exec_start = shlex.join(
-        [cloudflared_bin, "--no-autoupdate", "tunnel", "run", "--token", tunnel_token]
-    )
+    exec_start_parts = [cloudflared_bin, "--no-autoupdate"]
+    protocol = str(normalized_cloudflared_run.get("protocol", "")).strip()
+    if protocol:
+        exec_start_parts.extend(["--protocol", protocol])
+    edge_ip_version = str(normalized_cloudflared_run.get("edge_ip_version", "")).strip()
+    if edge_ip_version:
+        exec_start_parts.extend(["--edge-ip-version", edge_ip_version])
+    exec_start_parts.extend(["tunnel", "run"])
+    for resolver_addr in normalized_cloudflared_run.get("dns_resolver_addrs", []):
+        exec_start_parts.extend(["--dns-resolver-addrs", resolver_addr])
+    exec_start_parts.extend(["--token", tunnel_token])
+    exec_start = shlex.join(exec_start_parts)
     return "\n".join(
         [
             "[Unit]",
@@ -147,13 +173,17 @@ def _cloudflare_origin_request_payload(
 
 
 def _install_cloudflared_tunnel_service(
-    *, tunnel_name: str, tunnel_token: str
+    *,
+    tunnel_name: str,
+    tunnel_token: str,
+    cloudflared_run: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     service_name = cloudflared_tunnel_service_name(tunnel_name)
     service_path = _cloudflared_tunnel_service_path(tunnel_name)
     unit_text = _render_cloudflared_tunnel_service_unit(
         tunnel_name=tunnel_name,
         tunnel_token=tunnel_token,
+        cloudflared_run=cloudflared_run,
     )
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(unit_text)
@@ -174,6 +204,18 @@ def _install_cloudflared_tunnel_service(
                 timeout=60,
             ),
             label=f"install systemd unit {service_name}",
+        )
+        cleanup_legacy_override_result = _ensure_success(
+            sudo_run(
+                [
+                    "rm",
+                    "-f",
+                    str(_cloudflared_tunnel_service_override_path(tunnel_name)),
+                ],
+                check=False,
+                timeout=60,
+            ),
+            label=f"remove legacy bldash override for {service_name}",
         )
         daemon_reload_result = _ensure_success(
             sudo_run(["systemctl", "daemon-reload"], check=False, timeout=60),
@@ -216,11 +258,108 @@ def _install_cloudflared_tunnel_service(
         "service_name": service_name,
         "service_path": str(service_path),
         "write_unit": write_result,
+        "cleanup_legacy_override": cleanup_legacy_override_result,
         "daemon_reload": daemon_reload_result,
         "enable_service": enable_result,
         "restart_service": restart_result,
         "service_status": status_result,
     }
+
+
+def _find_matching_tunnel(
+    payload: dict[str, Any], *, tunnel_name: str | None, domain_name: str | None = None
+) -> TunnelConfig | None:
+    for item in list_tunnels(payload):
+        if tunnel_name and (
+            item.tunnel_name == tunnel_name or item.domain_name == tunnel_name
+        ):
+            return item
+        if domain_name and item.domain_name == domain_name:
+            return item
+    return None
+
+
+def _prepare_tunnel_override(
+    payload: dict[str, Any],
+    *,
+    tunnel_name: str | None,
+    domain_name: str | None,
+    local_url: str | None,
+    zone_name: str | None,
+    origin_request: dict[str, Any] | None,
+    cloudflared_run: dict[str, Any] | None,
+) -> tuple[dict[str, Any], TunnelConfig]:
+    existing = _find_matching_tunnel(
+        payload,
+        tunnel_name=tunnel_name,
+        domain_name=domain_name,
+    )
+    resolved_tunnel_name = _require_text(
+        tunnel_name or (existing.tunnel_name if existing else domain_name or ""),
+        "tunnel_name",
+    )
+    resolved_domain_name = _require_text(
+        domain_name or (existing.domain_name if existing else resolved_tunnel_name),
+        "domain_name",
+    )
+    resolved_local_url = _require_text(
+        local_url or (existing.local_url if existing else ""),
+        "local_url",
+    )
+    resolved_zone_name = str(
+        zone_name or (existing.zone_name if existing else "")
+    ).strip() or infer_zone_name(resolved_domain_name)
+    updated = TunnelConfig(
+        tunnel_name=resolved_tunnel_name,
+        domain_name=resolved_domain_name,
+        local_url=resolved_local_url,
+        zone_name=resolved_zone_name,
+        origin_request=normalize_tunnel_origin_request(
+            origin_request
+            if origin_request is not None
+            else (existing.origin_request if existing else {})
+        ),
+        cloudflared_run=normalize_tunnel_cloudflared_run(
+            cloudflared_run
+            if cloudflared_run is not None
+            else (existing.cloudflared_run if existing else {})
+        ),
+        tunnel_id=existing.tunnel_id if existing else "",
+        tunnel_token=existing.tunnel_token if existing else "",
+        raw=dict(existing.raw) if existing else {},
+    )
+    return upsert_tunnel(payload, updated), updated
+
+
+def _summarize_tunnel_health(payload: dict[str, Any]) -> dict[str, Any]:
+    connections = payload.get("connections")
+    return {
+        "status": str(payload.get("status", "unknown") or "unknown").lower(),
+        "active_connections": len(connections) if isinstance(connections, list) else 0,
+    }
+
+
+def _wait_for_tunnel_health(
+    *,
+    cf_client: CloudflareClient,
+    account_id: str,
+    tunnel_id: str,
+    timeout_seconds: int = 20,
+    poll_interval_seconds: int = 2,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_status = _summarize_tunnel_health(
+        cf_client.get_tunnel(account_id=account_id, tunnel_id=tunnel_id)
+    )
+    while True:
+        if last_status["status"] == "healthy":
+            return last_status
+        if time.monotonic() >= deadline:
+            return last_status
+        time.sleep(poll_interval_seconds)
+        last_status = _summarize_tunnel_health(
+            cf_client.get_tunnel(account_id=account_id, tunnel_id=tunnel_id)
+        )
 
 
 def _domain_lookup(
@@ -441,9 +580,39 @@ def apply_tunnel(
     install_service: bool,
     cf_token_mode: str,
     save_config: bool,
+    domain_name: str | None = None,
+    local_url: str | None = None,
+    zone_name: str | None = None,
+    origin_request: dict[str, Any] | None = None,
+    cloudflared_run: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     payload = load_cf_tunnel_config()
     account_id = _require_text(str(payload.get("cf_account_id", "")), "cf_account_id")
+    override_requested = any(
+        value is not None
+        for value in [
+            domain_name,
+            local_url,
+            zone_name,
+            origin_request,
+            cloudflared_run,
+        ]
+    )
+    if apply_all and override_requested:
+        raise ValueError(
+            "override arguments are only supported when applying a single tunnel"
+        )
+    if override_requested:
+        payload, _ = _prepare_tunnel_override(
+            payload,
+            tunnel_name=tunnel_name,
+            domain_name=domain_name,
+            local_url=local_url,
+            zone_name=zone_name,
+            origin_request=origin_request,
+            cloudflared_run=cloudflared_run,
+        )
+        _write_payload(payload, save_config=save_config)
     targets = (
         list_tunnels(payload)
         if apply_all
@@ -488,6 +657,7 @@ def apply_tunnel(
             local_url=item.local_url,
             zone_name=item.zone_name,
             origin_request=item.origin_request,
+            cloudflared_run=item.cloudflared_run,
             tunnel_id=tunnel_id,
             tunnel_token=tunnel_token,
             raw=item.raw,
@@ -495,25 +665,51 @@ def apply_tunnel(
         payload = upsert_tunnel(payload, updated_tunnel)
         config_path = _write_payload(payload, save_config=save_config)
         install_result: dict[str, Any] | None = None
+        verification: dict[str, Any] | None = None
         if install_service:
             if not shutil.which("cloudflared"):
                 raise FileNotFoundError("cloudflared is not installed or not in PATH")
+            status_before = _summarize_tunnel_health(
+                cf_client.get_tunnel(account_id=account_id, tunnel_id=tunnel_id)
+            )
             install_result = _install_cloudflared_tunnel_service(
                 tunnel_name=item.tunnel_name,
                 tunnel_token=tunnel_token,
+                cloudflared_run=item.cloudflared_run,
             )
+            status_after = _wait_for_tunnel_health(
+                cf_client=cf_client,
+                account_id=account_id,
+                tunnel_id=tunnel_id,
+            )
+            verification = {
+                "status_before_restart": status_before["status"],
+                "connections_before_restart": status_before["active_connections"],
+                "service_restarted": True,
+                "systemd_service": install_result["service_name"],
+                "restart_returncode": install_result["restart_service"]["returncode"],
+                "status_after_restart": status_after["status"],
+                "connections_after_restart": status_after["active_connections"],
+            }
+            if status_after["status"] != "healthy":
+                raise RuntimeError(
+                    f"Tunnel {item.tunnel_name} is still {status_after['status']} after restarting {install_result['service_name']}."
+                )
         results.append(
             {
                 "tunnel_name": item.tunnel_name,
                 "domain_name": item.domain_name,
                 "local_url": item.local_url,
                 "zone_name": item.zone_name,
+                "origin_request": item.origin_request,
+                "cloudflared_run": item.cloudflared_run,
                 "tunnel_id": tunnel_id,
                 "tunnel_token_saved": bool(tunnel_token),
                 "install_command": (
                     f"install/update {cloudflared_tunnel_service_name(item.tunnel_name)}"
                 ),
                 "install_result": install_result or {},
+                "verification": verification or {},
                 "cf_token_source": credential.source,
                 "config_path": str(config_path) if config_path else "",
             }

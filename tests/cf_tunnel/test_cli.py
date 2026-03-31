@@ -50,7 +50,18 @@ def test_parser_supports_dns_and_tunnel_commands():
         ["dns-migrate", domain_name, "--cf-token-mode", "auto"]
     )
     tunnel_args = parser.parse_args(
-        ["tunnel-apply", "--name", tunnel_name, "--install-service"]
+        [
+            "tunnel-apply",
+            "--name",
+            tunnel_name,
+            "--domain",
+            domain_name,
+            "--local-url",
+            "http://127.0.0.1:21002",
+            "--cloudflared-run-json",
+            '{"protocol":"http2"}',
+            "--install-service",
+        ]
     )
     token_args = parser.parse_args(
         ["token-ensure", "--zone-name", domain_name, "--cf-token-mode", "manual"]
@@ -74,6 +85,9 @@ def test_parser_supports_dns_and_tunnel_commands():
     assert dns_args.domain_name == domain_name
     assert dns_args.cf_token_mode == "auto"
     assert tunnel_args.name == tunnel_name
+    assert tunnel_args.domain_name == domain_name
+    assert tunnel_args.local_url == "http://127.0.0.1:21002"
+    assert tunnel_args.cloudflared_run_json == '{"protocol":"http2"}'
     assert tunnel_args.install_service is True
     assert token_args.zone_name == domain_name
     assert token_args.cf_token_mode == "manual"
@@ -313,10 +327,9 @@ def test_apply_tunnel_pushes_origin_request_settings(monkeypatch, tmp_path):
     }
 
 
-def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
+def test_apply_tunnel_persists_runtime_overrides(monkeypatch, tmp_path):
     local_payload = deepcopy(_load_local_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
-    domain_name = str(tunnel["domain_name"]).strip()
     tunnel_name = str(tunnel["tunnel_name"]).strip()
 
     config_dir = tmp_path / "configs"
@@ -362,6 +375,109 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
         def upsert_cname_record(self, *, zone_id, hostname, content, proxied=True):
             return {"id": "record-1"}
 
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+
+    result = apply_tunnel(
+        tunnel_name=tunnel_name,
+        apply_all=False,
+        install_service=False,
+        cf_token_mode="auto",
+        save_config=True,
+        domain_name="dev.blbl.top",
+        local_url="http://127.0.0.1:21012",
+        zone_name="blbl.top",
+        origin_request={
+            "connect_timeout": 5,
+            "keep_alive_connections": 256,
+            "keep_alive_timeout": 120,
+        },
+        cloudflared_run={
+            "protocol": "http2",
+            "edge_ip_version": "4",
+            "dns_resolver_addrs": ["1.1.1.1:53", "1.0.0.1:53"],
+        },
+    )
+
+    saved = json.loads((config_dir / "cf_tunnel.json").read_text(encoding="utf-8"))
+    assert saved["cf_tunnels"][0]["cloudflared_run"] == {
+        "protocol": "http2",
+        "edge_ip_version": "4",
+        "dns_resolver_addrs": ["1.1.1.1:53", "1.0.0.1:53"],
+    }
+    assert result[0]["cloudflared_run"] == {
+        "protocol": "http2",
+        "edge_ip_version": "4",
+        "dns_resolver_addrs": ["1.1.1.1:53", "1.0.0.1:53"],
+    }
+
+
+def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+    domain_name = str(tunnel["domain_name"]).strip()
+    tunnel_name = str(tunnel["tunnel_name"]).strip()
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_api_token"] = "existing-token"
+    tunnel["tunnel_id"] = ""
+    tunnel["tunnel_token"] = ""
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        statuses = [
+            {"status": "degraded", "connections": [{"id": "conn-1"}]},
+            {
+                "status": "healthy",
+                "connections": [
+                    {"id": "conn-1"},
+                    {"id": "conn-2"},
+                    {"id": "conn-3"},
+                    {"id": "conn-4"},
+                ],
+            },
+        ]
+
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def ensure_zone(self, *, account_id, zone_name):
+            return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
+
+        def ensure_tunnel(self, *, account_id, tunnel_name):
+            return {"id": "tunnel-1", "token": "secret-token"}
+
+        def get_tunnel_token(self, *, account_id, tunnel_id):
+            return "secret-token"
+
+        def get_tunnel(self, *, account_id, tunnel_id):
+            if len(self.statuses) > 1:
+                return self.statuses.pop(0)
+            return self.statuses[0]
+
+        def put_tunnel_configuration(
+            self,
+            *,
+            account_id,
+            tunnel_id,
+            hostname,
+            service,
+            origin_request=None,
+        ):
+            return {"ok": True}
+
+        def upsert_cname_record(self, *, zone_id, hostname, content, proxied=True):
+            return {"id": "record-1"}
+
     recorded_commands = []
 
     def fake_sudo_run(command, **kwargs):
@@ -380,28 +496,44 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
         install_service=True,
         cf_token_mode="auto",
         save_config=True,
+        cloudflared_run={
+            "protocol": "http2",
+            "edge_ip_version": "4",
+            "dns_resolver_addrs": ["1.1.1.1:53", "1.0.0.1:53"],
+        },
     )
 
     install_result = result[0]["install_result"]
     assert install_result["service_name"] == "cloudflared-tunnel-dev-blbl-top.service"
     assert [command[:2] for command in recorded_commands[1:]] == [
+        ["rm", "-f"],
         ["systemctl", "daemon-reload"],
         ["systemctl", "enable"],
         ["systemctl", "restart"],
         ["systemctl", "show"],
     ]
     assert recorded_commands[0][:4] == ["install", "-D", "-m", "644"]
+    assert result[0]["verification"]["status_before_restart"] == "degraded"
+    assert result[0]["verification"]["status_after_restart"] == "healthy"
 
 
 def test_render_cloudflared_tunnel_service_unit_uses_faster_restart_defaults():
     rendered = _render_cloudflared_tunnel_service_unit(
         tunnel_name="blbl.top",
         tunnel_token="secret-token",
+        cloudflared_run={
+            "protocol": "http2",
+            "edge_ip_version": "4",
+            "dns_resolver_addrs": ["1.1.1.1:53", "1.0.0.1:53"],
+        },
     )
 
     assert "Type=notify" in rendered
     assert "TimeoutStartSec=0" in rendered
     assert "RestartSec=2s" in rendered
+    assert "--protocol http2" in rendered
+    assert "--edge-ip-version 4" in rendered
+    assert "--dns-resolver-addrs 1.1.1.1:53" in rendered
 
 
 def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):

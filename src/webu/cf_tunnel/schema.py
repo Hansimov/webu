@@ -20,6 +20,8 @@ _TUNNEL_ORIGIN_REQUEST_INT_FIELDS = {
     "keep_alive_timeout",
     "tcp_keep_alive",
 }
+_TUNNEL_CLOUDFLARED_RUN_ALLOWED_PROTOCOLS = {"auto", "http2", "quic"}
+_TUNNEL_CLOUDFLARED_RUN_ALLOWED_EDGE_IP_VERSIONS = {"auto", "4", "6"}
 
 
 CF_TUNNEL_CONFIG = ConfigSpec(
@@ -35,6 +37,7 @@ CF_TUNNEL_CONFIG = ConfigSpec(
         "复杂公共后缀域名请显式填写 zone_name，不要依赖自动推断。",
         "domains[].zone_id、domains[].cloudflare_nameservers、domains[].aliyun_task_no 会在 dns-migrate 成功后自动回写。",
         "cf_tunnels[].tunnel_id、cf_tunnels[].tunnel_token 会在 tunnel-apply 成功后自动回写。",
+        "cf_tunnels[].cloudflared_run 对应本机 cloudflared service 的 tunnel run 参数，用于稳定 origin 到 Cloudflare edge 的连接。",
         "本文件包含敏感信息，不应出现在公开文档、测试断言或日志输出中。",
     ],
     sample={
@@ -60,6 +63,14 @@ CF_TUNNEL_CONFIG = ConfigSpec(
                     "connect_timeout": 5,
                     "keep_alive_connections": 256,
                     "keep_alive_timeout": 120,
+                },
+                "cloudflared_run": {
+                    "protocol": "http2",
+                    "edge_ip_version": "4",
+                    "dns_resolver_addrs": [
+                        "1.1.1.1:53",
+                        "1.0.0.1:53",
+                    ],
                 },
                 "tunnel_id": "",
                 "tunnel_token": "",
@@ -130,6 +141,27 @@ CF_TUNNEL_CONFIG = ConfigSpec(
                                 "no_happy_eyeballs": {"type": "boolean"},
                             },
                         },
+                        "cloudflared_run": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "protocol": {
+                                    "type": "string",
+                                    "enum": ["auto", "http2", "quic"],
+                                },
+                                "edge_ip_version": {
+                                    "type": "string",
+                                    "enum": ["auto", "4", "6"],
+                                },
+                                "dns_resolver_addrs": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                    },
+                                },
+                            },
+                        },
                         "tunnel_id": {"type": "string"},
                         "tunnel_token": {"type": "string"},
                     },
@@ -158,12 +190,13 @@ class TunnelConfig:
     local_url: str
     zone_name: str
     origin_request: dict[str, Any]
+    cloudflared_run: dict[str, Any]
     tunnel_id: str
     tunnel_token: str
     raw: dict[str, Any]
 
 
-def _normalize_tunnel_origin_request(raw: Any) -> dict[str, Any]:
+def normalize_tunnel_origin_request(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
 
@@ -184,6 +217,36 @@ def _normalize_tunnel_origin_request(raw: Any) -> dict[str, Any]:
             continue
         if isinstance(value, int) and value > 0:
             normalized[field] = value
+
+    return normalized
+
+
+def normalize_tunnel_cloudflared_run(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+
+    normalized: dict[str, Any] = {}
+
+    protocol = str(raw.get("protocol", "")).strip().lower()
+    if protocol in _TUNNEL_CLOUDFLARED_RUN_ALLOWED_PROTOCOLS:
+        normalized["protocol"] = protocol
+
+    edge_ip_version = str(raw.get("edge_ip_version", "")).strip().lower()
+    if edge_ip_version in _TUNNEL_CLOUDFLARED_RUN_ALLOWED_EDGE_IP_VERSIONS:
+        normalized["edge_ip_version"] = edge_ip_version
+
+    resolver_values = raw.get("dns_resolver_addrs")
+    if isinstance(resolver_values, list):
+        addresses: list[str] = []
+        seen: set[str] = set()
+        for item in resolver_values:
+            cleaned = str(item).strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            addresses.append(cleaned)
+        if addresses:
+            normalized["dns_resolver_addrs"] = addresses
 
     return normalized
 
@@ -252,8 +315,11 @@ def list_tunnels(payload: dict[str, Any]) -> list[TunnelConfig]:
                 domain_name=domain_name,
                 local_url=local_url,
                 zone_name=zone_name,
-                origin_request=_normalize_tunnel_origin_request(
+                origin_request=normalize_tunnel_origin_request(
                     raw_item.get("origin_request", {})
+                ),
+                cloudflared_run=normalize_tunnel_cloudflared_run(
+                    raw_item.get("cloudflared_run", {})
                 ),
                 tunnel_id=str(raw_item.get("tunnel_id", "")).strip(),
                 tunnel_token=str(raw_item.get("tunnel_token", "")).strip(),
@@ -305,6 +371,10 @@ def upsert_tunnel(payload: dict[str, Any], tunnel: TunnelConfig) -> dict[str, An
         new_raw["origin_request"] = tunnel.origin_request
     else:
         new_raw.pop("origin_request", None)
+    if tunnel.cloudflared_run:
+        new_raw["cloudflared_run"] = tunnel.cloudflared_run
+    else:
+        new_raw.pop("cloudflared_run", None)
     for index, item in enumerate(tunnels):
         if (
             isinstance(item, dict)
