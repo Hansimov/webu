@@ -1123,6 +1123,149 @@ def _ip_family(ip_address: str) -> str:
     return "ipv6" if ":" in str(ip_address) else "ipv4"
 
 
+def _collect_ip_families(values: Any) -> list[str]:
+    families: list[str] = []
+    seen: set[str] = set()
+    for item in values if isinstance(values, list) else []:
+        address = str(item).strip()
+        if not address:
+            continue
+        family = _ip_family(address)
+        if family in seen:
+            continue
+        seen.add(family)
+        families.append(family)
+    return families
+
+
+def _edge_ips_by_family(
+    values: Any, *, success: bool | None = None
+) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {"ipv4": [], "ipv6": []}
+    seen: dict[str, set[str]] = {"ipv4": set(), "ipv6": set()}
+    for item in values if isinstance(values, list) else []:
+        if not isinstance(item, dict):
+            continue
+        if success is not None and bool(item.get("success")) != success:
+            continue
+        ip_address = str(item.get("ip", "")).strip()
+        if not ip_address:
+            continue
+        family = _ip_family(ip_address)
+        if ip_address in seen[family]:
+            continue
+        seen[family].add(ip_address)
+        grouped[family].append(ip_address)
+    return grouped
+
+
+def _family_assessment(trace: dict[str, Any]) -> dict[str, Any]:
+    # This is a network-local hint for the next canary round, not a global policy.
+    access = trace.get("access_diagnose", {}) if isinstance(trace, dict) else {}
+    dns = access.get("dns", {}) if isinstance(access, dict) else {}
+
+    system_dns = dns.get("system_resolver", {}) if isinstance(dns, dict) else {}
+    cloudflare_dns = dns.get("cloudflare_doh", {}) if isinstance(dns, dict) else {}
+    authoritative_dns = (
+        dns.get("cloudflare_authoritative_ns", {}) if isinstance(dns, dict) else {}
+    )
+
+    system_addresses = (
+        system_dns.get("addresses", []) if isinstance(system_dns, dict) else []
+    )
+    cloudflare_addresses = (
+        cloudflare_dns.get("addresses", []) if isinstance(cloudflare_dns, dict) else []
+    )
+    authoritative_addresses = (
+        authoritative_dns.get("addresses", [])
+        if isinstance(authoritative_dns, dict)
+        else []
+    )
+
+    system_families = _collect_ip_families(system_addresses)
+    cloudflare_families = _collect_ip_families(
+        [*cloudflare_addresses, *authoritative_addresses]
+    )
+
+    successful_by_family = _edge_ips_by_family(
+        trace.get("unique_edge_results", []), success=True
+    )
+    failed_by_family = _edge_ips_by_family(
+        trace.get("unique_edge_results", []), success=False
+    )
+
+    successful_families = [
+        family for family in ("ipv4", "ipv6") if successful_by_family[family]
+    ]
+    failed_families = [
+        family for family in ("ipv4", "ipv6") if failed_by_family[family]
+    ]
+
+    mismatch = bool(dns.get("mismatch")) if isinstance(dns, dict) else False
+    recursive_mismatch = (
+        bool(dns.get("recursive_mismatch")) if isinstance(dns, dict) else False
+    )
+
+    reason_codes: list[str] = []
+    if mismatch:
+        reason_codes.append("dns_mismatch")
+    if recursive_mismatch:
+        reason_codes.append("recursive_dns_mismatch")
+    if failed_by_family["ipv6"]:
+        reason_codes.append("ipv6_probe_failures")
+    if failed_by_family["ipv4"]:
+        reason_codes.append("ipv4_probe_failures")
+    if "ipv6" in system_families and "ipv6" not in cloudflare_families:
+        reason_codes.append("system_ipv6_only_view")
+
+    recommended = "any"
+    summary = "Current probes do not show a strong IP-family preference."
+
+    if successful_by_family["ipv4"] and not successful_by_family["ipv6"]:
+        recommended = "ipv4"
+        reason_codes.append("ipv4_only_success")
+        summary = "Only IPv4 edge candidates succeeded in the current probe set, so IPv4 is the safest first canary family."
+    elif successful_by_family["ipv6"] and not successful_by_family["ipv4"]:
+        recommended = "ipv6"
+        reason_codes.append("ipv6_only_success")
+        summary = "Only IPv6 edge candidates succeeded in the current probe set, so IPv6 is the safest first canary family."
+    elif successful_by_family["ipv4"] and successful_by_family["ipv6"]:
+        if mismatch or recursive_mismatch or failed_by_family["ipv6"]:
+            recommended = "ipv4"
+            reason_codes.append("prefer_ipv4_due_to_mixed_family_risk")
+            summary = "Both families produced usable edge candidates, but resolver drift or mixed-family instability makes IPv4 the safer first canary on this network."
+        else:
+            reason_codes.append("dual_stack_success")
+            summary = "Both IPv4 and IPv6 edge candidates succeeded without resolver drift, so either family can be tested."
+    elif (mismatch or recursive_mismatch) and "ipv4" in system_families:
+        recommended = "ipv4"
+        reason_codes.append("prefer_ipv4_due_to_dns_drift")
+        summary = (
+            "Resolver disagreement makes IPv4 the safer first canary on this network."
+        )
+    elif not successful_families:
+        summary = (
+            "No successful edge candidates were observed in the current probe set."
+        )
+
+    deduped_reason_codes: list[str] = []
+    for item in reason_codes:
+        if item not in deduped_reason_codes:
+            deduped_reason_codes.append(item)
+
+    return {
+        "recommended_prefer_family": recommended,
+        "summary": summary,
+        "reason_codes": deduped_reason_codes,
+        "system_families": system_families,
+        "cloudflare_families": cloudflare_families,
+        "successful_families": successful_families,
+        "failed_families": failed_families,
+        "successful_candidates": successful_by_family,
+        "failed_candidates": failed_by_family,
+    }
+
+
 def _safe_float(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -1211,8 +1354,9 @@ def _default_client_report(
     hostname: str,
     tunnel_name: str,
     candidates: list[dict[str, Any]],
+    family_assessment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    report = {
         "hostname": hostname,
         "tunnel_name": tunnel_name,
         "report_version": 1,
@@ -1238,6 +1382,12 @@ def _default_client_report(
             for item in candidates
         ],
     }
+    if family_assessment:
+        report["recommended_prefer_family"] = family_assessment.get(
+            "recommended_prefer_family", "any"
+        )
+        report["family_assessment"] = family_assessment
+    return report
 
 
 def _normalize_asset_path(value: str) -> str:
@@ -1549,12 +1699,26 @@ def client_override_plan(
     trace = edge_trace(tunnel_name=tunnel_name, hostname=hostname)
     resolved_hostname = trace["hostname"]
     resolved_tunnel_name = trace["tunnel_name"]
+    family_assessment = _family_assessment(trace)
+    recommended_prefer_family = family_assessment["recommended_prefer_family"]
     allowed_families = {"ipv4", "ipv6"} if prefer_family == "any" else {prefer_family}
     max_items = max(1, int(max_candidates))
 
+    edge_results = list(trace.get("unique_edge_results", []))
+    if prefer_family == "any" and recommended_prefer_family in {"ipv4", "ipv6"}:
+        # Keep the first exported candidates aligned with the safer family for this network.
+        edge_results.sort(
+            key=lambda item: (
+                0
+                if _ip_family(str(item.get("ip", "")).strip())
+                == recommended_prefer_family
+                else 1
+            )
+        )
+
     candidates: list[dict[str, Any]] = []
     seen_ips: set[str] = set()
-    for item in trace.get("unique_edge_results", []):
+    for item in edge_results:
         if not item.get("success"):
             continue
         ip_address = str(item.get("ip", "")).strip()
@@ -1591,13 +1755,26 @@ def client_override_plan(
             "No successful edge candidates were found under the requested IP family filter, so there is nothing safe to export for a client-side override experiment."
         )
 
-    if prefer_family == "any":
+    if recommended_prefer_family in {"ipv4", "ipv6"}:
         recommendations.append(
-            "For mainland users, start with IPv4 canaries first. Add IPv6 only if the user network has proven IPv6 quality; otherwise dual-stack overrides can make behavior less predictable."
+            f"Current probes recommend {recommended_prefer_family}-first canaries. {family_assessment['summary']}"
         )
-    elif prefer_family == "ipv6":
+    else:
+        recommendations.append(
+            "Current probes do not show a strong family winner. Keep IPv4 and IPv6 canaries in separate cohorts so you can compare them cleanly."
+        )
+
+    if prefer_family == "ipv6":
         warnings.append(
             "IPv6 overrides should only be tested on user networks with confirmed IPv6 reachability and stable routing."
+        )
+    if (
+        prefer_family in {"ipv4", "ipv6"}
+        and recommended_prefer_family in {"ipv4", "ipv6"}
+        and prefer_family != recommended_prefer_family
+    ):
+        warnings.append(
+            f"The current probes recommend {recommended_prefer_family}-first canaries, but this plan was requested with prefer_family={prefer_family}. Keep the rollout very small until the non-recommended family is validated on the target ISP."
         )
 
     recommendations.append(
@@ -1624,6 +1801,8 @@ def client_override_plan(
         "hostname": resolved_hostname,
         "tunnel_name": resolved_tunnel_name,
         "prefer_family": prefer_family,
+        "recommended_prefer_family": recommended_prefer_family,
+        "family_assessment": family_assessment,
         "max_candidates": max_items,
         "edge_trace": trace,
         "candidates": candidates,
@@ -1660,14 +1839,44 @@ def client_canary_bundle(
     hostname_value = plan["hostname"]
     tunnel_name_value = plan["tunnel_name"]
     candidates = plan["candidates"]
+    family_assessment = plan.get("family_assessment")
+    recommended_prefer_family = plan.get("recommended_prefer_family", "any")
+    family_summary = (
+        str(family_assessment.get("summary", "")).strip()
+        if isinstance(family_assessment, dict)
+        else ""
+    )
+
+    bundle_recommendations: list[str] = []
+    if recommended_prefer_family in {"ipv4", "ipv6"} and family_summary:
+        bundle_recommendations.append(
+            f"Current probes recommend {recommended_prefer_family}-first canaries. {family_summary}"
+        )
+    else:
+        bundle_recommendations.append(
+            "Current probes do not show a strong family winner. Keep IPv4 and IPv6 canaries in separate cohorts so you can compare them cleanly."
+        )
+    bundle_recommendations.extend(
+        [
+            "Prefer ISP-specific and region-specific winners over a single nationwide preferred IP.",
+            "Desktop and mobile should be validated separately because mobile often follows different DNS and transport paths.",
+            "If Android or iOS canaries are required, push the override at the local DNS layer for the test Wi-Fi or test router instead of relying on per-device hosts edits.",
+        ]
+    )
+
     return {
         "hostname": hostname_value,
         "tunnel_name": tunnel_name_value,
         "prefer_family": prefer_family,
+        "recommended_prefer_family": recommended_prefer_family,
+        "family_assessment": family_assessment,
         "candidates": candidates,
         "platforms": _platform_instructions(hostname_value, candidates),
         "report_template": _default_client_report(
-            hostname_value, tunnel_name_value, candidates
+            hostname_value,
+            tunnel_name_value,
+            candidates,
+            family_assessment=family_assessment,
         ),
         "rollout": {
             "canary_group_size": "3-10 users per ISP or region",
@@ -1678,11 +1887,7 @@ def client_canary_bundle(
                 "Keep a fallback cohort on normal DNS to detect regressions quickly.",
             ],
         },
-        "recommendations": [
-            "Prefer ISP-specific and region-specific winners over a single nationwide preferred IP.",
-            "Desktop and mobile should be validated separately because mobile often follows different DNS and transport paths.",
-            "If Android or iOS canaries are required, push the override at the local DNS layer for the test Wi-Fi or test router instead of relying on per-device hosts edits.",
-        ],
+        "recommendations": bundle_recommendations,
     }
 
 

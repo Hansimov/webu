@@ -21,6 +21,12 @@ from webu.cf_tunnel.operations import (
 )
 
 
+# Use RFC 5737 / RFC 3849 documentation addresses so tests never encode live edge IPs.
+DOC_EDGE_IPV4_PRIMARY = "198.51.100.10"
+DOC_EDGE_IPV4_SECONDARY = "203.0.113.20"
+DOC_EDGE_IPV6_PRIMARY = "2001:db8::10"
+
+
 def _load_local_cf_tunnel_config() -> dict:
     config_path = Path(__file__).resolve().parents[2] / "configs" / "cf_tunnel.json"
     payload = json.loads(config_path.read_text(encoding="utf-8"))
@@ -571,12 +577,12 @@ def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "webu.cf_tunnel.operations._resolve_cloudflare_addresses",
         lambda hostname, record_type="A": (
-            ["104.21.57.71"] if record_type == "A" else []
+            [DOC_EDGE_IPV4_PRIMARY] if record_type == "A" else []
         ),
     )
     monkeypatch.setattr(
         "webu.cf_tunnel.operations._resolve_authoritative_nameserver_addresses",
-        lambda payload, hostname, record_type="A": ["104.21.57.71"],
+        lambda payload, hostname, record_type="A": [DOC_EDGE_IPV4_PRIMARY],
     )
 
     def fake_probe(hostname, ip_address):
@@ -626,8 +632,8 @@ def test_page_audit_flags_dev_server_and_broken_assets(monkeypatch, tmp_path):
             "tunnel_name": tunnel["tunnel_name"],
             "dns": {
                 "system_resolver": {"addresses": ["203.0.113.10"]},
-                "cloudflare_doh": {"addresses": ["104.21.57.71"]},
-                "cloudflare_authoritative_ns": {"addresses": ["104.21.57.71"]},
+                "cloudflare_doh": {"addresses": [DOC_EDGE_IPV4_PRIMARY]},
+                "cloudflare_authoritative_ns": {"addresses": [DOC_EDGE_IPV4_PRIMARY]},
             },
         },
     )
@@ -689,9 +695,9 @@ def test_edge_trace_reports_colos_and_measurement_guidance(monkeypatch, tmp_path
             "hostname": tunnel["domain_name"],
             "tunnel_name": tunnel["tunnel_name"],
             "dns": {
-                "system_resolver": {"addresses": ["104.21.57.71"]},
-                "cloudflare_doh": {"addresses": ["172.67.160.241"]},
-                "cloudflare_authoritative_ns": {"addresses": ["104.21.57.71"]},
+                "system_resolver": {"addresses": [DOC_EDGE_IPV4_PRIMARY]},
+                "cloudflare_doh": {"addresses": [DOC_EDGE_IPV4_SECONDARY]},
+                "cloudflare_authoritative_ns": {"addresses": [DOC_EDGE_IPV4_PRIMARY]},
             },
         },
     )
@@ -699,7 +705,7 @@ def test_edge_trace_reports_colos_and_measurement_guidance(monkeypatch, tmp_path
     def fake_fetch(
         hostname, ip_address, path="/cdn-cgi/trace", method="GET", max_body_bytes=32768
     ):
-        if ip_address == "104.21.57.71":
+        if ip_address == DOC_EDGE_IPV4_PRIMARY:
             return {
                 "ip": ip_address,
                 "success": True,
@@ -751,13 +757,13 @@ def test_client_override_plan_exports_hosts_candidates(monkeypatch, tmp_path):
             "tunnel_name": tunnel["tunnel_name"],
             "unique_edge_results": [
                 {
-                    "ip": "172.67.160.241",
+                    "ip": DOC_EDGE_IPV4_PRIMARY,
                     "success": True,
                     "colo": "LAX",
                     "cf_ray": "abc-LAX",
                 },
                 {
-                    "ip": "2606:4700:3030::ac43:a0f1",
+                    "ip": DOC_EDGE_IPV6_PRIMARY,
                     "success": True,
                     "colo": "LAX",
                     "cf_ray": "def-LAX",
@@ -777,10 +783,84 @@ def test_client_override_plan_exports_hosts_candidates(monkeypatch, tmp_path):
     assert len(result["candidates"]) == 1
     assert (
         result["candidates"][0]["hosts_line"]
-        == f"172.67.160.241 {tunnel['domain_name']}"
+        == f"{DOC_EDGE_IPV4_PRIMARY} {tunnel['domain_name']}"
     )
-    assert result["distribution"]["linux_macos_hosts"][0].startswith("172.67.160.241 ")
+    assert result["distribution"]["linux_macos_hosts"][0].startswith(
+        f"{DOC_EDGE_IPV4_PRIMARY} "
+    )
     assert any("canary" in item for item in result["recommendations"])
+
+
+def test_client_override_plan_recommends_ipv4_first_for_mixed_family_drift(
+    monkeypatch, tmp_path
+):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.edge_trace",
+        lambda tunnel_name=None, hostname=None: {
+            "hostname": tunnel["domain_name"],
+            "tunnel_name": tunnel["tunnel_name"],
+            "access_diagnose": {
+                "dns": {
+                    "system_resolver": {
+                        "addresses": [
+                            DOC_EDGE_IPV6_PRIMARY,
+                            DOC_EDGE_IPV4_PRIMARY,
+                        ]
+                    },
+                    "cloudflare_doh": {"addresses": [DOC_EDGE_IPV4_PRIMARY]},
+                    "cloudflare_authoritative_ns": {
+                        "addresses": [DOC_EDGE_IPV4_PRIMARY]
+                    },
+                    "mismatch": True,
+                    "recursive_mismatch": False,
+                }
+            },
+            "unique_edge_results": [
+                {
+                    "ip": DOC_EDGE_IPV6_PRIMARY,
+                    "success": True,
+                    "colo": "NRT",
+                    "cf_ray": "v6-NRT",
+                },
+                {
+                    "ip": DOC_EDGE_IPV4_PRIMARY,
+                    "success": True,
+                    "colo": "HKG",
+                    "cf_ray": "v4-HKG",
+                },
+            ],
+        },
+    )
+
+    result = client_override_plan(
+        tunnel_name=tunnel["tunnel_name"],
+        hostname=None,
+        prefer_family="any",
+        max_candidates=2,
+    )
+
+    assert result["recommended_prefer_family"] == "ipv4"
+    assert "dns_mismatch" in result["family_assessment"]["reason_codes"]
+    assert [item["family"] for item in result["candidates"]] == ["ipv4", "ipv6"]
+    assert (
+        "Current probes recommend ipv4-first canaries" in result["recommendations"][0]
+    )
 
 
 def test_client_canary_bundle_contains_platform_guides(monkeypatch, tmp_path):
@@ -805,13 +885,19 @@ def test_client_canary_bundle_contains_platform_guides(monkeypatch, tmp_path):
         lambda **kwargs: {
             "hostname": tunnel["domain_name"],
             "tunnel_name": tunnel["tunnel_name"],
+            "recommended_prefer_family": "ipv4",
+            "family_assessment": {
+                "recommended_prefer_family": "ipv4",
+                "summary": "Resolver drift makes IPv4 the safer first canary on this network.",
+                "reason_codes": ["dns_mismatch"],
+            },
             "candidates": [
                 {
-                    "ip": "172.67.160.241",
+                    "ip": DOC_EDGE_IPV4_PRIMARY,
                     "family": "ipv4",
                     "colo": "LAX",
                     "cf_ray": "abc-LAX",
-                    "hosts_line": f"172.67.160.241 {tunnel['domain_name']}",
+                    "hosts_line": f"{DOC_EDGE_IPV4_PRIMARY} {tunnel['domain_name']}",
                 }
             ],
         },
@@ -825,10 +911,15 @@ def test_client_canary_bundle_contains_platform_guides(monkeypatch, tmp_path):
     )
 
     assert result["platforms"]["windows"]["hosts_lines"][0].startswith(
-        "172.67.160.241 "
+        f"{DOC_EDGE_IPV4_PRIMARY} "
     )
     assert result["platforms"]["android"]["method"] == "local-dns-override"
-    assert result["report_template"]["reports"][0]["candidate_ip"] == "172.67.160.241"
+    assert result["recommended_prefer_family"] == "ipv4"
+    assert result["family_assessment"]["reason_codes"] == ["dns_mismatch"]
+    assert result["report_template"]["recommended_prefer_family"] == "ipv4"
+    assert (
+        result["report_template"]["reports"][0]["candidate_ip"] == DOC_EDGE_IPV4_PRIMARY
+    )
 
 
 def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
@@ -840,7 +931,7 @@ def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
                     {
                         "isp": "cmcc",
                         "platform": "windows",
-                        "candidate_ip": "104.21.57.71",
+                        "candidate_ip": DOC_EDGE_IPV4_PRIMARY,
                         "success": True,
                         "ttfb_ms": 260,
                         "trace_colo": "NRT",
@@ -848,7 +939,7 @@ def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
                     {
                         "isp": "cmcc",
                         "platform": "android",
-                        "candidate_ip": "104.21.57.71",
+                        "candidate_ip": DOC_EDGE_IPV4_PRIMARY,
                         "success": True,
                         "ttfb_ms": 280,
                         "trace_colo": "NRT",
@@ -856,7 +947,7 @@ def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
                     {
                         "isp": "cmcc",
                         "platform": "windows",
-                        "candidate_ip": "172.67.160.241",
+                        "candidate_ip": DOC_EDGE_IPV4_SECONDARY,
                         "success": False,
                         "ttfb_ms": None,
                         "trace_colo": "",
@@ -864,7 +955,7 @@ def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
                     {
                         "isp": "ctcc",
                         "platform": "ios",
-                        "candidate_ip": "172.67.160.241",
+                        "candidate_ip": DOC_EDGE_IPV4_SECONDARY,
                         "success": True,
                         "ttfb_ms": 190,
                         "trace_colo": "HKG",
@@ -878,7 +969,10 @@ def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
     result = client_report_summary(report_file=str(report_file))
 
     assert result["sample_count"] == 4
-    assert result["overall"][0]["candidate_ip"] in {"104.21.57.71", "172.67.160.241"}
+    assert result["overall"][0]["candidate_ip"] in {
+        DOC_EDGE_IPV4_PRIMARY,
+        DOC_EDGE_IPV4_SECONDARY,
+    }
     assert "cmcc" in result["per_isp"]
     assert "windows" in result["per_platform"]
 
@@ -906,7 +1000,7 @@ def test_client_report_template_contains_candidates(monkeypatch, tmp_path):
             "report_template": {
                 "hostname": tunnel["domain_name"],
                 "tunnel_name": tunnel["tunnel_name"],
-                "reports": [{"candidate_ip": "104.21.57.71"}],
+                "reports": [{"candidate_ip": DOC_EDGE_IPV4_PRIMARY}],
             }
         },
     )
@@ -918,7 +1012,7 @@ def test_client_report_template_contains_candidates(monkeypatch, tmp_path):
         max_candidates=1,
     )
 
-    assert result["reports"][0]["candidate_ip"] == "104.21.57.71"
+    assert result["reports"][0]["candidate_ip"] == DOC_EDGE_IPV4_PRIMARY
 
 
 def test_docs_sync_writes_markdown(monkeypatch, tmp_path):
