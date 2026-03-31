@@ -61,7 +61,7 @@ Manage Cloudflare remote-managed tunnels and Aliyun registrar DNS migration from
 - `edge-trace`、`client-override-plan`、`client-canary-bundle`、`client-report-template`、`client-report-summary` 这组优化命令本身不会修改 Cloudflare zone、不会修改 tunnel ingress、也不会把业务 hostname 改成公开 A 记录。它们主要读取现有配置并输出诊断、候选和测试材料。
 - 它们默认也不会改写 `configs/cf_tunnel.json`。只有显式使用 `--save-config` 的命令，例如 `token-ensure`、`dns-migrate`、`tunnel-apply`，才会把 token、zone 状态或 tunnel 元数据写回本地配置。
 - 真正可能发生变更的地方主要有三类：一是客户端机器上的 hosts 文件；二是测试 Wi-Fi、路由器或设备上的本地 DNS override；三是 canary 结果文件，例如你自己保存的 JSON 报告。
-- 对 Cloudflare 控制面的正式变更仍然集中在 `dns-migrate` 和 `tunnel-apply`：前者会迁移权威 DNS 托管，后者会创建或更新 tunnel、CNAME/代理入口和本机 `cloudflared` 服务。国内优选流程不应该替代这些正式配置。
+- 对 Cloudflare 控制面的正式变更仍然集中在 `dns-migrate` 和 `tunnel-apply`：前者会迁移权威 DNS 托管，后者会创建或更新 tunnel、CNAME/代理入口，并为对应 tunnel 安装或更新独立的本机 `cloudflared-tunnel-*.service`。国内优选流程不应该替代这些正式配置。
 - 如果你看到某个优化方案要求把 `app.example.com` 在 Cloudflare DNS 里直接改成固定 A/AAAA 记录，那不属于当前 `cftn` 推荐路径。对于 Tunnel 场景，这通常会破坏 Cloudflare 托管代理链路，带来证书、路由或可用性问题。
 - 推荐理解为：`cftn` 的国内访问优化默认改的是 `测试客户端的解析路径`，不是 `生产权威 DNS 的发布方式`。
 

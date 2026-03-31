@@ -2,6 +2,7 @@ import json
 
 from copy import deepcopy
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from webu.cf_tunnel.cli import build_parser
 from webu.cf_tunnel.operations import (
@@ -228,6 +229,78 @@ def test_apply_tunnel_updates_config_without_printing_secret(monkeypatch, tmp_pa
     assert saved["cf_tunnels"][0]["tunnel_token"] == "secret-token"
     assert result[0]["domain_name"] == domain_name
     assert result[0]["zone_name"] == zone_name
+
+
+def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+    domain_name = str(tunnel["domain_name"]).strip()
+    tunnel_name = str(tunnel["tunnel_name"]).strip()
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_api_token"] = "existing-token"
+    tunnel["tunnel_id"] = ""
+    tunnel["tunnel_token"] = ""
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def ensure_zone(self, *, account_id, zone_name):
+            return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
+
+        def ensure_tunnel(self, *, account_id, tunnel_name):
+            return {"id": "tunnel-1", "token": "secret-token"}
+
+        def get_tunnel_token(self, *, account_id, tunnel_id):
+            return "secret-token"
+
+        def put_tunnel_configuration(self, *, account_id, tunnel_id, hostname, service):
+            return {"ok": True}
+
+        def upsert_cname_record(self, *, zone_id, hostname, content, proxied=True):
+            return {"id": "record-1"}
+
+    recorded_commands = []
+
+    def fake_sudo_run(command, **kwargs):
+        recorded_commands.append(command)
+        return CompletedProcess(args=command, returncode=0, stdout=b"ok", stderr=b"")
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+    monkeypatch.setattr("webu.cf_tunnel.operations.sudo_run", fake_sudo_run)
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.shutil.which", lambda name: "/usr/bin/cloudflared"
+    )
+
+    result = apply_tunnel(
+        tunnel_name=tunnel_name,
+        apply_all=False,
+        install_service=True,
+        cf_token_mode="auto",
+        save_config=True,
+    )
+
+    install_result = result[0]["install_result"]
+    assert install_result["service_name"] == "cloudflared-tunnel-dev-blbl-top.service"
+    assert [command[:2] for command in recorded_commands[1:]] == [
+        ["systemctl", "daemon-reload"],
+        ["systemctl", "enable"],
+        ["systemctl", "restart"],
+        ["systemctl", "show"],
+    ]
+    assert recorded_commands[0][:4] == ["install", "-D", "-m", "644"]
 
 
 def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):

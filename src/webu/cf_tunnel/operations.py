@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import socket
 import ssl
 import shutil
 import subprocess
+import tempfile
 from collections import defaultdict
 
 from dataclasses import asdict, dataclass
@@ -52,11 +54,151 @@ class CloudflareCredentialResolution:
     created: bool
 
 
+CLOUDFLARED_TUNNEL_SERVICE_PREFIX = "cloudflared-tunnel"
+
+
 def _require_text(value: str, label: str) -> str:
     normalized = str(value).strip()
     if not normalized:
         raise ValueError(f"{label} is required")
     return normalized
+
+
+def _safe_systemd_token(value: str) -> str:
+    safe = re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower()).strip("-")
+    return safe or "default"
+
+
+def cloudflared_tunnel_service_name(tunnel_name: str) -> str:
+    return f"{CLOUDFLARED_TUNNEL_SERVICE_PREFIX}-{_safe_systemd_token(tunnel_name)}.service"
+
+
+def _cloudflared_tunnel_service_path(tunnel_name: str) -> Path:
+    return Path("/etc/systemd/system") / cloudflared_tunnel_service_name(tunnel_name)
+
+
+def _summarize_completed_process(
+    completed: subprocess.CompletedProcess[bytes],
+) -> dict[str, Any]:
+    return {
+        "returncode": completed.returncode,
+        "stdout": completed.stdout.decode(errors="replace").strip(),
+        "stderr": completed.stderr.decode(errors="replace").strip(),
+    }
+
+
+def _ensure_success(
+    completed: subprocess.CompletedProcess[bytes], *, label: str
+) -> dict[str, Any]:
+    summary = _summarize_completed_process(completed)
+    if completed.returncode != 0:
+        details = summary["stderr"] or summary["stdout"] or "unknown error"
+        raise RuntimeError(f"{label} failed: {details}")
+    return summary
+
+
+def _render_cloudflared_tunnel_service_unit(
+    *, tunnel_name: str, tunnel_token: str
+) -> str:
+    cloudflared_bin = shutil.which("cloudflared") or "/usr/bin/cloudflared"
+    exec_start = shlex.join(
+        [cloudflared_bin, "--no-autoupdate", "tunnel", "run", "--token", tunnel_token]
+    )
+    return "\n".join(
+        [
+            "[Unit]",
+            f"Description=cloudflared tunnel for {tunnel_name}",
+            "After=network-online.target",
+            "Wants=network-online.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            f"ExecStart={exec_start}",
+            "Restart=always",
+            "RestartSec=5s",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+            "",
+        ]
+    )
+
+
+def _install_cloudflared_tunnel_service(
+    *, tunnel_name: str, tunnel_token: str
+) -> dict[str, Any]:
+    service_name = cloudflared_tunnel_service_name(tunnel_name)
+    service_path = _cloudflared_tunnel_service_path(tunnel_name)
+    unit_text = _render_cloudflared_tunnel_service_unit(
+        tunnel_name=tunnel_name,
+        tunnel_token=tunnel_token,
+    )
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(unit_text)
+        temp_path = Path(handle.name)
+
+    try:
+        write_result = _ensure_success(
+            sudo_run(
+                [
+                    "install",
+                    "-D",
+                    "-m",
+                    "644",
+                    str(temp_path),
+                    str(service_path),
+                ],
+                check=False,
+                timeout=60,
+            ),
+            label=f"install systemd unit {service_name}",
+        )
+        daemon_reload_result = _ensure_success(
+            sudo_run(["systemctl", "daemon-reload"], check=False, timeout=60),
+            label="systemctl daemon-reload",
+        )
+        enable_result = _ensure_success(
+            sudo_run(
+                ["systemctl", "enable", service_name],
+                check=False,
+                timeout=60,
+            ),
+            label=f"systemctl enable {service_name}",
+        )
+        restart_result = _ensure_success(
+            sudo_run(
+                ["systemctl", "restart", service_name],
+                check=False,
+                timeout=60,
+            ),
+            label=f"systemctl restart {service_name}",
+        )
+        status_result = _ensure_success(
+            sudo_run(
+                [
+                    "systemctl",
+                    "show",
+                    "--property",
+                    "LoadState,ActiveState,SubState",
+                    service_name,
+                ],
+                check=False,
+                timeout=60,
+            ),
+            label=f"systemctl show {service_name}",
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    return {
+        "service_name": service_name,
+        "service_path": str(service_path),
+        "write_unit": write_result,
+        "daemon_reload": daemon_reload_result,
+        "enable_service": enable_result,
+        "restart_service": restart_result,
+        "service_status": status_result,
+    }
 
 
 def _domain_lookup(
@@ -332,16 +474,10 @@ def apply_tunnel(
         if install_service:
             if not shutil.which("cloudflared"):
                 raise FileNotFoundError("cloudflared is not installed or not in PATH")
-            completed = sudo_run(
-                ["cloudflared", "service", "install", tunnel_token],
-                check=False,
-                timeout=60,
+            install_result = _install_cloudflared_tunnel_service(
+                tunnel_name=item.tunnel_name,
+                tunnel_token=tunnel_token,
             )
-            install_result = {
-                "returncode": completed.returncode,
-                "stdout": completed.stdout.decode(errors="replace").strip(),
-                "stderr": completed.stderr.decode(errors="replace").strip(),
-            }
         results.append(
             {
                 "tunnel_name": item.tunnel_name,
@@ -350,7 +486,9 @@ def apply_tunnel(
                 "zone_name": item.zone_name,
                 "tunnel_id": tunnel_id,
                 "tunnel_token_saved": bool(tunnel_token),
-                "install_command": "sudo cloudflared service install <TUNNEL_TOKEN>",
+                "install_command": (
+                    f"install/update {cloudflared_tunnel_service_name(item.tunnel_name)}"
+                ),
                 "install_result": install_result or {},
                 "cf_token_source": credential.source,
                 "config_path": str(config_path) if config_path else "",
