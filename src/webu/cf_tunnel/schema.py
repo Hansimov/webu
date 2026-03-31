@@ -7,6 +7,21 @@ from typing import Any
 from webu.schema import ConfigSpec, load_json_config, save_json_config
 
 
+_TUNNEL_ORIGIN_REQUEST_TEXT_FIELDS = {
+    "http_host_header",
+}
+_TUNNEL_ORIGIN_REQUEST_BOOL_FIELDS = {
+    "disable_chunked_encoding",
+    "no_happy_eyeballs",
+}
+_TUNNEL_ORIGIN_REQUEST_INT_FIELDS = {
+    "connect_timeout",
+    "keep_alive_connections",
+    "keep_alive_timeout",
+    "tcp_keep_alive",
+}
+
+
 CF_TUNNEL_CONFIG = ConfigSpec(
     name="cf_tunnel",
     file_name="cf_tunnel.json",
@@ -41,6 +56,11 @@ CF_TUNNEL_CONFIG = ConfigSpec(
                 "zone_name": "example.com",
                 "domain_name": "dev.example.com",
                 "local_url": "http://127.0.0.1:21002",
+                "origin_request": {
+                    "connect_timeout": 5,
+                    "keep_alive_connections": 256,
+                    "keep_alive_timeout": 120,
+                },
                 "tunnel_id": "",
                 "tunnel_token": "",
             }
@@ -82,6 +102,34 @@ CF_TUNNEL_CONFIG = ConfigSpec(
                         "zone_name": {"type": "string"},
                         "domain_name": {"type": "string", "minLength": 1},
                         "local_url": {"type": "string", "minLength": 1},
+                        "origin_request": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "connect_timeout": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                },
+                                "keep_alive_connections": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                },
+                                "keep_alive_timeout": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                },
+                                "tcp_keep_alive": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                },
+                                "http_host_header": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                },
+                                "disable_chunked_encoding": {"type": "boolean"},
+                                "no_happy_eyeballs": {"type": "boolean"},
+                            },
+                        },
                         "tunnel_id": {"type": "string"},
                         "tunnel_token": {"type": "string"},
                     },
@@ -109,9 +157,35 @@ class TunnelConfig:
     domain_name: str
     local_url: str
     zone_name: str
+    origin_request: dict[str, Any]
     tunnel_id: str
     tunnel_token: str
     raw: dict[str, Any]
+
+
+def _normalize_tunnel_origin_request(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+
+    normalized: dict[str, Any] = {}
+    for field in _TUNNEL_ORIGIN_REQUEST_TEXT_FIELDS:
+        value = str(raw.get(field, "")).strip()
+        if value:
+            normalized[field] = value
+
+    for field in _TUNNEL_ORIGIN_REQUEST_BOOL_FIELDS:
+        value = raw.get(field)
+        if isinstance(value, bool):
+            normalized[field] = value
+
+    for field in _TUNNEL_ORIGIN_REQUEST_INT_FIELDS:
+        value = raw.get(field)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value > 0:
+            normalized[field] = value
+
+    return normalized
 
 
 def infer_zone_name(hostname: str) -> str:
@@ -178,6 +252,9 @@ def list_tunnels(payload: dict[str, Any]) -> list[TunnelConfig]:
                 domain_name=domain_name,
                 local_url=local_url,
                 zone_name=zone_name,
+                origin_request=_normalize_tunnel_origin_request(
+                    raw_item.get("origin_request", {})
+                ),
                 tunnel_id=str(raw_item.get("tunnel_id", "")).strip(),
                 tunnel_token=str(raw_item.get("tunnel_token", "")).strip(),
                 raw=dict(raw_item),
@@ -224,6 +301,10 @@ def upsert_tunnel(payload: dict[str, Any], tunnel: TunnelConfig) -> dict[str, An
         "tunnel_id": tunnel.tunnel_id,
         "tunnel_token": tunnel.tunnel_token,
     }
+    if tunnel.origin_request:
+        new_raw["origin_request"] = tunnel.origin_request
+    else:
+        new_raw.pop("origin_request", None)
     for index, item in enumerate(tunnels):
         if (
             isinstance(item, dict)

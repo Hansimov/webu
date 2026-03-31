@@ -264,11 +264,16 @@ class CloudflareClient:
         tunnel_id: str,
         hostname: str,
         service: str,
+        origin_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "config": {
                 "ingress": [
-                    {"hostname": hostname, "service": service, "originRequest": {}},
+                    {
+                        "hostname": hostname,
+                        "service": service,
+                        "originRequest": origin_request or {},
+                    },
                     {"service": "http_status:404"},
                 ]
             }

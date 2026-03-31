@@ -6,6 +6,7 @@ from subprocess import CompletedProcess
 
 from webu.cf_tunnel.cli import build_parser
 from webu.cf_tunnel.operations import (
+    _render_cloudflared_tunnel_service_unit,
     access_diagnose,
     apply_tunnel,
     client_canary_bundle,
@@ -206,7 +207,15 @@ def test_apply_tunnel_updates_config_without_printing_secret(monkeypatch, tmp_pa
         def get_tunnel_token(self, *, account_id, tunnel_id):
             return "secret-token"
 
-        def put_tunnel_configuration(self, *, account_id, tunnel_id, hostname, service):
+        def put_tunnel_configuration(
+            self,
+            *,
+            account_id,
+            tunnel_id,
+            hostname,
+            service,
+            origin_request=None,
+        ):
             return {"ok": True}
 
         def upsert_cname_record(self, *, zone_id, hostname, content, proxied=True):
@@ -229,6 +238,79 @@ def test_apply_tunnel_updates_config_without_printing_secret(monkeypatch, tmp_pa
     assert saved["cf_tunnels"][0]["tunnel_token"] == "secret-token"
     assert result[0]["domain_name"] == domain_name
     assert result[0]["zone_name"] == zone_name
+
+
+def test_apply_tunnel_pushes_origin_request_settings(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+    tunnel_name = str(tunnel["tunnel_name"]).strip()
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_api_token"] = "existing-token"
+    tunnel["tunnel_id"] = ""
+    tunnel["tunnel_token"] = ""
+    tunnel["origin_request"] = {
+        "connect_timeout": 5,
+        "keep_alive_connections": 256,
+        "keep_alive_timeout": 120,
+    }
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    recorded = {}
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def ensure_zone(self, *, account_id, zone_name):
+            return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
+
+        def ensure_tunnel(self, *, account_id, tunnel_name):
+            return {"id": "tunnel-1", "token": "secret-token"}
+
+        def get_tunnel_token(self, *, account_id, tunnel_id):
+            return "secret-token"
+
+        def put_tunnel_configuration(
+            self,
+            *,
+            account_id,
+            tunnel_id,
+            hostname,
+            service,
+            origin_request=None,
+        ):
+            recorded["origin_request"] = origin_request
+            return {"ok": True}
+
+        def upsert_cname_record(self, *, zone_id, hostname, content, proxied=True):
+            return {"id": "record-1"}
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+
+    apply_tunnel(
+        tunnel_name=tunnel_name,
+        apply_all=False,
+        install_service=False,
+        cf_token_mode="auto",
+        save_config=True,
+    )
+
+    assert recorded["origin_request"] == {
+        "connectTimeout": 5,
+        "keepAliveConnections": 256,
+        "keepAliveTimeout": 120,
+    }
 
 
 def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
@@ -266,7 +348,15 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
         def get_tunnel_token(self, *, account_id, tunnel_id):
             return "secret-token"
 
-        def put_tunnel_configuration(self, *, account_id, tunnel_id, hostname, service):
+        def put_tunnel_configuration(
+            self,
+            *,
+            account_id,
+            tunnel_id,
+            hostname,
+            service,
+            origin_request=None,
+        ):
             return {"ok": True}
 
         def upsert_cname_record(self, *, zone_id, hostname, content, proxied=True):
@@ -301,6 +391,17 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
         ["systemctl", "show"],
     ]
     assert recorded_commands[0][:4] == ["install", "-D", "-m", "644"]
+
+
+def test_render_cloudflared_tunnel_service_unit_uses_faster_restart_defaults():
+    rendered = _render_cloudflared_tunnel_service_unit(
+        tunnel_name="blbl.top",
+        tunnel_token="secret-token",
+    )
+
+    assert "Type=notify" in rendered
+    assert "TimeoutStartSec=0" in rendered
+    assert "RestartSec=2s" in rendered
 
 
 def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):

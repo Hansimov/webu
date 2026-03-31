@@ -55,6 +55,15 @@ class CloudflareCredentialResolution:
 
 
 CLOUDFLARED_TUNNEL_SERVICE_PREFIX = "cloudflared-tunnel"
+_CLOUDFLARE_ORIGIN_REQUEST_KEY_MAP = {
+    "connect_timeout": "connectTimeout",
+    "keep_alive_connections": "keepAliveConnections",
+    "keep_alive_timeout": "keepAliveTimeout",
+    "tcp_keep_alive": "tcpKeepAlive",
+    "http_host_header": "httpHostHeader",
+    "disable_chunked_encoding": "disableChunkedEncoding",
+    "no_happy_eyeballs": "noHappyEyeballs",
+}
 
 
 def _require_text(value: str, label: str) -> str:
@@ -112,16 +121,29 @@ def _render_cloudflared_tunnel_service_unit(
             "Wants=network-online.target",
             "",
             "[Service]",
-            "Type=simple",
+            "Type=notify",
+            "TimeoutStartSec=0",
             f"ExecStart={exec_start}",
             "Restart=always",
-            "RestartSec=5s",
+            "RestartSec=2s",
             "",
             "[Install]",
             "WantedBy=multi-user.target",
             "",
         ]
     )
+
+
+def _cloudflare_origin_request_payload(
+    origin_request: dict[str, Any]
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in origin_request.items():
+        mapped_key = _CLOUDFLARE_ORIGIN_REQUEST_KEY_MAP.get(key)
+        if mapped_key is None:
+            continue
+        payload[mapped_key] = value
+    return payload
 
 
 def _install_cloudflared_tunnel_service(
@@ -452,6 +474,7 @@ def apply_tunnel(
             tunnel_id=tunnel_id,
             hostname=item.domain_name,
             service=item.local_url,
+            origin_request=_cloudflare_origin_request_payload(item.origin_request),
         )
         cf_client.upsert_cname_record(
             zone_id=domain.zone_id,
@@ -464,6 +487,7 @@ def apply_tunnel(
             domain_name=item.domain_name,
             local_url=item.local_url,
             zone_name=item.zone_name,
+            origin_request=item.origin_request,
             tunnel_id=tunnel_id,
             tunnel_token=tunnel_token,
             raw=item.raw,
