@@ -5,6 +5,7 @@ _EXPORTS = {
     "main": (".cli", "main"),
     "access_diagnose": (".operations", "access_diagnose"),
     "apply_tunnel": (".operations", "apply_tunnel"),
+    "capture_canary_snapshot": (".snapshot", "capture_canary_snapshot"),
     "client_canary_bundle": (".operations", "client_canary_bundle"),
     "client_override_plan": (".operations", "client_override_plan"),
     "client_report_summary": (".operations", "client_report_summary"),

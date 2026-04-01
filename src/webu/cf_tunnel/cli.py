@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 
+from pathlib import Path
+
 from webu.clis import print_json
 
 from .helptext import COMMAND_HELP, command_epilog, root_description, root_help_epilog
@@ -23,6 +25,7 @@ from .operations import (
     page_audit,
     tunnel_status,
 )
+from .snapshot import capture_canary_snapshot
 
 
 def _parse_optional_json_object(raw_value: str, *, label: str) -> dict | None:
@@ -147,6 +150,18 @@ def cmd_client_report_template(args):
 
 def cmd_client_report_summary(args):
     print_json(client_report_summary(report_file=args.report_file))
+
+
+def cmd_snapshot(args):
+    print_json(
+        capture_canary_snapshot(
+            names=list(args.names or []),
+            prefer_family=args.prefer_family,
+            max_candidates=args.max_candidates,
+            output_dir=Path(args.output_dir),
+            stamp=str(args.stamp or "").strip() or None,
+        )
+    )
 
 
 def cmd_config_schema(args):
@@ -315,6 +330,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     client_summary_parser.add_argument("report_file")
     client_summary_parser.set_defaults(func=cmd_client_report_summary)
+
+    snapshot_parser = subparsers.add_parser(
+        "snapshot",
+        help=COMMAND_HELP["snapshot"]["summary"],
+        epilog=command_epilog("snapshot"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    snapshot_parser.add_argument("--name", dest="names", action="append", required=True)
+    snapshot_parser.add_argument(
+        "--prefer-family",
+        choices=["any", "ipv4", "ipv6"],
+        default="any",
+    )
+    snapshot_parser.add_argument("--max-candidates", type=int, default=3)
+    snapshot_parser.add_argument("--output-dir", default="debugs/cf-tunnel-snapshots")
+    snapshot_parser.add_argument("--stamp", default="")
+    snapshot_parser.set_defaults(func=cmd_snapshot)
 
     token_ensure_parser = subparsers.add_parser(
         "token-ensure",

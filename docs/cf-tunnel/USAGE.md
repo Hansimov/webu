@@ -14,8 +14,9 @@ Manage Cloudflare remote-managed tunnels and Aliyun registrar DNS migration from
 8. 如果要继续判断当前网络命中的 Cloudflare 边缘、colo 和是否适合做客户端侧优选实验，运行：`cftn edge-trace --name app-example`。
 9. 如果要先让工具判断当前网络更适合 IPv4 还是 IPv6，再把结果转成定向用户可执行的实验包，运行：`cftn client-override-plan --name app-example --prefer-family any`。
 10. 如果要覆盖桌面和移动端灰度，并带上 recommended_prefer_family 与回传模板，生成 canary 测试包：`cftn client-canary-bundle --name app-example --prefer-family any`。
-11. 收集客户端结果后，汇总各地区/运营商/平台表现：`cftn client-report-summary reports/client-canary.json`。
-12. 用 `dig example.com NS`、`dig +trace example.com A` 和实际业务 URL 做最终验证。
+11. 如果要把当前测量结果、首轮灰度候选和免费外部检测入口固化成一份操作快照，运行：`cftn snapshot --name app-example --prefer-family any`。
+12. 收集客户端结果后，汇总各地区/运营商/平台表现：`cftn client-report-summary reports/client-canary.json`。
+13. 用 `dig example.com NS`、`dig +trace example.com A` 和实际业务 URL 做最终验证。
 
 ## Common Commands
 
@@ -31,6 +32,7 @@ Manage Cloudflare remote-managed tunnels and Aliyun registrar DNS migration from
 - 查看当前命中的 Cloudflare 边缘与 colo：`cftn edge-trace --name app-example`
 - 导出特定用户群的客户端优选 IP 实验计划：`cftn client-override-plan --name app-example --prefer-family any`
 - 生成多端 canary 测试包：`cftn client-canary-bundle --name app-example --prefer-family any`
+- 固化当前 edge-trace、优选候选和外部检测入口：`cftn snapshot --name app-example --prefer-family any`
 - 生成客户端回传模板：`cftn client-report-template --name app-example --prefer-family any`
 - 汇总地区/运营商/平台结果：`cftn client-report-summary reports/client-canary.json`
 - 重新生成文档：`cftn docs-sync`
@@ -156,6 +158,13 @@ Manage Cloudflare remote-managed tunnels and Aliyun registrar DNS migration from
 - Summary: 汇总客户端回传结果，按运营商和平台筛选更稳的优选 IP。
 - Examples:
   - `cftn client-report-summary reports/client-canary.json`
+
+### snapshot
+
+- Summary: 固化当前 edge-trace、优选计划和免费外部探测入口，生成一份可分享的 canary 快照。
+- Examples:
+  - `cftn snapshot --name app-example --prefer-family any`
+  - `cftn snapshot --name app-example --name app-canary --output-dir debugs/cf-tunnel-snapshots`
 
 ### config-check
 

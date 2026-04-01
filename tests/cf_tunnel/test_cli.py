@@ -87,6 +87,17 @@ def test_parser_supports_dns_and_tunnel_commands():
     client_summary_args = parser.parse_args(
         ["client-report-summary", "reports/client-canary.json"]
     )
+    snapshot_args = parser.parse_args(
+        [
+            "snapshot",
+            "--name",
+            tunnel_name,
+            "--prefer-family",
+            "any",
+            "--output-dir",
+            "debugs/cf-tunnel-snapshots",
+        ]
+    )
 
     assert dns_args.domain_name == domain_name
     assert dns_args.cf_token_mode == "auto"
@@ -105,6 +116,9 @@ def test_parser_supports_dns_and_tunnel_commands():
     assert client_bundle_args.name == tunnel_name
     assert client_template_args.name == tunnel_name
     assert client_summary_args.report_file == "reports/client-canary.json"
+    assert snapshot_args.names == [tunnel_name]
+    assert snapshot_args.prefer_family == "any"
+    assert snapshot_args.output_dir == "debugs/cf-tunnel-snapshots"
 
 
 def test_config_init_writes_project_config(monkeypatch, tmp_path):
