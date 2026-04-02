@@ -62,10 +62,11 @@ class CloudflareCredentialResolution:
 CLOUDFLARED_TUNNEL_SERVICE_PREFIX = "cloudflared-tunnel"
 CLOUDFLARED_TUNNEL_GUARD_SERVICE_PREFIX = "cloudflared-tunnel-guard"
 LEGACY_BLDASH_OVERRIDE_FILE_NAME = "10-bldash-transport.conf"
-DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS = 60
+DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS = 30
 DEFAULT_TUNNEL_GUARD_FAILURE_THRESHOLD = 2
-DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS = 300
-DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS = 1800
+DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS = 180
+DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS = 300
+DEFAULT_TUNNEL_GUARD_DEGRADED_SNAPSHOT_INTERVAL_SECONDS = 120
 DEFAULT_TUNNEL_GUARD_HISTORY_LIMIT = 20
 DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR = Path("debugs/cf-tunnel-snapshots")
 _CLOUDFLARE_ORIGIN_REQUEST_KEY_MAP = {
@@ -2574,6 +2575,53 @@ def _exception_summary(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+def _observation_error_status_summary(*, reason_code: str) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "active_connections": 0,
+        "healthy": False,
+        "reason_codes": [reason_code],
+    }
+
+
+def _observation_error_access_summary(*, reason_code: str) -> dict[str, Any]:
+    return {
+        "dns_mismatch": False,
+        "recursive_mismatch": False,
+        "system_https_ok": False,
+        "cloudflare_https_ok": False,
+        "authoritative_https_ok": False,
+        "any_https_ok": False,
+        "visitor_side_dns_drift": False,
+        "reason_codes": [reason_code],
+    }
+
+
+def _build_guard_observation_decision(
+    *,
+    status_summary: dict[str, Any],
+    access_summary: dict[str, Any],
+    status_error: str | None,
+    access_error: str | None,
+) -> dict[str, Any]:
+    if status_error is None and access_error is None:
+        return _build_stabilize_decision(status_summary, access_summary)
+
+    reason_codes = _merge_reason_codes(
+        list(status_summary.get("reason_codes", [])),
+        list(access_summary.get("reason_codes", [])),
+    )
+    if status_error is not None:
+        reason_codes.append("status_observation_error")
+    if access_error is not None:
+        reason_codes.append("access_observation_error")
+    return {
+        "action": "observation_error",
+        "summary": "Tunnel observation did not complete cleanly. Treat repeated observation failures as degraded until a fresh stabilize pass succeeds.",
+        "reason_codes": _merge_reason_codes(reason_codes),
+    }
+
+
 def stabilize_tunnel(
     *,
     tunnel_name: str | None,
@@ -2699,6 +2747,18 @@ def guard_tunnel_quality(
     threshold_value = max(1, int(failure_threshold))
     cooldown_value = max(0, int(cooldown_seconds))
     snapshot_interval_value = max(0, int(snapshot_interval_seconds))
+    degraded_snapshot_interval_value = (
+        DEFAULT_TUNNEL_GUARD_DEGRADED_SNAPSHOT_INTERVAL_SECONDS
+    )
+    if snapshot_interval_value > 0:
+        degraded_snapshot_interval_value = min(
+            degraded_snapshot_interval_value,
+            snapshot_interval_value,
+        )
+    degraded_snapshot_interval_value = max(
+        interval_value,
+        degraded_snapshot_interval_value,
+    )
     history_limit_value = max(1, int(history_limit))
     iteration_limit = None
     if iterations is not None and int(iterations) > 0:
@@ -2721,6 +2781,9 @@ def guard_tunnel_quality(
             stabilize_result: dict[str, Any] = {}
             error: str | None = None
 
+            status_error: str | None = None
+            access_error: str | None = None
+
             try:
                 status_payload = tunnel_status(
                     tunnel_name=resolved_tunnel_name,
@@ -2728,42 +2791,42 @@ def guard_tunnel_quality(
                 )
                 status_summary = _summarize_tunnel_status_result(status_payload)
             except Exception as exc:
-                error = _exception_summary(exc)
-                status_summary = {
-                    "status": "error",
-                    "active_connections": 0,
-                    "healthy": False,
-                    "reason_codes": ["observation_error"],
-                }
-                record = {
-                    "iteration": iteration_index,
-                    "observed_at": observed_at,
-                    "tunnel_name": resolved_tunnel_name,
-                    "hostname": resolved_hostname,
-                    "status": status_summary,
-                    "consecutive_issue_count": consecutive_issue_count,
-                    "action": "observe-error",
-                    "snapshot": snapshot,
-                    "stabilize": stabilize_result,
-                    "error": error,
-                }
-                if emit_event is not None:
-                    emit_event(record)
-                history.append(record)
-                if len(history) > history_limit_value:
-                    history.pop(0)
-                if iteration_limit is not None and iteration_index >= iteration_limit:
-                    break
-                sleep_fn(interval_value)
-                continue
+                status_error = _exception_summary(exc)
+                status_summary = _observation_error_status_summary(
+                    reason_code="status_observation_error"
+                )
 
-            if status_summary["healthy"]:
-                consecutive_issue_count = 0
-            else:
+            try:
+                access_payload = access_diagnose(
+                    tunnel_name=resolved_tunnel_name,
+                    hostname=resolved_hostname,
+                )
+                access_summary = _summarize_access_result(access_payload)
+            except Exception as exc:
+                access_error = _exception_summary(exc)
+                access_summary = _observation_error_access_summary(
+                    reason_code="access_observation_error"
+                )
+
+            error_parts = [
+                item for item in [status_error, access_error] if item is not None
+            ]
+            error = "; ".join(error_parts) if error_parts else None
+            decision = _build_guard_observation_decision(
+                status_summary=status_summary,
+                access_summary=access_summary,
+                status_error=status_error,
+                access_error=access_error,
+            )
+            issue_detected = str(decision.get("action", "observe")) != "observe"
+
+            if issue_detected:
                 consecutive_issue_count += 1
+            else:
+                consecutive_issue_count = 0
 
             if (
-                not status_summary["healthy"]
+                issue_detected
                 and consecutive_issue_count >= threshold_value
                 and (
                     last_stabilize_at is None
@@ -2784,19 +2847,48 @@ def guard_tunnel_quality(
                     )
                     action = "stabilize"
                 except Exception as exc:
-                    error = _exception_summary(exc)
+                    stabilize_error = _exception_summary(exc)
+                    error = "; ".join(
+                        [item for item in [error, stabilize_error] if item]
+                    )
                     action = "stabilize-error"
                     stabilize_result = {
                         "action_taken": "error",
                         "healthy_now": False,
                         "repaired": False,
-                        "error": error,
+                        "error": stabilize_error,
                     }
                 last_stabilize_at = now
                 if stabilize_result.get("snapshot"):
                     last_snapshot_at = now
-                if bool(stabilize_result.get("healthy_now")):
+                post_decision = stabilize_result.get("post_decision", {})
+                if not isinstance(post_decision, dict):
+                    post_decision = {}
+                if (
+                    bool(stabilize_result.get("healthy_now"))
+                    and str(post_decision.get("action", "observe")) == "observe"
+                ):
                     consecutive_issue_count = 0
+            elif str(decision.get("action", "observe")) == "snapshot_only" and (
+                last_snapshot_at is None
+                or now - last_snapshot_at >= degraded_snapshot_interval_value
+            ):
+                try:
+                    snapshot = _capture_snapshot_overview(
+                        tunnel_name=resolved_tunnel_name,
+                        prefer_family=prefer_family,
+                        max_candidates=max_candidates,
+                        snapshot_output_dir=snapshot_output_dir,
+                    )
+                    last_snapshot_at = now
+                    action = "snapshot-degraded"
+                except Exception as exc:
+                    snapshot_error = _exception_summary(exc)
+                    error = "; ".join(
+                        [item for item in [error, snapshot_error] if item]
+                    )
+                    snapshot = {"error": snapshot_error}
+                    action = "snapshot-error"
             elif snapshot_interval_value > 0 and (
                 last_snapshot_at is None
                 or now - last_snapshot_at >= snapshot_interval_value
@@ -2814,6 +2906,10 @@ def guard_tunnel_quality(
                     error = _exception_summary(exc)
                     snapshot = {"error": error}
                     action = "snapshot-error"
+            elif status_error is not None or access_error is not None:
+                action = "observe-error"
+            elif issue_detected:
+                action = "observe-degraded"
 
             record = {
                 "iteration": iteration_index,
@@ -2821,6 +2917,8 @@ def guard_tunnel_quality(
                 "tunnel_name": resolved_tunnel_name,
                 "hostname": resolved_hostname,
                 "status": status_summary,
+                "access": access_summary,
+                "decision": decision,
                 "consecutive_issue_count": consecutive_issue_count,
                 "action": action,
                 "snapshot": snapshot,

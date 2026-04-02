@@ -10,6 +10,12 @@ from webu.clis import print_json
 
 from .helptext import COMMAND_HELP, command_epilog, root_description, root_help_epilog
 from .operations import (
+    DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS,
+    DEFAULT_TUNNEL_GUARD_FAILURE_THRESHOLD,
+    DEFAULT_TUNNEL_GUARD_HISTORY_LIMIT,
+    DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS,
+    DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS,
+    DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR,
     access_diagnose,
     apply_tunnel,
     client_canary_bundle,
@@ -387,22 +393,22 @@ def build_parser() -> argparse.ArgumentParser:
     tunnel_guard_parser.add_argument(
         "--interval-seconds",
         type=int,
-        default=60,
+        default=DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS,
     )
     tunnel_guard_parser.add_argument(
         "--failure-threshold",
         type=int,
-        default=2,
+        default=DEFAULT_TUNNEL_GUARD_FAILURE_THRESHOLD,
     )
     tunnel_guard_parser.add_argument(
         "--cooldown-seconds",
         type=int,
-        default=300,
+        default=DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS,
     )
     tunnel_guard_parser.add_argument(
         "--snapshot-interval-seconds",
         type=int,
-        default=1800,
+        default=DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS,
         help="Capture a fresh snapshot every N seconds while the guard is healthy. Use 0 to disable periodic snapshots.",
     )
     tunnel_guard_parser.add_argument(
@@ -413,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     tunnel_guard_parser.add_argument("--max-candidates", type=int, default=3)
     tunnel_guard_parser.add_argument(
         "--snapshot-output-dir",
-        default="debugs/cf-tunnel-snapshots",
+        default=str(DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR),
     )
     tunnel_guard_parser.add_argument(
         "--iterations",
@@ -424,7 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
     tunnel_guard_parser.add_argument(
         "--history-limit",
         type=int,
-        default=20,
+        default=DEFAULT_TUNNEL_GUARD_HISTORY_LIMIT,
     )
     tunnel_guard_parser.add_argument("--save-config", action="store_true")
     tunnel_guard_parser.set_defaults(install_service=True)
