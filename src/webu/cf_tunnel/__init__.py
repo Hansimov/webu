@@ -15,8 +15,10 @@ _EXPORTS = {
     "docs_sync": (".operations", "docs_sync"),
     "edge_trace": (".operations", "edge_trace"),
     "ensure_token": (".operations", "ensure_token"),
+    "guard_tunnel_quality": (".operations", "guard_tunnel_quality"),
     "migrate_dns_to_cloudflare": (".operations", "migrate_dns_to_cloudflare"),
     "page_audit": (".operations", "page_audit"),
+    "stabilize_tunnel": (".operations", "stabilize_tunnel"),
     "tunnel_status": (".operations", "tunnel_status"),
 }
 

@@ -6,6 +6,7 @@ from subprocess import CompletedProcess
 
 from webu.cf_tunnel.cli import build_parser
 from webu.cf_tunnel.operations import (
+    _render_cloudflared_tunnel_guard_service_unit,
     _render_cloudflared_tunnel_service_unit,
     access_diagnose,
     apply_tunnel,
@@ -67,6 +68,19 @@ def test_parser_supports_dns_and_tunnel_commands():
             "--cloudflared-run-json",
             '{"protocol":"http2"}',
             "--install-service",
+            "--no-guard-service",
+        ]
+    )
+    stabilize_args = parser.parse_args(["tunnel-stabilize", "--name", tunnel_name])
+    guard_args = parser.parse_args(
+        [
+            "tunnel-guard",
+            "--name",
+            tunnel_name,
+            "--interval-seconds",
+            "60",
+            "--iterations",
+            "2",
         ]
     )
     token_args = parser.parse_args(
@@ -106,6 +120,12 @@ def test_parser_supports_dns_and_tunnel_commands():
     assert tunnel_args.local_url == "http://127.0.0.1:21002"
     assert tunnel_args.cloudflared_run_json == '{"protocol":"http2"}'
     assert tunnel_args.install_service is True
+    assert tunnel_args.no_guard_service is True
+    assert stabilize_args.name == tunnel_name
+    assert stabilize_args.install_service is True
+    assert guard_args.name == tunnel_name
+    assert guard_args.interval_seconds == 60
+    assert guard_args.iterations == 2
     assert token_args.zone_name == domain_name
     assert token_args.cf_token_mode == "manual"
     assert diagnose_args.name == tunnel_name
@@ -537,6 +557,97 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
     assert result[0]["verification"]["status_after_restart"] == "healthy"
 
 
+def test_apply_tunnel_can_install_guard_sidecar_when_requested(monkeypatch, tmp_path):
+    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    tunnel = deepcopy(local_payload["cf_tunnels"][0])
+    tunnel_name = str(tunnel["tunnel_name"]).strip()
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload["cf_api_token"] = "existing-token"
+    tunnel["tunnel_id"] = ""
+    tunnel["tunnel_token"] = ""
+    local_payload["cf_tunnels"] = [tunnel]
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def ensure_zone(self, *, account_id, zone_name):
+            return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
+
+        def ensure_tunnel(self, *, account_id, tunnel_name):
+            return {"id": "tunnel-1", "token": "secret-token"}
+
+        def get_tunnel_token(self, *, account_id, tunnel_id):
+            return "secret-token"
+
+        def get_tunnel(self, *, account_id, tunnel_id):
+            return {"status": "degraded", "connections": [{"id": "conn-1"}]}
+
+        def put_tunnel_configuration(
+            self,
+            *,
+            account_id,
+            tunnel_id,
+            hostname,
+            service,
+            origin_request=None,
+        ):
+            return {"ok": True}
+
+        def upsert_cname_record(self, *, zone_id, hostname, content, proxied=True):
+            return {"id": "record-1"}
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations._install_cloudflared_tunnel_service",
+        lambda **kwargs: {
+            "service_name": "cloudflared-tunnel-dev-blbl-top.service",
+            "restart_service": {"returncode": 0},
+        },
+    )
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations._wait_for_tunnel_health",
+        lambda **kwargs: {"status": "healthy", "active_connections": 2},
+    )
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations._install_cloudflared_tunnel_guard_service",
+        lambda **kwargs: {
+            "service_name": "cloudflared-tunnel-guard-dev-blbl-top.service"
+        },
+    )
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.shutil.which",
+        lambda name: "/usr/bin/cloudflared" if name == "cloudflared" else None,
+    )
+
+    result = apply_tunnel(
+        tunnel_name=tunnel_name,
+        apply_all=False,
+        install_service=True,
+        install_guard_service=True,
+        cf_token_mode="auto",
+        save_config=True,
+    )
+
+    assert result[0]["guard_install_result"]["service_name"] == (
+        "cloudflared-tunnel-guard-dev-blbl-top.service"
+    )
+    assert result[0]["verification"]["guard_service"] == (
+        "cloudflared-tunnel-guard-dev-blbl-top.service"
+    )
+
+
 def test_render_cloudflared_tunnel_service_unit_uses_faster_restart_defaults():
     rendered = _render_cloudflared_tunnel_service_unit(
         tunnel_name="blbl.top",
@@ -554,6 +665,30 @@ def test_render_cloudflared_tunnel_service_unit_uses_faster_restart_defaults():
     assert "--protocol http2" in rendered
     assert "--edge-ip-version 4" in rendered
     assert "--dns-resolver-addrs 1.1.1.1:53" in rendered
+
+
+def test_render_cloudflared_tunnel_guard_service_unit_runs_continuous_guard(
+    monkeypatch, tmp_path
+):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    rendered = _render_cloudflared_tunnel_guard_service_unit(
+        tunnel_name="blbl.top",
+        interval_seconds=60,
+        failure_threshold=2,
+        cooldown_seconds=300,
+        snapshot_interval_seconds=1800,
+        prefer_family="any",
+        max_candidates=3,
+    )
+
+    assert "Description=cf_tunnel guard for blbl.top" in rendered
+    assert "ExecStart=" in rendered
+    assert "tunnel-guard --name blbl.top" in rendered
+    assert "Environment=WEBU_PROJECT_ROOT=" in rendered
+    assert "Environment=PYTHONPATH=" in rendered
 
 
 def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):

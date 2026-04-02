@@ -21,8 +21,10 @@ from .operations import (
     docs_sync,
     edge_trace,
     ensure_token,
+    guard_tunnel_quality,
     migrate_dns_to_cloudflare,
     page_audit,
+    stabilize_tunnel,
     tunnel_status,
 )
 from .snapshot import capture_canary_snapshot
@@ -68,6 +70,8 @@ def cmd_tunnel_apply(args):
         tunnel_name=args.name,
         apply_all=args.all,
         install_service=args.install_service,
+        install_guard_service=bool(args.install_service)
+        and not bool(args.no_guard_service),
         cf_token_mode=args.cf_token_mode,
         save_config=args.save_config,
         domain_name=args.domain_name or None,
@@ -87,6 +91,48 @@ def cmd_tunnel_apply(args):
 
 def cmd_tunnel_status(args):
     print_json(tunnel_status(tunnel_name=args.name, cf_token_mode=args.cf_token_mode))
+
+
+def cmd_tunnel_stabilize(args):
+    print_json(
+        stabilize_tunnel(
+            tunnel_name=args.name or None,
+            hostname=args.hostname or None,
+            cf_token_mode=args.cf_token_mode,
+            prefer_family=args.prefer_family,
+            max_candidates=args.max_candidates,
+            install_service=bool(args.install_service),
+            save_config=bool(args.save_config),
+            capture_snapshot=bool(args.capture_snapshot),
+            snapshot_output_dir=Path(args.snapshot_output_dir),
+            snapshot_stamp=str(args.stamp or "").strip() or None,
+        )
+    )
+
+
+def cmd_tunnel_guard(args):
+    def emit_event(record):
+        print(json.dumps(record, ensure_ascii=False), flush=True)
+
+    print_json(
+        guard_tunnel_quality(
+            tunnel_name=args.name or None,
+            hostname=args.hostname or None,
+            cf_token_mode=args.cf_token_mode,
+            interval_seconds=args.interval_seconds,
+            failure_threshold=args.failure_threshold,
+            cooldown_seconds=args.cooldown_seconds,
+            snapshot_interval_seconds=args.snapshot_interval_seconds,
+            prefer_family=args.prefer_family,
+            max_candidates=args.max_candidates,
+            install_service=bool(args.install_service),
+            save_config=bool(args.save_config),
+            snapshot_output_dir=Path(args.snapshot_output_dir),
+            iterations=(args.iterations if args.iterations > 0 else None),
+            history_limit=args.history_limit,
+            emit_event=emit_event,
+        )
+    )
 
 
 def cmd_token_ensure(args):
@@ -225,6 +271,11 @@ def build_parser() -> argparse.ArgumentParser:
     tunnel_apply.add_argument("--origin-request-json", default="")
     tunnel_apply.add_argument("--cloudflared-run-json", default="")
     tunnel_apply.add_argument("--install-service", action="store_true")
+    tunnel_apply.add_argument(
+        "--no-guard-service",
+        action="store_true",
+        help="When --install-service is used, skip installing the companion tunnel-guard sidecar service.",
+    )
     _add_common_token_mode(tunnel_apply)
     tunnel_apply.set_defaults(func=cmd_tunnel_apply)
 
@@ -241,6 +292,111 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
     )
     tunnel_status_parser.set_defaults(func=cmd_tunnel_status)
+
+    tunnel_stabilize_parser = subparsers.add_parser(
+        "tunnel-stabilize",
+        help=COMMAND_HELP["tunnel-stabilize"]["summary"],
+        epilog=command_epilog("tunnel-stabilize"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    tunnel_stabilize_parser.add_argument("--name", default="")
+    tunnel_stabilize_parser.add_argument("--hostname", default="")
+    tunnel_stabilize_parser.add_argument(
+        "--prefer-family",
+        choices=["any", "ipv4", "ipv6"],
+        default="any",
+    )
+    tunnel_stabilize_parser.add_argument("--max-candidates", type=int, default=3)
+    tunnel_stabilize_parser.add_argument(
+        "--snapshot-output-dir",
+        default="debugs/cf-tunnel-snapshots",
+    )
+    tunnel_stabilize_parser.add_argument("--stamp", default="")
+    tunnel_stabilize_parser.add_argument(
+        "--cf-token-mode",
+        choices=["auto", "manual", "prompt"],
+        default="auto",
+    )
+    tunnel_stabilize_parser.add_argument("--save-config", action="store_true")
+    tunnel_stabilize_parser.set_defaults(install_service=True, capture_snapshot=True)
+    tunnel_stabilize_parser.add_argument(
+        "--no-install-service",
+        dest="install_service",
+        action="store_false",
+        help="Inspect and snapshot only; do not restart or reinstall the tunnel service even when a repairable issue is detected.",
+    )
+    tunnel_stabilize_parser.add_argument(
+        "--no-snapshot",
+        dest="capture_snapshot",
+        action="store_false",
+        help="Skip writing a fresh snapshot when the stabilize pass detects a non-healthy condition.",
+    )
+    tunnel_stabilize_parser.set_defaults(func=cmd_tunnel_stabilize)
+
+    tunnel_guard_parser = subparsers.add_parser(
+        "tunnel-guard",
+        help=COMMAND_HELP["tunnel-guard"]["summary"],
+        epilog=command_epilog("tunnel-guard"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    tunnel_guard_parser.add_argument("--name", default="")
+    tunnel_guard_parser.add_argument("--hostname", default="")
+    tunnel_guard_parser.add_argument(
+        "--cf-token-mode",
+        choices=["auto", "manual", "prompt"],
+        default="auto",
+    )
+    tunnel_guard_parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=60,
+    )
+    tunnel_guard_parser.add_argument(
+        "--failure-threshold",
+        type=int,
+        default=2,
+    )
+    tunnel_guard_parser.add_argument(
+        "--cooldown-seconds",
+        type=int,
+        default=300,
+    )
+    tunnel_guard_parser.add_argument(
+        "--snapshot-interval-seconds",
+        type=int,
+        default=1800,
+        help="Capture a fresh snapshot every N seconds while the guard is healthy. Use 0 to disable periodic snapshots.",
+    )
+    tunnel_guard_parser.add_argument(
+        "--prefer-family",
+        choices=["any", "ipv4", "ipv6"],
+        default="any",
+    )
+    tunnel_guard_parser.add_argument("--max-candidates", type=int, default=3)
+    tunnel_guard_parser.add_argument(
+        "--snapshot-output-dir",
+        default="debugs/cf-tunnel-snapshots",
+    )
+    tunnel_guard_parser.add_argument(
+        "--iterations",
+        type=int,
+        default=0,
+        help="Run a fixed number of guard cycles for testing. Use 0 to run continuously.",
+    )
+    tunnel_guard_parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=20,
+    )
+    tunnel_guard_parser.add_argument("--save-config", action="store_true")
+    tunnel_guard_parser.set_defaults(install_service=True)
+    tunnel_guard_parser.add_argument(
+        "--no-install-service",
+        dest="install_service",
+        action="store_false",
+        help="Observe and snapshot only; do not trigger tunnel service reapply when the guard decides a baseline repair is needed.",
+    )
+    tunnel_guard_parser.set_defaults(func=cmd_tunnel_guard)
 
     access_diagnose_parser = subparsers.add_parser(
         "access-diagnose",

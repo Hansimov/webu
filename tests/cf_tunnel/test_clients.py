@@ -1,3 +1,5 @@
+import requests
+
 from webu.cf_tunnel.clients import (
     AliyunDomainClient,
     CloudflareApiError,
@@ -88,6 +90,74 @@ def test_cloudflare_create_api_token_falls_back_to_account_tokens(monkeypatch):
     assert result["value"] == "new-secret"
     assert recorded["paths"] == ["/user/tokens", "/accounts/acct-1/tokens"]
     assert recorded["permission_calls"] == [{}, {"account_id": "acct-1"}]
+
+
+def test_cloudflare_request_retries_transient_connection_errors(monkeypatch):
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    class _Response:
+        status_code = 200
+        headers = {}
+        text = ""
+
+        def json(self):
+            return {"success": True, "result": {"ok": True}}
+
+    class _Session:
+        def request(self, method, url, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise requests.ConnectionError("temporary reset")
+            return _Response()
+
+    monkeypatch.setattr("webu.cf_tunnel.clients.time.sleep", sleeps.append)
+
+    client = CloudflareClient("bootstrap-token", session=_Session())
+
+    result = client._request("GET", "/zones")
+
+    assert result == {"ok": True}
+    assert attempts["count"] == 2
+    assert sleeps == [1.0]
+
+
+def test_cloudflare_request_retries_rate_limit_with_retry_after(monkeypatch):
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    class _RateLimitedResponse:
+        status_code = 429
+        headers = {"Retry-After": "3"}
+        text = "rate limited"
+
+        def json(self):
+            return {"success": False, "errors": [{"message": "rate limited"}]}
+
+    class _SuccessResponse:
+        status_code = 200
+        headers = {}
+        text = ""
+
+        def json(self):
+            return {"success": True, "result": {"ok": True}}
+
+    class _Session:
+        def request(self, method, url, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                return _RateLimitedResponse()
+            return _SuccessResponse()
+
+    monkeypatch.setattr("webu.cf_tunnel.clients.time.sleep", sleeps.append)
+
+    client = CloudflareClient("bootstrap-token", session=_Session())
+
+    result = client._request("GET", "/zones")
+
+    assert result == {"ok": True}
+    assert attempts["count"] == 2
+    assert sleeps == [3.0]
 
 
 def test_aliyun_modify_domain_dns_flattens_arrays(monkeypatch):

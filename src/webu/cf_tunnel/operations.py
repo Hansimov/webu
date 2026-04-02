@@ -7,13 +7,15 @@ import socket
 import ssl
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections import defaultdict
+from datetime import UTC, datetime
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 from bs4 import BeautifulSoup
@@ -58,7 +60,14 @@ class CloudflareCredentialResolution:
 
 
 CLOUDFLARED_TUNNEL_SERVICE_PREFIX = "cloudflared-tunnel"
+CLOUDFLARED_TUNNEL_GUARD_SERVICE_PREFIX = "cloudflared-tunnel-guard"
 LEGACY_BLDASH_OVERRIDE_FILE_NAME = "10-bldash-transport.conf"
+DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS = 60
+DEFAULT_TUNNEL_GUARD_FAILURE_THRESHOLD = 2
+DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS = 300
+DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS = 1800
+DEFAULT_TUNNEL_GUARD_HISTORY_LIMIT = 20
+DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR = Path("debugs/cf-tunnel-snapshots")
 _CLOUDFLARE_ORIGIN_REQUEST_KEY_MAP = {
     "connect_timeout": "connectTimeout",
     "keep_alive_connections": "keepAliveConnections",
@@ -86,8 +95,18 @@ def cloudflared_tunnel_service_name(tunnel_name: str) -> str:
     return f"{CLOUDFLARED_TUNNEL_SERVICE_PREFIX}-{_safe_systemd_token(tunnel_name)}.service"
 
 
+def cloudflared_tunnel_guard_service_name(tunnel_name: str) -> str:
+    return f"{CLOUDFLARED_TUNNEL_GUARD_SERVICE_PREFIX}-{_safe_systemd_token(tunnel_name)}.service"
+
+
 def _cloudflared_tunnel_service_path(tunnel_name: str) -> Path:
     return Path("/etc/systemd/system") / cloudflared_tunnel_service_name(tunnel_name)
+
+
+def _cloudflared_tunnel_guard_service_path(tunnel_name: str) -> Path:
+    return Path("/etc/systemd/system") / cloudflared_tunnel_guard_service_name(
+        tunnel_name
+    )
 
 
 def _cloudflared_tunnel_service_override_path(tunnel_name: str) -> Path:
@@ -97,6 +116,13 @@ def _cloudflared_tunnel_service_override_path(tunnel_name: str) -> Path:
         / f"{service_name}.d"
         / LEGACY_BLDASH_OVERRIDE_FILE_NAME
     )
+
+
+def _cftn_command_parts() -> list[str]:
+    executable = shutil.which("cftn")
+    if executable:
+        return [executable]
+    return [sys.executable, "-m", "webu.cf_tunnel.cli"]
 
 
 def _summarize_completed_process(
@@ -152,6 +178,68 @@ def _render_cloudflared_tunnel_service_unit(
             f"ExecStart={exec_start}",
             "Restart=always",
             "RestartSec=2s",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+            "",
+        ]
+    )
+
+
+def _render_cloudflared_tunnel_guard_service_unit(
+    *,
+    tunnel_name: str,
+    interval_seconds: int = DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS,
+    failure_threshold: int = DEFAULT_TUNNEL_GUARD_FAILURE_THRESHOLD,
+    cooldown_seconds: int = DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS,
+    snapshot_interval_seconds: int = DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS,
+    prefer_family: str = "any",
+    max_candidates: int = 3,
+    snapshot_output_dir: Path = DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR,
+) -> str:
+    project_root = Path(find_project_root()).expanduser().resolve()
+    output_dir = snapshot_output_dir.expanduser()
+    if not output_dir.is_absolute():
+        output_dir = project_root / output_dir
+    exec_start = shlex.join(
+        [
+            *_cftn_command_parts(),
+            "tunnel-guard",
+            "--name",
+            tunnel_name,
+            "--interval-seconds",
+            str(max(1, int(interval_seconds))),
+            "--failure-threshold",
+            str(max(1, int(failure_threshold))),
+            "--cooldown-seconds",
+            str(max(0, int(cooldown_seconds))),
+            "--snapshot-interval-seconds",
+            str(max(0, int(snapshot_interval_seconds))),
+            "--prefer-family",
+            str(prefer_family).strip() or "any",
+            "--max-candidates",
+            str(max(1, int(max_candidates))),
+            "--snapshot-output-dir",
+            str(output_dir),
+        ]
+    )
+    main_service_name = cloudflared_tunnel_service_name(tunnel_name)
+    return "\n".join(
+        [
+            "[Unit]",
+            f"Description=cf_tunnel guard for {tunnel_name}",
+            f"After=network-online.target {main_service_name}",
+            f"Wants=network-online.target {main_service_name}",
+            "",
+            "[Service]",
+            "Type=simple",
+            f"WorkingDirectory={project_root}",
+            f"Environment=WEBU_PROJECT_ROOT={project_root}",
+            f"Environment=WEBU_CONFIG_DIR={project_root / 'configs'}",
+            f"Environment=PYTHONPATH={project_root / 'src'}",
+            f"ExecStart={exec_start}",
+            "Restart=always",
+            "RestartSec=5s",
             "",
             "[Install]",
             "WantedBy=multi-user.target",
@@ -259,6 +347,97 @@ def _install_cloudflared_tunnel_service(
         "service_path": str(service_path),
         "write_unit": write_result,
         "cleanup_legacy_override": cleanup_legacy_override_result,
+        "daemon_reload": daemon_reload_result,
+        "enable_service": enable_result,
+        "restart_service": restart_result,
+        "service_status": status_result,
+    }
+
+
+def _install_cloudflared_tunnel_guard_service(
+    *,
+    tunnel_name: str,
+    interval_seconds: int = DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS,
+    failure_threshold: int = DEFAULT_TUNNEL_GUARD_FAILURE_THRESHOLD,
+    cooldown_seconds: int = DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS,
+    snapshot_interval_seconds: int = DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS,
+    prefer_family: str = "any",
+    max_candidates: int = 3,
+    snapshot_output_dir: Path = DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR,
+) -> dict[str, Any]:
+    service_name = cloudflared_tunnel_guard_service_name(tunnel_name)
+    service_path = _cloudflared_tunnel_guard_service_path(tunnel_name)
+    unit_text = _render_cloudflared_tunnel_guard_service_unit(
+        tunnel_name=tunnel_name,
+        interval_seconds=interval_seconds,
+        failure_threshold=failure_threshold,
+        cooldown_seconds=cooldown_seconds,
+        snapshot_interval_seconds=snapshot_interval_seconds,
+        prefer_family=prefer_family,
+        max_candidates=max_candidates,
+        snapshot_output_dir=snapshot_output_dir,
+    )
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(unit_text)
+        temp_path = Path(handle.name)
+
+    try:
+        write_result = _ensure_success(
+            sudo_run(
+                [
+                    "install",
+                    "-D",
+                    "-m",
+                    "644",
+                    str(temp_path),
+                    str(service_path),
+                ],
+                check=False,
+                timeout=60,
+            ),
+            label=f"install systemd unit {service_name}",
+        )
+        daemon_reload_result = _ensure_success(
+            sudo_run(["systemctl", "daemon-reload"], check=False, timeout=60),
+            label="systemctl daemon-reload",
+        )
+        enable_result = _ensure_success(
+            sudo_run(
+                ["systemctl", "enable", service_name],
+                check=False,
+                timeout=60,
+            ),
+            label=f"systemctl enable {service_name}",
+        )
+        restart_result = _ensure_success(
+            sudo_run(
+                ["systemctl", "restart", service_name],
+                check=False,
+                timeout=60,
+            ),
+            label=f"systemctl restart {service_name}",
+        )
+        status_result = _ensure_success(
+            sudo_run(
+                [
+                    "systemctl",
+                    "show",
+                    "--property",
+                    "LoadState,ActiveState,SubState",
+                    service_name,
+                ],
+                check=False,
+                timeout=60,
+            ),
+            label=f"systemctl show {service_name}",
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    return {
+        "service_name": service_name,
+        "service_path": str(service_path),
+        "write_unit": write_result,
         "daemon_reload": daemon_reload_result,
         "enable_service": enable_result,
         "restart_service": restart_result,
@@ -578,6 +757,7 @@ def apply_tunnel(
     tunnel_name: str | None,
     apply_all: bool,
     install_service: bool,
+    install_guard_service: bool = False,
     cf_token_mode: str,
     save_config: bool,
     domain_name: str | None = None,
@@ -665,6 +845,7 @@ def apply_tunnel(
         payload = upsert_tunnel(payload, updated_tunnel)
         config_path = _write_payload(payload, save_config=save_config)
         install_result: dict[str, Any] | None = None
+        guard_install_result: dict[str, Any] | None = None
         verification: dict[str, Any] | None = None
         if install_service:
             if not shutil.which("cloudflared"):
@@ -691,6 +872,11 @@ def apply_tunnel(
                 "status_after_restart": status_after["status"],
                 "connections_after_restart": status_after["active_connections"],
             }
+            if install_guard_service:
+                guard_install_result = _install_cloudflared_tunnel_guard_service(
+                    tunnel_name=item.tunnel_name,
+                )
+                verification["guard_service"] = guard_install_result["service_name"]
             if status_after["status"] != "healthy":
                 raise RuntimeError(
                     f"Tunnel {item.tunnel_name} is still {status_after['status']} after restarting {install_result['service_name']}."
@@ -709,6 +895,7 @@ def apply_tunnel(
                     f"install/update {cloudflared_tunnel_service_name(item.tunnel_name)}"
                 ),
                 "install_result": install_result or {},
+                "guard_install_result": guard_install_result or {},
                 "verification": verification or {},
                 "cf_token_source": credential.source,
                 "config_path": str(config_path) if config_path else "",
@@ -2204,6 +2391,460 @@ def access_diagnose(*, tunnel_name: str | None, hostname: str | None) -> dict[st
         },
         "diagnosis": diagnosis,
         "recommendations": recommendations,
+    }
+
+
+def _probe_path_succeeded(values: Any) -> bool:
+    return any(
+        isinstance(item, dict) and bool(item.get("success"))
+        for item in (values if isinstance(values, list) else [])
+    )
+
+
+def _merge_reason_codes(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for item in group:
+            text = str(item).strip()
+            if text and text not in merged:
+                merged.append(text)
+    return merged
+
+
+def _summarize_tunnel_status_result(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized_status = str(payload.get("status", "unknown") or "unknown").lower()
+    connections = payload.get("connections")
+    active_connections = len(connections) if isinstance(connections, list) else 0
+    healthy = normalized_status == "healthy" and active_connections > 0
+    reason_codes: list[str] = []
+    if normalized_status != "healthy":
+        reason_codes.append(f"status_{normalized_status}")
+    if active_connections == 0:
+        reason_codes.append("no_active_connections")
+    if not reason_codes:
+        reason_codes.append("healthy")
+    return {
+        "status": normalized_status,
+        "active_connections": active_connections,
+        "healthy": healthy,
+        "reason_codes": reason_codes,
+    }
+
+
+def _summarize_access_result(payload: dict[str, Any]) -> dict[str, Any]:
+    dns = payload.get("dns", {}) if isinstance(payload, dict) else {}
+    https = payload.get("https", {}) if isinstance(payload, dict) else {}
+    system_https_ok = _probe_path_succeeded(https.get("system_resolver", []))
+    cloudflare_https_ok = _probe_path_succeeded(https.get("cloudflare_doh", []))
+    authoritative_https_ok = _probe_path_succeeded(
+        https.get("cloudflare_authoritative_ns", [])
+    )
+    dns_mismatch = bool(dns.get("mismatch")) if isinstance(dns, dict) else False
+    recursive_mismatch = (
+        bool(dns.get("recursive_mismatch")) if isinstance(dns, dict) else False
+    )
+    any_https_ok = system_https_ok or cloudflare_https_ok or authoritative_https_ok
+    visitor_side_dns_drift = (
+        cloudflare_https_ok or authoritative_https_ok
+    ) and not system_https_ok
+    reason_codes: list[str] = []
+    if dns_mismatch:
+        reason_codes.append("dns_mismatch")
+    if recursive_mismatch:
+        reason_codes.append("recursive_dns_mismatch")
+    if visitor_side_dns_drift:
+        reason_codes.append("visitor_side_dns_drift")
+    if not any_https_ok:
+        reason_codes.append("public_https_failed_all_paths")
+    if any_https_ok and not reason_codes:
+        reason_codes.append("public_https_ok")
+    return {
+        "dns_mismatch": dns_mismatch,
+        "recursive_mismatch": recursive_mismatch,
+        "system_https_ok": system_https_ok,
+        "cloudflare_https_ok": cloudflare_https_ok,
+        "authoritative_https_ok": authoritative_https_ok,
+        "any_https_ok": any_https_ok,
+        "visitor_side_dns_drift": visitor_side_dns_drift,
+        "reason_codes": reason_codes,
+    }
+
+
+def _build_stabilize_decision(
+    status_summary: dict[str, Any], access_summary: dict[str, Any]
+) -> dict[str, Any]:
+    reason_codes = _merge_reason_codes(
+        list(status_summary.get("reason_codes", [])),
+        list(access_summary.get("reason_codes", [])),
+    )
+    if not bool(status_summary.get("healthy")):
+        return {
+            "action": "reapply_baseline",
+            "summary": "Tunnel control-plane state is unhealthy or has no active connections. Reapply the verified baseline and restart cloudflared.",
+            "reason_codes": reason_codes,
+        }
+    if not bool(access_summary.get("any_https_ok")):
+        return {
+            "action": "reapply_baseline",
+            "summary": "All probed HTTPS paths failed from the current host. Reapply the verified baseline and refresh the tunnel service before escalating further.",
+            "reason_codes": reason_codes,
+        }
+    if (
+        bool(access_summary.get("visitor_side_dns_drift"))
+        or bool(access_summary.get("dns_mismatch"))
+        or bool(access_summary.get("recursive_mismatch"))
+    ):
+        return {
+            "action": "snapshot_only",
+            "summary": "Resolver paths disagree but at least one Cloudflare edge path is still healthy. Capture a fresh snapshot and avoid unsafe public-DNS rewrites.",
+            "reason_codes": reason_codes,
+        }
+    return {
+        "action": "observe",
+        "summary": "Tunnel control-plane status and local HTTPS probes are currently healthy.",
+        "reason_codes": reason_codes,
+    }
+
+
+def _resolve_tunnel_identity(
+    *, tunnel_name: str | None, hostname: str | None
+) -> tuple[str, str]:
+    resolved_tunnel_name = str(tunnel_name or "").strip()
+    resolved_hostname = str(hostname or "").strip()
+    if resolved_tunnel_name and resolved_hostname:
+        return resolved_tunnel_name, resolved_hostname
+
+    payload = load_cf_tunnel_config()
+    if resolved_tunnel_name:
+        target = _tunnel_lookup(payload, tunnel_name=resolved_tunnel_name)
+        return target.tunnel_name, resolved_hostname or target.domain_name
+    if resolved_hostname:
+        target = _find_matching_tunnel(
+            payload,
+            tunnel_name=None,
+            domain_name=resolved_hostname,
+        )
+        if target is None:
+            raise ValueError(
+                f"hostname '{resolved_hostname}' not found in configs/cf_tunnel.json"
+            )
+        return target.tunnel_name, target.domain_name
+
+    target = _tunnel_lookup(payload, tunnel_name=None)
+    return target.tunnel_name, target.domain_name
+
+
+def _capture_snapshot_overview(
+    *,
+    tunnel_name: str,
+    prefer_family: str,
+    max_candidates: int,
+    snapshot_output_dir: Path,
+    snapshot_stamp: str | None = None,
+) -> dict[str, Any]:
+    from .snapshot import capture_canary_snapshot
+
+    snapshot_result = capture_canary_snapshot(
+        names=[tunnel_name],
+        prefer_family=prefer_family,
+        max_candidates=max(1, int(max_candidates)),
+        output_dir=Path(snapshot_output_dir),
+        stamp=snapshot_stamp,
+    )
+    item = {}
+    snapshots = snapshot_result.get("snapshots", [])
+    if isinstance(snapshots, list) and snapshots and isinstance(snapshots[0], dict):
+        item = snapshots[0]
+    return {
+        "snapshot_label": snapshot_result.get("snapshot_label", ""),
+        "output_dir": snapshot_result.get("output_dir", ""),
+        "hostname": item.get("hostname", ""),
+        "recommended_prefer_family": item.get("recommended_prefer_family", "any"),
+        "reason_codes": item.get("reason_codes", []),
+        "first_round_strategy": (
+            item.get("operator_shortcuts", {}).get("first_round_strategy", "")
+            if isinstance(item.get("operator_shortcuts", {}), dict)
+            else ""
+        ),
+        "top_candidates": item.get("top_candidates", []),
+    }
+
+
+def _exception_summary(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def stabilize_tunnel(
+    *,
+    tunnel_name: str | None,
+    hostname: str | None,
+    cf_token_mode: str,
+    prefer_family: str,
+    max_candidates: int,
+    install_service: bool,
+    save_config: bool,
+    capture_snapshot: bool = True,
+    snapshot_output_dir: Path = DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR,
+    snapshot_stamp: str | None = None,
+) -> dict[str, Any]:
+    resolved_tunnel_name, resolved_hostname = _resolve_tunnel_identity(
+        tunnel_name=tunnel_name,
+        hostname=hostname,
+    )
+    pre_status_raw = tunnel_status(
+        tunnel_name=resolved_tunnel_name,
+        cf_token_mode=cf_token_mode,
+    )
+    pre_access_raw = access_diagnose(
+        tunnel_name=resolved_tunnel_name,
+        hostname=resolved_hostname,
+    )
+    pre_status = _summarize_tunnel_status_result(pre_status_raw)
+    pre_access = _summarize_access_result(pre_access_raw)
+    decision = _build_stabilize_decision(pre_status, pre_access)
+
+    action_taken = str(decision["action"])
+    apply_result: dict[str, Any] = {}
+    post_status = dict(pre_status)
+    post_access = dict(pre_access)
+    post_decision = dict(decision)
+
+    if action_taken == "reapply_baseline":
+        apply_result = apply_tunnel(
+            tunnel_name=resolved_tunnel_name,
+            apply_all=False,
+            install_service=install_service,
+            install_guard_service=False,
+            cf_token_mode=cf_token_mode,
+            save_config=save_config,
+        )[0]
+        post_status_raw = tunnel_status(
+            tunnel_name=resolved_tunnel_name,
+            cf_token_mode=cf_token_mode,
+        )
+        post_access_raw = access_diagnose(
+            tunnel_name=resolved_tunnel_name,
+            hostname=resolved_hostname,
+        )
+        post_status = _summarize_tunnel_status_result(post_status_raw)
+        post_access = _summarize_access_result(post_access_raw)
+        post_decision = _build_stabilize_decision(post_status, post_access)
+
+    snapshot: dict[str, Any] = {}
+    snapshot_error: str | None = None
+    if capture_snapshot and action_taken != "observe":
+        try:
+            snapshot = _capture_snapshot_overview(
+                tunnel_name=resolved_tunnel_name,
+                prefer_family=prefer_family,
+                max_candidates=max_candidates,
+                snapshot_output_dir=snapshot_output_dir,
+                snapshot_stamp=snapshot_stamp,
+            )
+        except Exception as exc:
+            snapshot_error = _exception_summary(exc)
+
+    healthy_now = bool(post_status.get("healthy")) and bool(
+        post_access.get("any_https_ok")
+    )
+    repaired = (
+        action_taken == "reapply_baseline"
+        and healthy_now
+        and str(post_decision.get("action", "observe")) != "reapply_baseline"
+    )
+
+    return {
+        "tunnel_name": resolved_tunnel_name,
+        "hostname": resolved_hostname,
+        "action_taken": action_taken,
+        "decision": decision,
+        "pre_status": pre_status,
+        "pre_access": pre_access,
+        "apply_result": apply_result,
+        "post_status": post_status,
+        "post_access": post_access,
+        "post_decision": post_decision,
+        "healthy_now": healthy_now,
+        "repaired": repaired,
+        "snapshot": snapshot,
+        "snapshot_error": snapshot_error,
+    }
+
+
+def guard_tunnel_quality(
+    *,
+    tunnel_name: str | None,
+    hostname: str | None,
+    cf_token_mode: str,
+    interval_seconds: int = DEFAULT_TUNNEL_GUARD_INTERVAL_SECONDS,
+    failure_threshold: int = DEFAULT_TUNNEL_GUARD_FAILURE_THRESHOLD,
+    cooldown_seconds: int = DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS,
+    snapshot_interval_seconds: int = DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS,
+    prefer_family: str = "any",
+    max_candidates: int = 3,
+    install_service: bool = True,
+    save_config: bool = True,
+    snapshot_output_dir: Path = DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR,
+    iterations: int | None = None,
+    history_limit: int = DEFAULT_TUNNEL_GUARD_HISTORY_LIMIT,
+    emit_event: Callable[[dict[str, Any]], None] | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    time_fn: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    resolved_tunnel_name, resolved_hostname = _resolve_tunnel_identity(
+        tunnel_name=tunnel_name,
+        hostname=hostname,
+    )
+    interval_value = max(1, int(interval_seconds))
+    threshold_value = max(1, int(failure_threshold))
+    cooldown_value = max(0, int(cooldown_seconds))
+    snapshot_interval_value = max(0, int(snapshot_interval_seconds))
+    history_limit_value = max(1, int(history_limit))
+    iteration_limit = None
+    if iterations is not None and int(iterations) > 0:
+        iteration_limit = int(iterations)
+
+    history: list[dict[str, Any]] = []
+    consecutive_issue_count = 0
+    last_stabilize_at: float | None = None
+    last_snapshot_at: float | None = None
+    interrupted = False
+    iteration_index = 0
+
+    try:
+        while iteration_limit is None or iteration_index < iteration_limit:
+            iteration_index += 1
+            observed_at = datetime.now(UTC).isoformat()
+            now = time_fn()
+            action = "observe"
+            snapshot: dict[str, Any] = {}
+            stabilize_result: dict[str, Any] = {}
+            error: str | None = None
+
+            try:
+                status_payload = tunnel_status(
+                    tunnel_name=resolved_tunnel_name,
+                    cf_token_mode=cf_token_mode,
+                )
+                status_summary = _summarize_tunnel_status_result(status_payload)
+            except Exception as exc:
+                error = _exception_summary(exc)
+                status_summary = {
+                    "status": "error",
+                    "active_connections": 0,
+                    "healthy": False,
+                    "reason_codes": ["observation_error"],
+                }
+                record = {
+                    "iteration": iteration_index,
+                    "observed_at": observed_at,
+                    "tunnel_name": resolved_tunnel_name,
+                    "hostname": resolved_hostname,
+                    "status": status_summary,
+                    "consecutive_issue_count": consecutive_issue_count,
+                    "action": "observe-error",
+                    "snapshot": snapshot,
+                    "stabilize": stabilize_result,
+                    "error": error,
+                }
+                if emit_event is not None:
+                    emit_event(record)
+                history.append(record)
+                if len(history) > history_limit_value:
+                    history.pop(0)
+                if iteration_limit is not None and iteration_index >= iteration_limit:
+                    break
+                sleep_fn(interval_value)
+                continue
+
+            if status_summary["healthy"]:
+                consecutive_issue_count = 0
+            else:
+                consecutive_issue_count += 1
+
+            if (
+                not status_summary["healthy"]
+                and consecutive_issue_count >= threshold_value
+                and (
+                    last_stabilize_at is None
+                    or now - last_stabilize_at >= cooldown_value
+                )
+            ):
+                try:
+                    stabilize_result = stabilize_tunnel(
+                        tunnel_name=resolved_tunnel_name,
+                        hostname=resolved_hostname,
+                        cf_token_mode=cf_token_mode,
+                        prefer_family=prefer_family,
+                        max_candidates=max_candidates,
+                        install_service=install_service,
+                        save_config=save_config,
+                        capture_snapshot=True,
+                        snapshot_output_dir=snapshot_output_dir,
+                    )
+                    action = "stabilize"
+                except Exception as exc:
+                    error = _exception_summary(exc)
+                    action = "stabilize-error"
+                    stabilize_result = {
+                        "action_taken": "error",
+                        "healthy_now": False,
+                        "repaired": False,
+                        "error": error,
+                    }
+                last_stabilize_at = now
+                if stabilize_result.get("snapshot"):
+                    last_snapshot_at = now
+                if bool(stabilize_result.get("healthy_now")):
+                    consecutive_issue_count = 0
+            elif snapshot_interval_value > 0 and (
+                last_snapshot_at is None
+                or now - last_snapshot_at >= snapshot_interval_value
+            ):
+                try:
+                    snapshot = _capture_snapshot_overview(
+                        tunnel_name=resolved_tunnel_name,
+                        prefer_family=prefer_family,
+                        max_candidates=max_candidates,
+                        snapshot_output_dir=snapshot_output_dir,
+                    )
+                    last_snapshot_at = now
+                    action = "snapshot"
+                except Exception as exc:
+                    error = _exception_summary(exc)
+                    snapshot = {"error": error}
+                    action = "snapshot-error"
+
+            record = {
+                "iteration": iteration_index,
+                "observed_at": observed_at,
+                "tunnel_name": resolved_tunnel_name,
+                "hostname": resolved_hostname,
+                "status": status_summary,
+                "consecutive_issue_count": consecutive_issue_count,
+                "action": action,
+                "snapshot": snapshot,
+                "stabilize": stabilize_result,
+                "error": error,
+            }
+            if emit_event is not None:
+                emit_event(record)
+            history.append(record)
+            if len(history) > history_limit_value:
+                history.pop(0)
+
+            if iteration_limit is not None and iteration_index >= iteration_limit:
+                break
+            sleep_fn(interval_value)
+    except KeyboardInterrupt:
+        interrupted = True
+
+    return {
+        "tunnel_name": resolved_tunnel_name,
+        "hostname": resolved_hostname,
+        "iterations_run": iteration_index,
+        "interrupted": interrupted,
+        "history": history,
     }
 
 

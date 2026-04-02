@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import time
 import uuid
 
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,35 @@ class AliyunApiError(RuntimeError):
     pass
 
 
+DEFAULT_CLOUDFLARE_API_TIMEOUT_SECONDS = 30
+DEFAULT_CLOUDFLARE_API_MAX_ATTEMPTS = 4
+DEFAULT_CLOUDFLARE_API_BASE_BACKOFF_SECONDS = 1.0
+RETRYABLE_CLOUDFLARE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+
+def _retry_after_seconds(response: requests.Response) -> float | None:
+    raw_value = str(response.headers.get("Retry-After", "")).strip()
+    if not raw_value:
+        return None
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        return None
+
+
+def _cloudflare_backoff_seconds(
+    attempt: int,
+    *,
+    response: requests.Response | None = None,
+) -> float:
+    if response is not None:
+        retry_after = _retry_after_seconds(response)
+        if retry_after is not None:
+            return retry_after
+    exponent = max(0, int(attempt) - 1)
+    return DEFAULT_CLOUDFLARE_API_BASE_BACKOFF_SECONDS * (2**exponent)
+
+
 class CloudflareClient:
     def __init__(self, api_token: str, *, session: requests.Session | None = None):
         self.api_token = str(api_token).strip()
@@ -35,23 +65,57 @@ class CloudflareClient:
         params: dict[str, Any] | None = None,
         json_body: Any = None,
     ) -> Any:
-        response = self.session.request(
-            method,
-            f"https://api.cloudflare.com/client/v4{path}",
-            params=params,
-            json=json_body,
-            headers={"Authorization": f"Bearer {self.api_token}"},
-            timeout=30,
+        last_error: Exception | None = None
+        response: requests.Response | None = None
+        payload: dict[str, Any] | None = None
+        url = f"https://api.cloudflare.com/client/v4{path}"
+
+        for attempt in range(1, DEFAULT_CLOUDFLARE_API_MAX_ATTEMPTS + 1):
+            try:
+                response = self.session.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    headers={"Authorization": f"Bearer {self.api_token}"},
+                    timeout=DEFAULT_CLOUDFLARE_API_TIMEOUT_SECONDS,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= DEFAULT_CLOUDFLARE_API_MAX_ATTEMPTS:
+                    break
+                time.sleep(_cloudflare_backoff_seconds(attempt))
+                continue
+
+            try:
+                parsed_payload = response.json()
+            except ValueError:
+                parsed_payload = {}
+            payload = parsed_payload if isinstance(parsed_payload, dict) else {}
+
+            retryable_status = response.status_code in RETRYABLE_CLOUDFLARE_STATUS_CODES
+            if retryable_status and attempt < DEFAULT_CLOUDFLARE_API_MAX_ATTEMPTS:
+                time.sleep(_cloudflare_backoff_seconds(attempt, response=response))
+                continue
+
+            if response.status_code >= 400 or not payload.get("success", False):
+                errors = payload.get("errors") or []
+                detail = (
+                    "; ".join(str(item.get("message", item)) for item in errors)
+                    or response.text
+                )
+                raise CloudflareApiError(detail)
+
+            return payload.get("result")
+
+        if last_error is not None:
+            raise CloudflareApiError(
+                f"Cloudflare request failed after {DEFAULT_CLOUDFLARE_API_MAX_ATTEMPTS} attempts: {type(last_error).__name__}: {last_error}"
+            ) from last_error
+
+        raise CloudflareApiError(
+            f"Cloudflare request failed without a response for {method} {path}"
         )
-        payload = response.json()
-        if response.status_code >= 400 or not payload.get("success", False):
-            errors = payload.get("errors") or []
-            detail = (
-                "; ".join(str(item.get("message", item)) for item in errors)
-                or response.text
-            )
-            raise CloudflareApiError(detail)
-        return payload.get("result")
 
     def verify_token(self) -> dict[str, Any]:
         return self._request("GET", "/user/tokens/verify")
