@@ -7,6 +7,7 @@ from subprocess import CompletedProcess
 
 from webu.cf_tunnel.cli import _apply_runtime_path_overrides, build_parser
 from webu.cf_tunnel.operations import (
+    _install_cloudflared_tunnel_service,
     _render_cloudflared_tunnel_guard_service_unit,
     _render_cloudflared_tunnel_service_unit,
     access_diagnose,
@@ -746,8 +747,63 @@ def test_render_cloudflared_tunnel_guard_service_unit_runs_continuous_guard(
     assert "Description=cf_tunnel guard for blbl.top" in rendered
     assert "ExecStart=" in rendered
     assert "tunnel-guard --name blbl.top" in rendered
+    assert "--save-config" in rendered
     assert "Environment=WEBU_PROJECT_ROOT=" in rendered
     assert "Environment=PYTHONPATH=" in rendered
+
+
+def test_install_cloudflared_tunnel_service_tolerates_transient_restart_failure(
+    monkeypatch,
+):
+    responses = iter(
+        [
+            CompletedProcess(args=["install"], returncode=0, stdout=b"", stderr=b""),
+            CompletedProcess(args=["rm"], returncode=0, stdout=b"", stderr=b""),
+            CompletedProcess(
+                args=["systemctl", "daemon-reload"],
+                returncode=0,
+                stdout=b"",
+                stderr=b"",
+            ),
+            CompletedProcess(
+                args=["systemctl", "enable"],
+                returncode=0,
+                stdout=b"",
+                stderr=b"",
+            ),
+            CompletedProcess(
+                args=["systemctl", "restart"],
+                returncode=1,
+                stdout=b"",
+                stderr=b"initial start failed\n",
+            ),
+            CompletedProcess(
+                args=["systemctl", "show"],
+                returncode=0,
+                stdout=b"LoadState=loaded\nActiveState=active\nSubState=running\n",
+                stderr=b"",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "webu.cf_tunnel.operations.sudo_run",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    result = _install_cloudflared_tunnel_service(
+        tunnel_name="blbl.top",
+        tunnel_token="secret-token",
+        cloudflared_run={
+            "protocol": "http2",
+            "edge_ip_version": "4",
+            "dns_resolver_addrs": ["1.1.1.1:53", "1.0.0.1:53"],
+        },
+    )
+
+    assert result["restart_service"]["returncode"] == 1
+    assert result["restart_service"]["stderr"] == "initial start failed"
+    assert "ActiveState=active" in result["service_status"]["stdout"]
 
 
 def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):

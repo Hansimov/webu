@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -69,6 +70,12 @@ DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS = 180
 DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS = 300
 DEFAULT_TUNNEL_GUARD_DEGRADED_SNAPSHOT_INTERVAL_SECONDS = 120
 DEFAULT_TUNNEL_GUARD_HISTORY_LIMIT = 20
+DEFAULT_TUNNEL_GUARD_SLOW_TTFB_MS = 1200
+DEFAULT_TUNNEL_GUARD_LATENCY_DRIFT_DELTA_MS = 500
+DEFAULT_TUNNEL_RESTART_VERIFY_TIMEOUT_SECONDS = 120
+DEFAULT_TUNNEL_REPAIR_SNAPSHOT_HISTORY_LIMIT = 4
+DEFAULT_TUNNEL_REPAIR_SNAPSHOT_STABILITY_WINDOW = 3
+DEFAULT_TUNNEL_REPAIR_SNAPSHOT_STABLE_MATCH_COUNT = 2
 DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR = DEFAULT_SNAPSHOT_OUTPUT_DIR
 _CLOUDFLARE_ORIGIN_REQUEST_KEY_MAP = {
     "connect_timeout": "connectTimeout",
@@ -210,6 +217,7 @@ def _render_cloudflared_tunnel_guard_service_unit(
             "tunnel-guard",
             "--name",
             tunnel_name,
+            "--save-config",
             "--interval-seconds",
             str(max(1, int(interval_seconds))),
             "--failure-threshold",
@@ -320,13 +328,12 @@ def _install_cloudflared_tunnel_service(
             ),
             label=f"systemctl enable {service_name}",
         )
-        restart_result = _ensure_success(
+        restart_result = _summarize_completed_process(
             sudo_run(
                 ["systemctl", "restart", service_name],
                 check=False,
                 timeout=60,
-            ),
-            label=f"systemctl restart {service_name}",
+            )
         )
         status_result = _ensure_success(
             sudo_run(
@@ -526,7 +533,7 @@ def _wait_for_tunnel_health(
     cf_client: CloudflareClient,
     account_id: str,
     tunnel_id: str,
-    timeout_seconds: int = 20,
+    timeout_seconds: int = DEFAULT_TUNNEL_RESTART_VERIFY_TIMEOUT_SECONDS,
     poll_interval_seconds: int = 2,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
@@ -1041,12 +1048,24 @@ def _flatten_certificate_name(values: Any) -> list[str]:
     return flattened
 
 
+def _duration_ms(started_at: float | None, ended_at: float | None) -> int | None:
+    if started_at is None or ended_at is None:
+        return None
+    return int(round(max(0.0, ended_at - started_at) * 1000))
+
+
 def _probe_https_endpoint(hostname: str, ip_address: str) -> dict[str, Any]:
     result: dict[str, Any] = {"ip": ip_address, "success": False}
+    started_at = time.monotonic()
+    connected_at: float | None = None
+    tls_ready_at: float | None = None
+    first_response_at: float | None = None
     try:
         context = ssl.create_default_context()
         with socket.create_connection((ip_address, 443), timeout=8) as raw_sock:
+            connected_at = time.monotonic()
             with context.wrap_socket(raw_sock, server_hostname=hostname) as tls_sock:
+                tls_ready_at = time.monotonic()
                 certificate = tls_sock.getpeercert()
                 request = (
                     f"HEAD / HTTP/1.1\r\n"
@@ -1061,6 +1080,8 @@ def _probe_https_endpoint(hostname: str, ip_address: str) -> dict[str, Any]:
                     chunk = tls_sock.recv(4096)
                     if not chunk:
                         break
+                    if first_response_at is None:
+                        first_response_at = time.monotonic()
                     raw_response += chunk
 
                 header_text = raw_response.decode("iso-8859-1", errors="replace")
@@ -1094,6 +1115,20 @@ def _probe_https_endpoint(hostname: str, ip_address: str) -> dict[str, Any]:
                 )
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        finished_at = time.monotonic()
+        connect_ms = _duration_ms(started_at, connected_at)
+        tls_handshake_ms = _duration_ms(connected_at, tls_ready_at)
+        ttfb_ms = _duration_ms(started_at, first_response_at)
+        total_ms = _duration_ms(started_at, finished_at)
+        if connect_ms is not None:
+            result["connect_ms"] = connect_ms
+        if tls_handshake_ms is not None:
+            result["tls_handshake_ms"] = tls_handshake_ms
+        if ttfb_ms is not None:
+            result["ttfb_ms"] = ttfb_ms
+        if total_ms is not None:
+            result["total_ms"] = total_ms
     return result
 
 
@@ -1243,10 +1278,16 @@ def _fetch_https_endpoint(
         "method": method,
         "success": False,
     }
+    started_at = time.monotonic()
+    connected_at: float | None = None
+    tls_ready_at: float | None = None
+    first_response_at: float | None = None
     try:
         context = ssl.create_default_context()
         with socket.create_connection((ip_address, 443), timeout=8) as raw_sock:
+            connected_at = time.monotonic()
             with context.wrap_socket(raw_sock, server_hostname=hostname) as tls_sock:
+                tls_ready_at = time.monotonic()
                 request = (
                     f"{method} {path} HTTP/1.1\r\n"
                     f"Host: {hostname}\r\n"
@@ -1260,6 +1301,8 @@ def _fetch_https_endpoint(
                     chunk = tls_sock.recv(16384)
                     if not chunk:
                         break
+                    if first_response_at is None:
+                        first_response_at = time.monotonic()
                     raw_response += chunk
 
                 header_bytes, _, body_bytes = raw_response.partition(b"\r\n\r\n")
@@ -1292,6 +1335,20 @@ def _fetch_https_endpoint(
                 )
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        finished_at = time.monotonic()
+        connect_ms = _duration_ms(started_at, connected_at)
+        tls_handshake_ms = _duration_ms(connected_at, tls_ready_at)
+        ttfb_ms = _duration_ms(started_at, first_response_at)
+        total_ms = _duration_ms(started_at, finished_at)
+        if connect_ms is not None:
+            result["connect_ms"] = connect_ms
+        if tls_handshake_ms is not None:
+            result["tls_handshake_ms"] = tls_handshake_ms
+        if ttfb_ms is not None:
+            result["ttfb_ms"] = ttfb_ms
+        if total_ms is not None:
+            result["total_ms"] = total_ms
     return result
 
 
@@ -2404,6 +2461,19 @@ def _probe_path_succeeded(values: Any) -> bool:
     )
 
 
+def _probe_path_best_ttfb_ms(values: Any) -> int | None:
+    latencies = [
+        int(item.get("ttfb_ms"))
+        for item in (values if isinstance(values, list) else [])
+        if isinstance(item, dict)
+        and bool(item.get("success"))
+        and isinstance(item.get("ttfb_ms"), int)
+    ]
+    if not latencies:
+        return None
+    return min(latencies)
+
+
 def _merge_reason_codes(*groups: list[str]) -> list[str]:
     merged: list[str] = []
     for group in groups:
@@ -2447,9 +2517,27 @@ def _summarize_access_result(payload: dict[str, Any]) -> dict[str, Any]:
         bool(dns.get("recursive_mismatch")) if isinstance(dns, dict) else False
     )
     any_https_ok = system_https_ok or cloudflare_https_ok or authoritative_https_ok
+    system_ttfb_ms = _probe_path_best_ttfb_ms(https.get("system_resolver", []))
+    cloudflare_ttfb_ms = _probe_path_best_ttfb_ms(https.get("cloudflare_doh", []))
+    authoritative_ttfb_ms = _probe_path_best_ttfb_ms(
+        https.get("cloudflare_authoritative_ns", [])
+    )
+    edge_ttfb_candidates = [
+        value
+        for value in [cloudflare_ttfb_ms, authoritative_ttfb_ms]
+        if isinstance(value, int)
+    ]
+    edge_ttfb_ms = min(edge_ttfb_candidates) if edge_ttfb_candidates else None
     visitor_side_dns_drift = (
         cloudflare_https_ok or authoritative_https_ok
     ) and not system_https_ok
+    visitor_side_latency_drift = (
+        system_https_ok
+        and isinstance(system_ttfb_ms, int)
+        and isinstance(edge_ttfb_ms, int)
+        and system_ttfb_ms >= DEFAULT_TUNNEL_GUARD_SLOW_TTFB_MS
+        and system_ttfb_ms - edge_ttfb_ms >= DEFAULT_TUNNEL_GUARD_LATENCY_DRIFT_DELTA_MS
+    )
     reason_codes: list[str] = []
     if dns_mismatch:
         reason_codes.append("dns_mismatch")
@@ -2457,6 +2545,8 @@ def _summarize_access_result(payload: dict[str, Any]) -> dict[str, Any]:
         reason_codes.append("recursive_dns_mismatch")
     if visitor_side_dns_drift:
         reason_codes.append("visitor_side_dns_drift")
+    if visitor_side_latency_drift:
+        reason_codes.append("visitor_side_latency_drift")
     if not any_https_ok:
         reason_codes.append("public_https_failed_all_paths")
     if any_https_ok and not reason_codes:
@@ -2468,7 +2558,12 @@ def _summarize_access_result(payload: dict[str, Any]) -> dict[str, Any]:
         "cloudflare_https_ok": cloudflare_https_ok,
         "authoritative_https_ok": authoritative_https_ok,
         "any_https_ok": any_https_ok,
+        "system_ttfb_ms": system_ttfb_ms,
+        "cloudflare_ttfb_ms": cloudflare_ttfb_ms,
+        "authoritative_ttfb_ms": authoritative_ttfb_ms,
+        "edge_ttfb_ms": edge_ttfb_ms,
         "visitor_side_dns_drift": visitor_side_dns_drift,
+        "visitor_side_latency_drift": visitor_side_latency_drift,
         "reason_codes": reason_codes,
     }
 
@@ -2492,10 +2587,20 @@ def _build_stabilize_decision(
             "summary": "All probed HTTPS paths failed from the current host. Reapply the verified baseline and refresh the tunnel service before escalating further.",
             "reason_codes": reason_codes,
         }
-    if (
-        bool(access_summary.get("visitor_side_dns_drift"))
-        or bool(access_summary.get("dns_mismatch"))
-        or bool(access_summary.get("recursive_mismatch"))
+    if bool(access_summary.get("visitor_side_dns_drift")):
+        return {
+            "action": "reapply_baseline",
+            "summary": "The system-resolved public path currently fails while pinned Cloudflare edge probes still work. Reapply the verified baseline and reconnect cloudflared to improve visitor-side path quality without rewriting public DNS.",
+            "reason_codes": reason_codes,
+        }
+    if bool(access_summary.get("visitor_side_latency_drift")):
+        return {
+            "action": "reapply_baseline",
+            "summary": "The system-resolved public path is materially slower than the direct Cloudflare edge probes. Reapply the verified baseline and refresh cloudflared so it can reconnect onto a better path.",
+            "reason_codes": reason_codes,
+        }
+    if bool(access_summary.get("dns_mismatch")) or bool(
+        access_summary.get("recursive_mismatch")
     ):
         return {
             "action": "snapshot_only",
@@ -2573,6 +2678,153 @@ def _capture_snapshot_overview(
     }
 
 
+def _iter_tunnel_snapshot_recommendations(
+    *,
+    hostname: str,
+    snapshot_output_dir: Path,
+    limit: int = DEFAULT_TUNNEL_REPAIR_SNAPSHOT_HISTORY_LIMIT,
+) -> list[dict[str, Any]]:
+    normalized_hostname = str(hostname or "").strip().lower()
+    if not normalized_hostname:
+        return []
+
+    resolved_output_dir = resolve_snapshot_output_dir(
+        Path(snapshot_output_dir),
+        project_root=Path(find_project_root()).expanduser().resolve(),
+    )
+    if not resolved_output_dir.exists() or not resolved_output_dir.is_dir():
+        return []
+
+    history_limit = max(1, int(limit))
+    entries: list[dict[str, Any]] = []
+    directories = sorted(
+        (path for path in resolved_output_dir.iterdir() if path.is_dir()),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    for directory in directories:
+        summary_path = directory / "summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        snapshots = payload.get("snapshots") if isinstance(payload, dict) else None
+        if not isinstance(snapshots, list):
+            continue
+        for item in snapshots:
+            if not isinstance(item, dict):
+                continue
+            item_hostname = (
+                str(item.get("hostname") or item.get("requested_name") or "")
+                .strip()
+                .lower()
+            )
+            if item_hostname != normalized_hostname:
+                continue
+            recommended_family = (
+                str(item.get("recommended_prefer_family") or "").strip().lower()
+            )
+            if recommended_family not in {"ipv4", "ipv6"}:
+                continue
+            entries.append(
+                {
+                    "snapshot_label": str(
+                        payload.get("snapshot_label") or directory.name
+                    ).strip(),
+                    "generated_at": str(
+                        item.get("generated_at") or payload.get("generated_at") or ""
+                    ).strip(),
+                    "recommended_prefer_family": recommended_family,
+                    "reason_codes": [
+                        str(code).strip()
+                        for code in item.get("reason_codes", [])
+                        if str(code).strip()
+                    ],
+                }
+            )
+            break
+        if len(entries) >= history_limit:
+            return entries[:history_limit]
+    return entries[:history_limit]
+
+
+def _family_to_edge_ip_version(family: str | None) -> str | None:
+    normalized = str(family or "").strip().lower()
+    if normalized == "ipv4":
+        return "4"
+    if normalized == "ipv6":
+        return "6"
+    return None
+
+
+def _build_snapshot_guided_repair_plan(
+    *,
+    tunnel_name: str,
+    hostname: str,
+    snapshot_output_dir: Path,
+    current_cloudflared_run: dict[str, Any],
+    access_summary: dict[str, Any],
+) -> dict[str, Any]:
+    current_edge_ip_version = (
+        str(current_cloudflared_run.get("edge_ip_version") or "").strip().lower()
+    )
+    snapshot_history = _iter_tunnel_snapshot_recommendations(
+        hostname=hostname,
+        snapshot_output_dir=snapshot_output_dir,
+    )
+    recommendations = [
+        item["recommended_prefer_family"]
+        for item in snapshot_history
+        if isinstance(item, dict)
+        and item.get("recommended_prefer_family") in {"ipv4", "ipv6"}
+    ]
+    recent_window = recommendations[:DEFAULT_TUNNEL_REPAIR_SNAPSHOT_STABILITY_WINDOW]
+    latest_family = recent_window[0] if recent_window else None
+    counts = Counter(recent_window)
+    stable_family = None
+    if latest_family in {"ipv4", "ipv6"} and counts.get(latest_family, 0) >= int(
+        DEFAULT_TUNNEL_REPAIR_SNAPSHOT_STABLE_MATCH_COUNT
+    ):
+        stable_family = latest_family
+
+    override_cloudflared_run: dict[str, Any] | None = None
+    decision_mode = "no-change"
+    target_edge_ip_version: str | None = None
+
+    stable_edge_ip_version = _family_to_edge_ip_version(stable_family)
+    if stable_edge_ip_version and stable_edge_ip_version != current_edge_ip_version:
+        target_edge_ip_version = stable_edge_ip_version
+        decision_mode = "stable-family"
+    elif (
+        len({item for item in recent_window if item in {"ipv4", "ipv6"}}) >= 2
+        and current_edge_ip_version in {"4", "6"}
+        and (
+            bool(access_summary.get("visitor_side_dns_drift"))
+            or bool(access_summary.get("visitor_side_latency_drift"))
+        )
+    ):
+        target_edge_ip_version = "auto"
+        decision_mode = "flapping-auto"
+
+    if target_edge_ip_version and target_edge_ip_version != current_edge_ip_version:
+        override_cloudflared_run = dict(current_cloudflared_run)
+        override_cloudflared_run["edge_ip_version"] = target_edge_ip_version
+
+    return {
+        "tunnel_name": tunnel_name,
+        "hostname": hostname,
+        "decision_mode": decision_mode,
+        "current_edge_ip_version": current_edge_ip_version or None,
+        "target_edge_ip_version": target_edge_ip_version,
+        "stable_family": stable_family,
+        "latest_family": latest_family,
+        "snapshot_history": snapshot_history,
+        "cloudflared_run_override": override_cloudflared_run,
+    }
+
+
 def _exception_summary(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
@@ -2594,7 +2846,12 @@ def _observation_error_access_summary(*, reason_code: str) -> dict[str, Any]:
         "cloudflare_https_ok": False,
         "authoritative_https_ok": False,
         "any_https_ok": False,
+        "system_ttfb_ms": None,
+        "cloudflare_ttfb_ms": None,
+        "authoritative_ttfb_ms": None,
+        "edge_ttfb_ms": None,
         "visitor_side_dns_drift": False,
+        "visitor_side_latency_drift": False,
         "reason_codes": [reason_code],
     }
 
@@ -2655,11 +2912,28 @@ def stabilize_tunnel(
 
     action_taken = str(decision["action"])
     apply_result: dict[str, Any] = {}
+    repair_plan: dict[str, Any] = {}
     post_status = dict(pre_status)
     post_access = dict(pre_access)
     post_decision = dict(decision)
 
     if action_taken == "reapply_baseline":
+        tunnel = _tunnel_lookup(
+            load_cf_tunnel_config(),
+            tunnel_name=resolved_tunnel_name,
+        )
+        repair_plan = _build_snapshot_guided_repair_plan(
+            tunnel_name=resolved_tunnel_name,
+            hostname=resolved_hostname,
+            snapshot_output_dir=snapshot_output_dir,
+            current_cloudflared_run=normalize_tunnel_cloudflared_run(
+                tunnel.cloudflared_run
+            ),
+            access_summary=pre_access,
+        )
+        override_cloudflared_run = repair_plan.get("cloudflared_run_override")
+        if not isinstance(override_cloudflared_run, dict):
+            override_cloudflared_run = None
         apply_result = apply_tunnel(
             tunnel_name=resolved_tunnel_name,
             apply_all=False,
@@ -2667,7 +2941,9 @@ def stabilize_tunnel(
             install_guard_service=False,
             cf_token_mode=cf_token_mode,
             save_config=save_config,
+            cloudflared_run=override_cloudflared_run,
         )[0]
+        apply_result["repair_plan"] = repair_plan
         post_status_raw = tunnel_status(
             tunnel_name=resolved_tunnel_name,
             cf_token_mode=cf_token_mode,
@@ -2711,6 +2987,7 @@ def stabilize_tunnel(
         "pre_status": pre_status,
         "pre_access": pre_access,
         "apply_result": apply_result,
+        "repair_plan": repair_plan,
         "post_status": post_status,
         "post_access": post_access,
         "post_decision": post_decision,
@@ -2871,9 +3148,14 @@ def guard_tunnel_quality(
                     and str(post_decision.get("action", "observe")) == "observe"
                 ):
                     consecutive_issue_count = 0
-            elif str(decision.get("action", "observe")) == "snapshot_only" and (
-                last_snapshot_at is None
-                or now - last_snapshot_at >= degraded_snapshot_interval_value
+            elif (
+                issue_detected
+                and status_error is None
+                and access_error is None
+                and (
+                    last_snapshot_at is None
+                    or now - last_snapshot_at >= degraded_snapshot_interval_value
+                )
             ):
                 try:
                     snapshot = _capture_snapshot_overview(
