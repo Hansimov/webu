@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 from pathlib import Path
 
@@ -52,6 +53,29 @@ def _add_common_token_mode(parser: argparse.ArgumentParser):
         action="store_true",
         help="Persist newly created token, zone_id, nameservers, tunnel_id, or tunnel_token back to configs/cf_tunnel.json.",
     )
+
+
+def _add_runtime_path_options(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--project-root",
+        default="",
+        help="Explicit webu project root used to resolve relative paths and project-local outputs.",
+    )
+    parser.add_argument(
+        "--config-dir",
+        default="",
+        help="Explicit directory containing webu JSON configs such as configs/cf_tunnel.json.",
+    )
+
+
+def _apply_runtime_path_overrides(args) -> None:
+    project_root = str(getattr(args, "project_root", "") or "").strip()
+    config_dir = str(getattr(args, "config_dir", "") or "").strip()
+
+    if project_root:
+        os.environ["WEBU_PROJECT_ROOT"] = str(Path(project_root).expanduser().resolve())
+    if config_dir:
+        os.environ["WEBU_CONFIG_DIR"] = str(Path(config_dir).expanduser().resolve())
 
 
 def cmd_dns_migrate(args):
@@ -252,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="existing",
         help="Use existing Aliyun credentials from config or prompt manually.",
     )
+    _add_runtime_path_options(dns_migrate)
     _add_common_token_mode(dns_migrate)
     dns_migrate.set_defaults(func=cmd_dns_migrate)
 
@@ -268,14 +293,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tunnel_apply.add_argument("--local-url", default="")
     tunnel_apply.add_argument("--zone-name", default="")
-    tunnel_apply.add_argument("--origin-request-json", default="")
-    tunnel_apply.add_argument("--cloudflared-run-json", default="")
+    tunnel_apply.add_argument(
+        "--origin-request-json",
+        "--origin-request",
+        dest="origin_request_json",
+        default="",
+    )
+    tunnel_apply.add_argument(
+        "--cloudflared-run-json",
+        "--cloudflared-run",
+        dest="cloudflared_run_json",
+        default="",
+    )
     tunnel_apply.add_argument("--install-service", action="store_true")
     tunnel_apply.add_argument(
         "--no-guard-service",
         action="store_true",
         help="When --install-service is used, skip installing the companion tunnel-guard sidecar service.",
     )
+    _add_runtime_path_options(tunnel_apply)
     _add_common_token_mode(tunnel_apply)
     tunnel_apply.set_defaults(func=cmd_tunnel_apply)
 
@@ -291,6 +327,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "manual", "prompt"],
         default="auto",
     )
+    _add_runtime_path_options(tunnel_status_parser)
     tunnel_status_parser.set_defaults(func=cmd_tunnel_status)
 
     tunnel_stabilize_parser = subparsers.add_parser(
@@ -331,6 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Skip writing a fresh snapshot when the stabilize pass detects a non-healthy condition.",
     )
+    _add_runtime_path_options(tunnel_stabilize_parser)
     tunnel_stabilize_parser.set_defaults(func=cmd_tunnel_stabilize)
 
     tunnel_guard_parser = subparsers.add_parser(
@@ -396,6 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Observe and snapshot only; do not trigger tunnel service reapply when the guard decides a baseline repair is needed.",
     )
+    _add_runtime_path_options(tunnel_guard_parser)
     tunnel_guard_parser.set_defaults(func=cmd_tunnel_guard)
 
     access_diagnose_parser = subparsers.add_parser(
@@ -406,6 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     access_diagnose_parser.add_argument("--name", default="")
     access_diagnose_parser.add_argument("--hostname", default="")
+    _add_runtime_path_options(access_diagnose_parser)
     access_diagnose_parser.set_defaults(func=cmd_access_diagnose)
 
     page_audit_parser = subparsers.add_parser(
@@ -417,6 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
     page_audit_parser.add_argument("--name", default="")
     page_audit_parser.add_argument("--hostname", default="")
     page_audit_parser.add_argument("--path", default="/")
+    _add_runtime_path_options(page_audit_parser)
     page_audit_parser.set_defaults(func=cmd_page_audit)
 
     edge_trace_parser = subparsers.add_parser(
@@ -428,6 +469,7 @@ def build_parser() -> argparse.ArgumentParser:
     edge_trace_parser.add_argument("--name", default="")
     edge_trace_parser.add_argument("--hostname", default="")
     edge_trace_parser.add_argument("--path", default="/cdn-cgi/trace")
+    _add_runtime_path_options(edge_trace_parser)
     edge_trace_parser.set_defaults(func=cmd_edge_trace)
 
     client_override_parser = subparsers.add_parser(
@@ -444,6 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="ipv4",
     )
     client_override_parser.add_argument("--max-candidates", type=int, default=2)
+    _add_runtime_path_options(client_override_parser)
     client_override_parser.set_defaults(func=cmd_client_override_plan)
 
     client_bundle_parser = subparsers.add_parser(
@@ -460,6 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="ipv4",
     )
     client_bundle_parser.add_argument("--max-candidates", type=int, default=2)
+    _add_runtime_path_options(client_bundle_parser)
     client_bundle_parser.set_defaults(func=cmd_client_canary_bundle)
 
     client_template_parser = subparsers.add_parser(
@@ -476,6 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="ipv4",
     )
     client_template_parser.add_argument("--max-candidates", type=int, default=2)
+    _add_runtime_path_options(client_template_parser)
     client_template_parser.set_defaults(func=cmd_client_report_template)
 
     client_summary_parser = subparsers.add_parser(
@@ -485,6 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     client_summary_parser.add_argument("report_file")
+    _add_runtime_path_options(client_summary_parser)
     client_summary_parser.set_defaults(func=cmd_client_report_summary)
 
     snapshot_parser = subparsers.add_parser(
@@ -493,7 +539,13 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=command_epilog("snapshot"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    snapshot_parser.add_argument("--name", dest="names", action="append", required=True)
+    snapshot_parser.add_argument(
+        "--name",
+        "--names",
+        dest="names",
+        action="append",
+        required=True,
+    )
     snapshot_parser.add_argument(
         "--prefer-family",
         choices=["any", "ipv4", "ipv6"],
@@ -502,6 +554,7 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_parser.add_argument("--max-candidates", type=int, default=3)
     snapshot_parser.add_argument("--output-dir", default="debugs/cf-tunnel-snapshots")
     snapshot_parser.add_argument("--stamp", default="")
+    _add_runtime_path_options(snapshot_parser)
     snapshot_parser.set_defaults(func=cmd_snapshot)
 
     token_ensure_parser = subparsers.add_parser(
@@ -511,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     token_ensure_parser.add_argument("--zone-name", required=True)
+    _add_runtime_path_options(token_ensure_parser)
     _add_common_token_mode(token_ensure_parser)
     token_ensure_parser.set_defaults(func=cmd_token_ensure)
 
@@ -520,6 +574,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=command_epilog("config-schema"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_runtime_path_options(config_schema_parser)
     config_schema_parser.set_defaults(func=cmd_config_schema)
 
     config_check_parser = subparsers.add_parser(
@@ -528,6 +583,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=command_epilog("config-check"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_runtime_path_options(config_check_parser)
     config_check_parser.set_defaults(func=cmd_config_check)
 
     config_init_parser = subparsers.add_parser(
@@ -537,6 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     config_init_parser.add_argument("--force", action="store_true")
+    _add_runtime_path_options(config_init_parser)
     config_init_parser.set_defaults(func=cmd_config_init)
 
     docs_sync_parser = subparsers.add_parser(
@@ -545,6 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=command_epilog("docs-sync"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_runtime_path_options(docs_sync_parser)
     docs_sync_parser.set_defaults(func=cmd_docs_sync)
     return parser
 
@@ -552,6 +610,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    _apply_runtime_path_overrides(args)
     args.func(args)
 
 

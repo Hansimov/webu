@@ -1,10 +1,11 @@
 import json
+import os
 
 from copy import deepcopy
 from pathlib import Path
 from subprocess import CompletedProcess
 
-from webu.cf_tunnel.cli import build_parser
+from webu.cf_tunnel.cli import _apply_runtime_path_overrides, build_parser
 from webu.cf_tunnel.operations import (
     _render_cloudflared_tunnel_guard_service_unit,
     _render_cloudflared_tunnel_service_unit,
@@ -52,6 +53,8 @@ def test_parser_supports_dns_and_tunnel_commands():
     parser = build_parser()
     domain_name = _local_domain_name()
     tunnel_name = _local_tunnel_name()
+    project_root = "/tmp/webu-project"
+    config_dir = "/tmp/webu-project/configs"
 
     dns_args = parser.parse_args(
         ["dns-migrate", domain_name, "--cf-token-mode", "auto"]
@@ -65,13 +68,29 @@ def test_parser_supports_dns_and_tunnel_commands():
             domain_name,
             "--local-url",
             "http://127.0.0.1:21002",
-            "--cloudflared-run-json",
+            "--cloudflared-run",
             '{"protocol":"http2"}',
+            "--origin-request",
+            '{"connect_timeout":5}',
             "--install-service",
             "--no-guard-service",
+            "--project-root",
+            project_root,
+            "--config-dir",
+            config_dir,
         ]
     )
-    stabilize_args = parser.parse_args(["tunnel-stabilize", "--name", tunnel_name])
+    stabilize_args = parser.parse_args(
+        [
+            "tunnel-stabilize",
+            "--name",
+            tunnel_name,
+            "--project-root",
+            project_root,
+            "--config-dir",
+            config_dir,
+        ]
+    )
     guard_args = parser.parse_args(
         [
             "tunnel-guard",
@@ -81,6 +100,10 @@ def test_parser_supports_dns_and_tunnel_commands():
             "60",
             "--iterations",
             "2",
+            "--project-root",
+            project_root,
+            "--config-dir",
+            config_dir,
         ]
     )
     token_args = parser.parse_args(
@@ -104,12 +127,16 @@ def test_parser_supports_dns_and_tunnel_commands():
     snapshot_args = parser.parse_args(
         [
             "snapshot",
-            "--name",
+            "--names",
             tunnel_name,
             "--prefer-family",
             "any",
             "--output-dir",
             "debugs/cf-tunnel-snapshots",
+            "--project-root",
+            project_root,
+            "--config-dir",
+            config_dir,
         ]
     )
 
@@ -119,13 +146,18 @@ def test_parser_supports_dns_and_tunnel_commands():
     assert tunnel_args.domain_name == domain_name
     assert tunnel_args.local_url == "http://127.0.0.1:21002"
     assert tunnel_args.cloudflared_run_json == '{"protocol":"http2"}'
+    assert tunnel_args.origin_request_json == '{"connect_timeout":5}'
     assert tunnel_args.install_service is True
     assert tunnel_args.no_guard_service is True
+    assert tunnel_args.project_root == project_root
+    assert tunnel_args.config_dir == config_dir
     assert stabilize_args.name == tunnel_name
     assert stabilize_args.install_service is True
+    assert stabilize_args.project_root == project_root
     assert guard_args.name == tunnel_name
     assert guard_args.interval_seconds == 60
     assert guard_args.iterations == 2
+    assert guard_args.config_dir == config_dir
     assert token_args.zone_name == domain_name
     assert token_args.cf_token_mode == "manual"
     assert diagnose_args.name == tunnel_name
@@ -139,6 +171,33 @@ def test_parser_supports_dns_and_tunnel_commands():
     assert snapshot_args.names == [tunnel_name]
     assert snapshot_args.prefer_family == "any"
     assert snapshot_args.output_dir == "debugs/cf-tunnel-snapshots"
+    assert snapshot_args.project_root == project_root
+    assert snapshot_args.config_dir == config_dir
+
+
+def test_runtime_path_overrides_set_environment(monkeypatch, tmp_path):
+    parser = build_parser()
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    monkeypatch.delenv("WEBU_PROJECT_ROOT", raising=False)
+    monkeypatch.delenv("WEBU_CONFIG_DIR", raising=False)
+
+    args = parser.parse_args(
+        [
+            "snapshot",
+            "--name",
+            "dev.blbl.top",
+            "--project-root",
+            str(tmp_path),
+            "--config-dir",
+            str(config_dir),
+        ]
+    )
+
+    _apply_runtime_path_overrides(args)
+
+    assert Path(os.environ["WEBU_PROJECT_ROOT"]).resolve() == tmp_path.resolve()
+    assert Path(os.environ["WEBU_CONFIG_DIR"]).resolve() == config_dir.resolve()
 
 
 def test_config_init_writes_project_config(monkeypatch, tmp_path):
