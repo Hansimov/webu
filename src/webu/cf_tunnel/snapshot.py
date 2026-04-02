@@ -11,10 +11,11 @@ from urllib.parse import quote
 from webu.schema import find_project_root, get_config_path
 
 from .operations import client_canary_bundle, client_override_plan, edge_trace
+from .paths import DEFAULT_SNAPSHOT_OUTPUT_DIR, resolve_snapshot_output_dir
 from .schema import CF_TUNNEL_CONFIG
 
 
-DEFAULT_OUTPUT_DIR = Path("debugs/cf-tunnel-snapshots")
+DEFAULT_OUTPUT_DIR = DEFAULT_SNAPSHOT_OUTPUT_DIR
 THIRD_PARTY_GUIDANCE = {
     "itdog": {
         "note": "Free China-facing browser checks with ping, tcping, HTTP, and traceroute. Public pages often require JS or CAPTCHA, so treat them as manual validation rather than a stable machine interface.",
@@ -64,10 +65,7 @@ def _snapshot_label(override: str | None = None) -> str:
 
 
 def _resolve_output_dir(output_dir: Path) -> Path:
-    expanded = output_dir.expanduser()
-    if expanded.is_absolute():
-        return expanded
-    return find_project_root() / expanded
+    return resolve_snapshot_output_dir(output_dir, project_root=find_project_root())
 
 
 def _external_tool_urls(hostname: str) -> dict[str, Any]:

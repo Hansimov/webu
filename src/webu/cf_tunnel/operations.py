@@ -36,6 +36,7 @@ from .clients import (
     CloudflareClient,
 )
 from .helptext import CONFIGS_DOC_PATH, USAGE_DOC_PATH, render_usage_markdown
+from .paths import DEFAULT_SNAPSHOT_OUTPUT_DIR, resolve_snapshot_output_dir
 from .schema import (
     CF_TUNNEL_CONFIG,
     DomainConfig,
@@ -68,7 +69,7 @@ DEFAULT_TUNNEL_GUARD_COOLDOWN_SECONDS = 180
 DEFAULT_TUNNEL_GUARD_SNAPSHOT_INTERVAL_SECONDS = 300
 DEFAULT_TUNNEL_GUARD_DEGRADED_SNAPSHOT_INTERVAL_SECONDS = 120
 DEFAULT_TUNNEL_GUARD_HISTORY_LIMIT = 20
-DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR = Path("debugs/cf-tunnel-snapshots")
+DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR = DEFAULT_SNAPSHOT_OUTPUT_DIR
 _CLOUDFLARE_ORIGIN_REQUEST_KEY_MAP = {
     "connect_timeout": "connectTimeout",
     "keep_alive_connections": "keepAliveConnections",
@@ -199,9 +200,10 @@ def _render_cloudflared_tunnel_guard_service_unit(
     snapshot_output_dir: Path = DEFAULT_TUNNEL_GUARD_SNAPSHOT_OUTPUT_DIR,
 ) -> str:
     project_root = Path(find_project_root()).expanduser().resolve()
-    output_dir = snapshot_output_dir.expanduser()
-    if not output_dir.is_absolute():
-        output_dir = project_root / output_dir
+    output_dir = resolve_snapshot_output_dir(
+        snapshot_output_dir,
+        project_root=project_root,
+    )
     exec_start = shlex.join(
         [
             *_cftn_command_parts(),

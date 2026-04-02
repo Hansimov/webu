@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from webu.cf_tunnel.snapshot import capture_canary_snapshot
+from webu.cf_tunnel.paths import default_snapshot_output_dir
 
 
 DOC_EDGE_IPV4_PRIMARY = "198.51.100.10"
@@ -121,3 +122,24 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
     assert "operator_shortcuts" in summary_text
     assert "Chinaz Domestic Speed" in summary_text
     assert "CloudflareST repo" in summary_text
+
+
+def test_default_snapshot_output_dir_prefers_sibling_blbl_dash_repo(
+    monkeypatch, tmp_path
+):
+    webu_root = tmp_path / "webu"
+    blbl_dash_root = tmp_path / "blbl-dash"
+    (webu_root / "configs").mkdir(parents=True)
+    (blbl_dash_root / "configs" / "services").mkdir(parents=True)
+    (webu_root / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    (blbl_dash_root / "configs" / "services" / "dash.api.yaml").write_text(
+        "metadata:\n  id: dash.api\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(webu_root))
+
+    resolved = default_snapshot_output_dir()
+
+    assert resolved == (blbl_dash_root / "debugs" / "cf-tunnel-snapshots").resolve()
