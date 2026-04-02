@@ -40,14 +40,24 @@ def build_command(
     return PreparedCommand(argv=argv, stdin_data=stdin_data)
 
 
-def _merge_input(stdin_data: bytes | None, user_input: Any) -> bytes | str | None:
+def _merge_input(
+    stdin_data: bytes | None,
+    user_input: Any,
+    *,
+    text_mode: bool = False,
+) -> bytes | str | None:
     if stdin_data is None:
-        return user_input
-    if user_input is None:
-        return stdin_data
-    if isinstance(user_input, str):
-        return stdin_data + user_input.encode()
-    return stdin_data + user_input
+        merged_input = user_input
+    elif user_input is None:
+        merged_input = stdin_data
+    elif isinstance(user_input, str):
+        merged_input = stdin_data + user_input.encode()
+    else:
+        merged_input = stdin_data + user_input
+
+    if text_mode and isinstance(merged_input, (bytes, bytearray)):
+        return merged_input.decode()
+    return merged_input
 
 
 def run(
@@ -65,7 +75,7 @@ def run(
     prepared = build_command(command, use_sudo=use_sudo, preserve_env=preserve_env)
     return subprocess.run(
         prepared.argv,
-        input=_merge_input(prepared.stdin_data, input),
+        input=_merge_input(prepared.stdin_data, input, text_mode=text),
         check=check,
         timeout=timeout,
         capture_output=capture_output,
