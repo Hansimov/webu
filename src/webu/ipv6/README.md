@@ -72,7 +72,8 @@ IPv6 address pool management system with FastAPI server and client support.
 - Initialization parameters:
   - `db_root`: Database directory (default: module directory)
   - `usable_num`: Target number of usable addresses (default: 20)
-  - `check_url`: URL for usability check (default: "https://test.ipw.cn")
+  - `check_url`: Preferred URL for usability check
+  - `check_urls`: Fallback IPv6 echo URLs used when the preferred host fails
   - `check_timeout`: Timeout for checks (default: 5.0s)
   - `route_check_interval`: Route monitoring interval (default: 1800s)
 
@@ -213,7 +214,8 @@ Default constants in `constants.py`:
 - `DBNAME`: "default"
 - `SERVER_PORT`: 16000
 - `USABLE_NUM`: 20 addresses
-- `CHECK_URL`: "https://test.ipw.cn"
+- `CHECK_URLS`: IPv6-capable public IP echo URLs, first item is the preferred default
+- `CHECK_URL`: Alias of `CHECK_URLS[0]`
 - `CHECK_TIMEOUT`: 5.0s
 - `ROUTE_CHECK_INTERVAL`: 1800s (30min)
 - `CLIENT_TIMEOUT`: 10.0s

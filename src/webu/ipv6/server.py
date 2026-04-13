@@ -5,6 +5,7 @@ import requests
 import threading
 
 from typing import Union
+from urllib.parse import urlsplit
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
@@ -20,6 +21,7 @@ from .constants import (
     MIRROR_DB_DIR,
     USABLE_NUM,
     CHECK_URL,
+    CHECK_URLS,
     CHECK_TIMEOUT,
     ROUTE_CHECK_INTERVAL,
     SPAWN_MAX_RETRIES,
@@ -54,14 +56,17 @@ class IPv6DBServer:
         self,
         db_root: Path = None,
         usable_num: int = USABLE_NUM,
-        check_url: str = CHECK_URL,
+        check_url: str | None = CHECK_URL,
+        check_urls: list[str] | tuple[str, ...] | None = None,
         check_timeout: float = CHECK_TIMEOUT,
         route_check_interval: float = ROUTE_CHECK_INTERVAL,
         verbose: bool = False,
     ):
         self.db_root = Path(db_root or DB_ROOT)
         self.usable_num = usable_num
-        self.check_url = check_url
+        self.check_urls = self._normalize_check_urls(check_url, check_urls)
+        self.check_url = self.check_urls[0]
+        self._preferred_check_url = self.check_url
         self.check_timeout = check_timeout
         self.route_check_interval = route_check_interval
         self.verbose = verbose
@@ -125,30 +130,98 @@ class IPv6DBServer:
         suffix = self._generate_random_suffix()
         return f"{self.prefix}:{suffix}"
 
+    @staticmethod
+    def _normalize_check_urls(
+        check_url: str | None = None,
+        check_urls: list[str] | tuple[str, ...] | None = None,
+    ) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        candidates = []
+
+        if check_url:
+            candidates.append(check_url)
+        if check_urls:
+            candidates.extend(check_urls)
+        candidates.extend(CHECK_URLS)
+
+        for candidate in candidates:
+            url = (candidate or "").strip()
+            if not url or url in seen:
+                continue
+            normalized.append(url)
+            seen.add(url)
+
+        if not normalized:
+            raise ValueError("At least one IPv6 check URL is required")
+        return normalized
+
+    def _ordered_check_urls(self) -> list[str]:
+        ordered: list[str] = []
+        if self._preferred_check_url:
+            ordered.append(self._preferred_check_url)
+        for url in self.check_urls:
+            if url not in ordered:
+                ordered.append(url)
+        return ordered
+
+    def _check_url_label(self, url: str) -> str:
+        return urlsplit(url).netloc or url
+
     def check(self, addr: str) -> bool:
         """Check usability of addr by making a request."""
         from .session import IPv6SessionAdapter
 
+        session = None
+        saved_family = IPv6SessionAdapter.save_family()
+        errors: list[str] = []
+        succeeded = False
         try:
             session = requests.Session()
             IPv6SessionAdapter.force_ipv6()
             IPv6SessionAdapter.adapt(session, addr)
-            response = session.get(self.check_url, timeout=self.check_timeout)
-            result_ip = response.text.strip()
-            is_good = result_ip == addr
-            if self.verbose:
-                if is_good:
-                    mark = "✓"
-                    logfunc = logger.okay
-                else:
-                    mark = "×"
-                    logfunc = logger.warn
-                logfunc(f"  {mark} [{_addr_suffix(result_ip)}]")
-            return is_good
-        except Exception as e:
-            if self.verbose:
-                logger.warn(f"  × Failed: [{_addr_suffix(addr)}]")
+            for url in self._ordered_check_urls():
+                label = self._check_url_label(url)
+                try:
+                    response = session.get(url, timeout=self.check_timeout)
+                    response.raise_for_status()
+                    result_ip = response.text.strip()
+                    if result_ip == addr:
+                        succeeded = True
+                        self._preferred_check_url = url
+                        self.check_url = url
+                        if self.verbose:
+                            logger.okay(
+                                f"  ✓ [{_addr_suffix(result_ip)}] via {logstr.file(label)}"
+                            )
+                        return True
+
+                    errors.append(
+                        f"{label}: echoed [{_addr_suffix(result_ip)}] instead of [{_addr_suffix(addr)}]"
+                    )
+                    if self.verbose:
+                        logger.warn(
+                            f"  × Echo mismatch via {logstr.file(label)}: [{_addr_suffix(result_ip)}]"
+                        )
+                except Exception as e:
+                    errors.append(f"{label}: {type(e).__name__}: {e}")
+                    if self.verbose:
+                        logger.warn(
+                            f"  × {logstr.file(label)}: {type(e).__name__}: {e}"
+                        )
             return False
+        except Exception as e:
+            errors.append(f"setup: {type(e).__name__}: {e}")
+            return False
+        finally:
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+            IPv6SessionAdapter.restore_family(saved_family)
+            if self.verbose and errors and not succeeded:
+                logger.warn(f"  × Failed: [{_addr_suffix(addr)}]")
 
     def checks(self, addrs: list[str]) -> list[bool]:
         """Check usability of multiple addrs."""

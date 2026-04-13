@@ -14,7 +14,15 @@ SERVER_PORT = 16000
 SERVER_URL = f"http://localhost:{SERVER_PORT}"
 USABLE_NUM = 20
 
-CHECK_URL = "https://test.ipw.cn"
+# Use multiple IPv6-capable echo endpoints so address checks keep working even
+# if a single public host loses its AAAA record or becomes temporarily unstable.
+CHECK_URLS = [
+    "https://api64.ipify.org",
+    "https://v6.ident.me",
+    "https://icanhazip.com",
+    "https://ifconfig.me/ip",
+]
+CHECK_URL = CHECK_URLS[0]
 CHECK_TIMEOUT = 5.0
 
 ROUTE_CHECK_INTERVAL = 1800.0  # 30min

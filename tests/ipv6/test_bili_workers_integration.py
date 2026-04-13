@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests
+
+from webu.ipv6.constants import CHECK_URLS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,9 +30,18 @@ def _assert_session_uses_assigned_ipv6(session):
     assert assigned_ip, "IPv6 session should be adapted to a random IPv6 address"
     assert ipaddress.IPv6Address(assigned_ip).is_global
 
-    response = session.get("https://test.ipw.cn", timeout=10)
-    response.raise_for_status()
-    echoed_ip = response.text.strip()
+    echoed_ip = None
+    errors = []
+    for url in CHECK_URLS:
+        try:
+            response = session.get(url, timeout=10)
+            response.raise_for_status()
+            echoed_ip = response.text.strip()
+            break
+        except requests.RequestException as exc:
+            errors.append(f"{url}: {exc}")
+
+    assert echoed_ip is not None, "All IPv6 echo endpoints failed: " + "; ".join(errors)
 
     assert echoed_ip == assigned_ip
 
