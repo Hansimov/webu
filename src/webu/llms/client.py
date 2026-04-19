@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 LlmApiType = Literal[
     "openai",
+    "minimax",
     "qwen_vllm",
     "dashscope",
     "deepseek",
@@ -21,6 +22,7 @@ LlmApiType = Literal[
 ThinkingAdapterType = Literal[
     "auto",
     "openai",
+    "minimax",
     "qwen_vllm",
     "dashscope",
     "deepseek",
@@ -30,11 +32,14 @@ ThinkingAdapterType = Literal[
 
 OPENAI_COMPATIBLE_API_FORMATS = (
     "openai",
+    "minimax",
     "qwen_vllm",
     "dashscope",
     "deepseek",
     "doubao",
 )
+MINIMAX_MODEL_PATTERN = re.compile(r"\bminimax\b", re.IGNORECASE)
+MINIMAX_ENDPOINT_HINT_PATTERN = re.compile(r"minimax", re.IGNORECASE)
 QWEN_MODEL_PATTERN = re.compile(r"\b(qwen|qwq)\b", re.IGNORECASE)
 DEEPSEEK_MODEL_PATTERN = re.compile(r"\bdeepseek\b", re.IGNORECASE)
 DOUBAO_ENDPOINT_HINT_PATTERN = re.compile(
@@ -50,6 +55,10 @@ THINKING_PARAM_ERROR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 THINKING_TAG_PATTERN = re.compile(r"<\s*/?think(?:ing)?\s*>", re.IGNORECASE)
+THINKING_BLOCK_PATTERN = re.compile(
+    r"<\s*think(?:ing)?\s*>(.*?)<\s*/\s*think(?:ing)?\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class LLMConfigsType(TypedDict):
@@ -141,13 +150,39 @@ def _iter_text_fragments(value):
             yield from _iter_text_fragments(content)
 
 
+def _merge_text_fragments(fragments: list[str]) -> str:
+    merged: list[str] = []
+    accumulated = ""
+    for fragment in fragments:
+        text = str(fragment or "")
+        if not text:
+            continue
+        if accumulated and text.startswith(accumulated):
+            if merged:
+                merged[-1] = text
+            else:
+                merged.append(text)
+            accumulated = text
+            continue
+        if text == accumulated or (merged and text == merged[-1]):
+            continue
+        merged.append(text)
+        accumulated += text
+    return "".join(merged)
+
+
 def _extract_reasoning_text(data: dict) -> str:
     fragments = []
-    for key in ("reasoning_content", "reasoning", "reasoning_text"):
+    for key in (
+        "reasoning_content",
+        "reasoning",
+        "reasoning_text",
+        "reasoning_details",
+    ):
         for fragment in _iter_text_fragments(data.get(key)):
             if fragment:
                 fragments.append(fragment)
-    return "".join(fragments)
+    return _merge_text_fragments(fragments)
 
 
 def _extract_content_text(data: dict) -> str:
@@ -158,6 +193,69 @@ def _extract_content_text(data: dict) -> str:
 
 def _contains_thinking_tags(text: str) -> bool:
     return bool(text and THINKING_TAG_PATTERN.search(text))
+
+
+def _split_thinking_content(text: str) -> tuple[str, str]:
+    content_text = str(text or "")
+    if not content_text:
+        return "", ""
+    reasoning = "".join(
+        fragment.strip()
+        for fragment in THINKING_BLOCK_PATTERN.findall(content_text)
+        if fragment and fragment.strip()
+    )
+    content = THINKING_BLOCK_PATTERN.sub("", content_text).strip()
+    return reasoning, content
+
+
+def _extract_message_parts(data: dict) -> tuple[str, str]:
+    reasoning = _extract_reasoning_text(data)
+    content = _extract_content_text(data)
+    if _contains_thinking_tags(content):
+        inline_reasoning, inline_content = _split_thinking_content(content)
+        if inline_reasoning and not reasoning:
+            reasoning = inline_reasoning
+        content = inline_content
+    return reasoning, content
+
+
+def _consume_stream_text(
+    stream_state: dict[str, str],
+    key: str,
+    incoming_text: str,
+) -> str:
+    text = str(incoming_text or "")
+    if not text:
+        return ""
+    accumulated = stream_state.get(key, "")
+    if accumulated and text.startswith(accumulated):
+        delta = text[len(accumulated) :]
+        stream_state[key] = text
+        return delta
+    stream_state[key] = accumulated + text
+    return text
+
+
+def _normalize_stream_delta(
+    delta_data: dict,
+    stream_state: dict[str, str],
+) -> dict:
+    normalized = dict(delta_data or {})
+    reasoning_text, content_text = _extract_message_parts(normalized)
+    if reasoning_text:
+        normalized["reasoning_content"] = _consume_stream_text(
+            stream_state,
+            "reasoning",
+            reasoning_text,
+        )
+    content_value = normalized.get("content")
+    if content_value is not None:
+        normalized["content"] = (
+            _consume_stream_text(stream_state, "content", content_text)
+            if content_text
+            else ""
+        )
+    return normalized
 
 
 class LLMClient:
@@ -186,10 +284,13 @@ class LLMClient:
         self.endpoint = _normalize_chat_endpoint(endpoint, api_format)
         self.models_endpoint = _normalize_models_endpoint(endpoint, api_format)
         self.health_endpoint = _normalize_health_endpoint(endpoint, api_format)
+        self._cached_models: list[str] | None = None
+        self._cached_default_model: str = ""
         self.api_key = api_key or ""
         self.api_format = api_format
         self.thinking_adapter = thinking_adapter
         self.model = model
+        self.provider = self._resolve_provider(model=model)
         self.stream = stream
         self.max_tokens = max_tokens
         self.timeout = timeout
@@ -206,9 +307,55 @@ class LLMClient:
         self.verbose_finish = verbose_finish
         self.verbose = verbose
 
-        self._cached_models: list[str] | None = None
-        self._cached_default_model: str = ""
         self.is_thinking = False
+
+    def _resolve_provider(self, model: str = None) -> LlmApiType:
+        normalized_endpoint = self.endpoint.lower()
+        normalized_model = (
+            model or self.model or getattr(self, "_cached_default_model", "") or ""
+        ).lower()
+        if self.api_format in (
+            "minimax",
+            "qwen_vllm",
+            "dashscope",
+            "deepseek",
+            "doubao",
+            "ollama",
+        ):
+            return self.api_format
+        if MINIMAX_ENDPOINT_HINT_PATTERN.search(
+            normalized_endpoint
+        ) or MINIMAX_MODEL_PATTERN.search(normalized_model):
+            return "minimax"
+        if DOUBAO_ENDPOINT_HINT_PATTERN.search(normalized_endpoint):
+            return "doubao"
+        if (
+            DEEPSEEK_MODEL_PATTERN.search(normalized_model)
+            or "deepseek" in normalized_endpoint
+        ):
+            return "deepseek"
+        if "dashscope" in normalized_endpoint or "aliyuncs.com" in normalized_endpoint:
+            return "dashscope"
+        if QWEN_MODEL_PATTERN.search(
+            normalized_model
+        ) or QWEN_ENDPOINT_HINT_PATTERN.search(normalized_endpoint):
+            return "qwen_vllm"
+        return "openai"
+
+    def _apply_provider_defaults(self, payload: dict, model: str = None) -> None:
+        if self._resolve_provider(model) == "minimax":
+            payload.setdefault("reasoning_split", True)
+
+    @staticmethod
+    def _extract_message_parts(data: dict) -> tuple[str, str]:
+        return _extract_message_parts(data)
+
+    @staticmethod
+    def _normalize_stream_delta(
+        delta_data: dict,
+        stream_state: dict[str, str],
+    ) -> dict:
+        return _normalize_stream_delta(delta_data, stream_state)
 
     def _build_headers(self) -> dict[str, str]:
         headers = {
@@ -343,33 +490,17 @@ class LLMClient:
     def _infer_thinking_adapter(self, model: str = None) -> ThinkingAdapterType:
         if self.thinking_adapter != "auto":
             return self.thinking_adapter
-        if self.api_format == "ollama":
+        provider = self._resolve_provider(model)
+        if provider == "ollama":
             return "none"
-        if self.api_format in (
+        if provider in (
+            "minimax",
             "qwen_vllm",
             "dashscope",
             "deepseek",
             "doubao",
         ):
-            return self.api_format
-
-        normalized_endpoint = self.endpoint.lower()
-        normalized_model = (
-            model or self.model or self._cached_default_model or ""
-        ).lower()
-        if DOUBAO_ENDPOINT_HINT_PATTERN.search(normalized_endpoint):
-            return "doubao"
-        if (
-            DEEPSEEK_MODEL_PATTERN.search(normalized_model)
-            or "deepseek" in normalized_endpoint
-        ):
-            return "deepseek"
-        if "dashscope" in normalized_endpoint or "aliyuncs.com" in normalized_endpoint:
-            return "dashscope"
-        if QWEN_MODEL_PATTERN.search(
-            normalized_model
-        ) or QWEN_ENDPOINT_HINT_PATTERN.search(normalized_endpoint):
-            return "qwen_vllm"
+            return provider
         return "openai"
 
     def _candidate_thinking_adapters(
@@ -381,7 +512,16 @@ class LLMClient:
             self.thinking_adapter == "auto"
             and self.api_format in OPENAI_COMPATIBLE_API_FORMATS
         ):
-            adapters.extend(["qwen_vllm", "dashscope", "deepseek", "doubao", "openai"])
+            adapters.extend(
+                [
+                    "minimax",
+                    "qwen_vllm",
+                    "dashscope",
+                    "deepseek",
+                    "doubao",
+                    "openai",
+                ]
+            )
 
         deduped: list[ThinkingAdapterType] = []
         for adapter in adapters:
@@ -396,6 +536,11 @@ class LLMClient:
         adapter: ThinkingAdapterType,
     ) -> None:
         if adapter in ("none", "auto"):
+            return
+        if adapter == "minimax":
+            payload.pop("enable_thinking", None)
+            payload.pop("thinking", None)
+            payload.setdefault("reasoning_split", True)
             return
         if adapter == "qwen_vllm":
             chat_template_kwargs = payload.get("chat_template_kwargs", {})
@@ -481,6 +626,8 @@ class LLMClient:
             payload.update(options)
         if extra_body:
             payload.update(extra_body)
+        self.provider = self._resolve_provider(resolved_model)
+        self._apply_provider_defaults(payload, resolved_model)
         if stream and self.api_format != "ollama":
             stream_options = payload.get("stream_options", {})
             if not isinstance(stream_options, dict):
@@ -537,6 +684,7 @@ class LLMClient:
         response_content = ""
         usage = None
         role = "assistant"
+        stream_state = {"reasoning": "", "content": ""}
         for line in response.iter_lines():
             if self.terminate_event and self.terminate_event.is_set():
                 break
@@ -586,10 +734,11 @@ class LLMClient:
                         continue
                     delta_data = choices[0].get("delta", {})
                     finish_reason = choices[0].get("finish_reason", None)
+                delta_data = self._normalize_stream_delta(delta_data, stream_state)
                 if "role" in delta_data:
                     role = delta_data["role"]
 
-                delta_reasoning_content = _extract_reasoning_text(delta_data)
+                delta_reasoning_content = str(delta_data.get("reasoning_content") or "")
                 if delta_reasoning_content:
                     if not self.is_thinking:
                         response_content += "<think>"
@@ -599,7 +748,9 @@ class LLMClient:
                         delta_reasoning_content, end="", verbose=self.verbose_content
                     )
 
-                delta_content = _extract_content_text(delta_data)
+                delta_content = _extract_content_text(
+                    {"content": delta_data.get("content")}
+                )
                 if delta_content:
                     if self.is_thinking:
                         response_content += "</think>"
@@ -643,8 +794,7 @@ class LLMClient:
                 message = response_data["message"]
             else:
                 message = response_data["choices"][0]["message"]
-            reasoning_content = _extract_reasoning_text(message)
-            content = _extract_content_text(message)
+            reasoning_content, content = self._extract_message_parts(message)
             if reasoning_content and content and not _contains_thinking_tags(content):
                 response_content = f"<think>{reasoning_content}</think>" + content
             elif reasoning_content:
