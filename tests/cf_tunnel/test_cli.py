@@ -28,25 +28,47 @@ from webu.cf_tunnel.operations import (
 DOC_EDGE_IPV4_PRIMARY = "198.51.100.10"
 DOC_EDGE_IPV4_SECONDARY = "203.0.113.20"
 DOC_EDGE_IPV6_PRIMARY = "2001:db8::10"
+DOC_ZONE_NAME = "example.com"
+DOC_HOSTNAME = "dev.example.com"
 
 
-def _load_local_cf_tunnel_config() -> dict:
-    config_path = Path(__file__).resolve().parents[2] / "configs" / "cf_tunnel.json"
-    payload = json.loads(config_path.read_text(encoding="utf-8"))
-    if not payload.get("domains"):
-        raise AssertionError("configs/cf_tunnel.json must define at least one domain")
-    if not payload.get("cf_tunnels"):
-        raise AssertionError("configs/cf_tunnel.json must define at least one tunnel")
-    return payload
+def _sample_cf_tunnel_config() -> dict:
+    return {
+        "cf_account_id": "acct-1",
+        "cf_api_token": "existing-token",
+        "aliyun_access_id": "ak-test",
+        "aliyun_access_secret": "sk-test",
+        "domains": [
+            {
+                "domain_name": DOC_ZONE_NAME,
+                "zone_name": DOC_ZONE_NAME,
+                "zone_id": "",
+                "cloudflare_nameservers": [],
+                "aliyun_task_no": "",
+            }
+        ],
+        "cf_tunnels": [
+            {
+                "tunnel_name": DOC_HOSTNAME,
+                "domain_name": DOC_HOSTNAME,
+                "zone_name": DOC_ZONE_NAME,
+                "local_url": "http://127.0.0.1:21012",
+                "tunnel_id": "",
+                "tunnel_token": "",
+                "cloudflared_run": {},
+                "origin_request": {},
+            }
+        ],
+    }
 
 
 def _local_domain_name() -> str:
-    payload = _load_local_cf_tunnel_config()
+    payload = _sample_cf_tunnel_config()
     return str(payload["domains"][0]["domain_name"]).strip()
 
 
 def _local_tunnel_name() -> str:
-    payload = _load_local_cf_tunnel_config()
+    payload = _sample_cf_tunnel_config()
     return str(payload["cf_tunnels"][0]["tunnel_name"]).strip()
 
 
@@ -187,7 +209,7 @@ def test_runtime_path_overrides_set_environment(monkeypatch, tmp_path):
         [
             "snapshot",
             "--name",
-            "dev.blbl.top",
+            "dev.example.com",
             "--project-root",
             str(tmp_path),
             "--config-dir",
@@ -214,7 +236,7 @@ def test_config_init_writes_project_config(monkeypatch, tmp_path):
 
 
 def test_migrate_dns_updates_config(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     domain_name = str(local_payload["domains"][0]["domain_name"]).strip()
     zone_name = (
         str(local_payload["domains"][0].get("zone_name", "")).strip() or domain_name
@@ -286,7 +308,7 @@ def test_migrate_dns_updates_config(monkeypatch, tmp_path):
 
 
 def test_apply_tunnel_updates_config_without_printing_secret(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
     domain_name = str(tunnel["domain_name"]).strip()
     tunnel_name = str(tunnel["tunnel_name"]).strip()
@@ -355,7 +377,7 @@ def test_apply_tunnel_updates_config_without_printing_secret(monkeypatch, tmp_pa
 
 
 def test_apply_tunnel_pushes_origin_request_settings(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
     tunnel_name = str(tunnel["tunnel_name"]).strip()
 
@@ -428,7 +450,7 @@ def test_apply_tunnel_pushes_origin_request_settings(monkeypatch, tmp_path):
 
 
 def test_apply_tunnel_persists_runtime_overrides(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
     tunnel_name = str(tunnel["tunnel_name"]).strip()
 
@@ -483,9 +505,9 @@ def test_apply_tunnel_persists_runtime_overrides(monkeypatch, tmp_path):
         install_service=False,
         cf_token_mode="auto",
         save_config=True,
-        domain_name="dev.blbl.top",
+        domain_name="dev.example.com",
         local_url="http://127.0.0.1:21012",
-        zone_name="blbl.top",
+        zone_name="example.com",
         origin_request={
             "connect_timeout": 5,
             "keep_alive_connections": 256,
@@ -512,7 +534,7 @@ def test_apply_tunnel_persists_runtime_overrides(monkeypatch, tmp_path):
 
 
 def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
     domain_name = str(tunnel["domain_name"]).strip()
     tunnel_name = str(tunnel["tunnel_name"]).strip()
@@ -604,7 +626,9 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
     )
 
     install_result = result[0]["install_result"]
-    assert install_result["service_name"] == "cloudflared-tunnel-dev-blbl-top.service"
+    assert (
+        install_result["service_name"] == "cloudflared-tunnel-dev-example-com.service"
+    )
     assert [command[:2] for command in recorded_commands[1:]] == [
         ["rm", "-f"],
         ["systemctl", "daemon-reload"],
@@ -618,7 +642,7 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
 
 
 def test_apply_tunnel_can_install_guard_sidecar_when_requested(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
     tunnel_name = str(tunnel["tunnel_name"]).strip()
 
@@ -672,7 +696,7 @@ def test_apply_tunnel_can_install_guard_sidecar_when_requested(monkeypatch, tmp_
     monkeypatch.setattr(
         "webu.cf_tunnel.operations._install_cloudflared_tunnel_service",
         lambda **kwargs: {
-            "service_name": "cloudflared-tunnel-dev-blbl-top.service",
+            "service_name": "cloudflared-tunnel-dev-example-com.service",
             "restart_service": {"returncode": 0},
         },
     )
@@ -683,7 +707,7 @@ def test_apply_tunnel_can_install_guard_sidecar_when_requested(monkeypatch, tmp_
     monkeypatch.setattr(
         "webu.cf_tunnel.operations._install_cloudflared_tunnel_guard_service",
         lambda **kwargs: {
-            "service_name": "cloudflared-tunnel-guard-dev-blbl-top.service"
+            "service_name": "cloudflared-tunnel-guard-dev-example-com.service"
         },
     )
     monkeypatch.setattr(
@@ -701,16 +725,16 @@ def test_apply_tunnel_can_install_guard_sidecar_when_requested(monkeypatch, tmp_
     )
 
     assert result[0]["guard_install_result"]["service_name"] == (
-        "cloudflared-tunnel-guard-dev-blbl-top.service"
+        "cloudflared-tunnel-guard-dev-example-com.service"
     )
     assert result[0]["verification"]["guard_service"] == (
-        "cloudflared-tunnel-guard-dev-blbl-top.service"
+        "cloudflared-tunnel-guard-dev-example-com.service"
     )
 
 
 def test_render_cloudflared_tunnel_service_unit_uses_faster_restart_defaults():
     rendered = _render_cloudflared_tunnel_service_unit(
-        tunnel_name="blbl.top",
+        tunnel_name="example.com",
         tunnel_token="secret-token",
         cloudflared_run={
             "protocol": "http2",
@@ -735,7 +759,7 @@ def test_render_cloudflared_tunnel_guard_service_unit_runs_continuous_guard(
     )
     monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
     rendered = _render_cloudflared_tunnel_guard_service_unit(
-        tunnel_name="blbl.top",
+        tunnel_name="example.com",
         interval_seconds=60,
         failure_threshold=2,
         cooldown_seconds=300,
@@ -744,9 +768,9 @@ def test_render_cloudflared_tunnel_guard_service_unit_runs_continuous_guard(
         max_candidates=3,
     )
 
-    assert "Description=cf_tunnel guard for blbl.top" in rendered
+    assert "Description=cf_tunnel guard for example.com" in rendered
     assert "ExecStart=" in rendered
-    assert "tunnel-guard --name blbl.top" in rendered
+    assert "tunnel-guard --name example.com" in rendered
     assert "--save-config" in rendered
     assert "Environment=WEBU_PROJECT_ROOT=" in rendered
     assert "Environment=PYTHONPATH=" in rendered
@@ -792,7 +816,7 @@ def test_install_cloudflared_tunnel_service_tolerates_transient_restart_failure(
     )
 
     result = _install_cloudflared_tunnel_service(
-        tunnel_name="blbl.top",
+        tunnel_name="example.com",
         tunnel_token="secret-token",
         cloudflared_run={
             "protocol": "http2",
@@ -807,7 +831,7 @@ def test_install_cloudflared_tunnel_service_tolerates_transient_restart_failure(
 
 
 def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
 
     config_dir = tmp_path / "configs"
@@ -873,7 +897,7 @@ def test_access_diagnose_reports_dns_mismatch(monkeypatch, tmp_path):
 
 
 def test_page_audit_flags_dev_server_and_broken_assets(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
 
     config_dir = tmp_path / "configs"
@@ -937,7 +961,7 @@ def test_page_audit_flags_dev_server_and_broken_assets(monkeypatch, tmp_path):
 
 
 def test_edge_trace_reports_colos_and_measurement_guidance(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
 
     config_dir = tmp_path / "configs"
@@ -998,7 +1022,7 @@ def test_edge_trace_reports_colos_and_measurement_guidance(monkeypatch, tmp_path
 
 
 def test_client_override_plan_exports_hosts_candidates(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
 
     config_dir = tmp_path / "configs"
@@ -1058,7 +1082,7 @@ def test_client_override_plan_exports_hosts_candidates(monkeypatch, tmp_path):
 def test_client_override_plan_recommends_ipv4_first_for_mixed_family_drift(
     monkeypatch, tmp_path
 ):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
 
     config_dir = tmp_path / "configs"
@@ -1128,7 +1152,7 @@ def test_client_override_plan_recommends_ipv4_first_for_mixed_family_drift(
 
 
 def test_client_canary_bundle_contains_platform_guides(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
 
     config_dir = tmp_path / "configs"
@@ -1242,7 +1266,7 @@ def test_client_report_summary_ranks_by_isp_and_platform(tmp_path):
 
 
 def test_client_report_template_contains_candidates(monkeypatch, tmp_path):
-    local_payload = deepcopy(_load_local_cf_tunnel_config())
+    local_payload = deepcopy(_sample_cf_tunnel_config())
     tunnel = deepcopy(local_payload["cf_tunnels"][0])
 
     config_dir = tmp_path / "configs"

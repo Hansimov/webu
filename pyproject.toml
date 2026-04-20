@@ -12,7 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = ["requests", "tclogger"]
+dependencies = ["requests", "tclogger", "alibabacloud_esa20240910"]
 
 [project.optional-dependencies]
 parsing = ["beautifulsoup4"]
@@ -66,6 +66,7 @@ proxy-api = [
 ]
 warp-api = ["psutil", "fastapi", "uvicorn", "pydantic"]
 ipv6 = ["netifaces", "fastapi", "uvicorn", "pydantic"]
+ali-esa = ["alibabacloud_esa20240910"]
 all = [
     "DrissionPage",
     "pyvirtualdisplay",
@@ -100,3 +101,4 @@ cfwp = "webu.warp_api.cli:main"
 ggdk = "webu.google_docker.cli:main"
 gghb = "webu.google_hub.cli:main"
 cftn = "webu.cf_tunnel.cli:main"
+aesa = "webu.ali_esa.cli:main"

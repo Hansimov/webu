@@ -54,10 +54,10 @@ def _patch_current_tunnel(monkeypatch, *, edge_ip_version: str = "4") -> None:
         lambda: {
             "cf_tunnels": [
                 {
-                    "tunnel_name": "dev.blbl.top",
-                    "domain_name": "dev.blbl.top",
+                    "tunnel_name": "dev.example.com",
+                    "domain_name": "dev.example.com",
                     "local_url": "http://127.0.0.1:21012",
-                    "zone_name": "blbl.top",
+                    "zone_name": "example.com",
                     "tunnel_id": "tunnel-dev",
                     "tunnel_token": "token-dev",
                     "cloudflared_run": {
@@ -82,13 +82,13 @@ def test_stabilize_tunnel_reapplies_baseline_and_captures_snapshot(monkeypatch):
     access_payloads = iter(
         [
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=False,
                 cloudflare_ok=False,
                 authoritative_ok=False,
             ),
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -117,7 +117,7 @@ def test_stabilize_tunnel_reapplies_baseline_and_captures_snapshot(monkeypatch):
             "output_dir": "/tmp/snap-1",
             "snapshots": [
                 {
-                    "hostname": "dev.blbl.top",
+                    "hostname": "dev.example.com",
                     "recommended_prefer_family": "ipv4",
                     "reason_codes": ["status_down"],
                     "top_candidates": [{"ip": "198.51.100.10"}],
@@ -128,8 +128,8 @@ def test_stabilize_tunnel_reapplies_baseline_and_captures_snapshot(monkeypatch):
     )
 
     result = stabilize_tunnel(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         prefer_family="any",
         max_candidates=2,
@@ -153,7 +153,7 @@ def test_stabilize_tunnel_reapplies_baseline_for_visitor_side_drift(monkeypatch)
     access_payloads = iter(
         [
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=False,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -161,7 +161,7 @@ def test_stabilize_tunnel_reapplies_baseline_for_visitor_side_drift(monkeypatch)
                 recursive_mismatch=True,
             ),
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -195,7 +195,7 @@ def test_stabilize_tunnel_reapplies_baseline_for_visitor_side_drift(monkeypatch)
             "output_dir": "/tmp/snap-drift",
             "snapshots": [
                 {
-                    "hostname": "dev.blbl.top",
+                    "hostname": "dev.example.com",
                     "recommended_prefer_family": "ipv4",
                     "reason_codes": ["dns_mismatch"],
                     "top_candidates": [{"ip": "198.51.100.10"}],
@@ -206,8 +206,8 @@ def test_stabilize_tunnel_reapplies_baseline_for_visitor_side_drift(monkeypatch)
     )
 
     result = stabilize_tunnel(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         prefer_family="any",
         max_candidates=2,
@@ -235,7 +235,7 @@ def test_stabilize_tunnel_keeps_snapshot_only_for_plain_dns_mismatch(monkeypatch
     monkeypatch.setattr(
         "webu.cf_tunnel.operations.access_diagnose",
         lambda tunnel_name=None, hostname=None: _access_payload(
-            "dev.blbl.top",
+            "dev.example.com",
             system_ok=True,
             cloudflare_ok=True,
             authoritative_ok=True,
@@ -257,7 +257,7 @@ def test_stabilize_tunnel_keeps_snapshot_only_for_plain_dns_mismatch(monkeypatch
             "output_dir": "/tmp/snap-mismatch",
             "snapshots": [
                 {
-                    "hostname": "dev.blbl.top",
+                    "hostname": "dev.example.com",
                     "recommended_prefer_family": "ipv4",
                     "reason_codes": ["dns_mismatch"],
                     "top_candidates": [{"ip": "198.51.100.10"}],
@@ -268,8 +268,8 @@ def test_stabilize_tunnel_keeps_snapshot_only_for_plain_dns_mismatch(monkeypatch
     )
 
     result = stabilize_tunnel(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         prefer_family="any",
         max_candidates=2,
@@ -290,7 +290,7 @@ def test_stabilize_tunnel_reapplies_baseline_for_latency_drift(monkeypatch):
     access_payloads = iter(
         [
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -299,7 +299,7 @@ def test_stabilize_tunnel_reapplies_baseline_for_latency_drift(monkeypatch):
                 authoritative_ttfb_ms=260,
             ),
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -333,7 +333,7 @@ def test_stabilize_tunnel_reapplies_baseline_for_latency_drift(monkeypatch):
             "output_dir": "/tmp/snap-latency",
             "snapshots": [
                 {
-                    "hostname": "dev.blbl.top",
+                    "hostname": "dev.example.com",
                     "recommended_prefer_family": "ipv4",
                     "reason_codes": ["prefer_ipv4_due_to_mixed_family_risk"],
                     "top_candidates": [{"ip": "198.51.100.10"}],
@@ -344,8 +344,8 @@ def test_stabilize_tunnel_reapplies_baseline_for_latency_drift(monkeypatch):
     )
 
     result = stabilize_tunnel(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         prefer_family="any",
         max_candidates=2,
@@ -375,7 +375,7 @@ def test_stabilize_tunnel_records_snapshot_error_without_raising(monkeypatch):
     monkeypatch.setattr(
         "webu.cf_tunnel.operations.access_diagnose",
         lambda tunnel_name=None, hostname=None: _access_payload(
-            "dev.blbl.top",
+            "dev.example.com",
             system_ok=False,
             cloudflare_ok=True,
             authoritative_ok=True,
@@ -393,8 +393,8 @@ def test_stabilize_tunnel_records_snapshot_error_without_raising(monkeypatch):
     )
 
     result = stabilize_tunnel(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         prefer_family="any",
         max_candidates=2,
@@ -433,8 +433,8 @@ def test_snapshot_guided_repair_switches_to_stable_family(monkeypatch):
     )
 
     plan = _build_snapshot_guided_repair_plan(
-        tunnel_name="blbl.top",
-        hostname="blbl.top",
+        tunnel_name="example.com",
+        hostname="example.com",
         snapshot_output_dir=Path("debugs/cf-tunnel-snapshots"),
         current_cloudflared_run={"protocol": "http2", "edge_ip_version": "4"},
         access_summary={
@@ -471,8 +471,8 @@ def test_snapshot_guided_repair_uses_auto_when_family_flaps(monkeypatch):
     )
 
     plan = _build_snapshot_guided_repair_plan(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         snapshot_output_dir=Path("debugs/cf-tunnel-snapshots"),
         current_cloudflared_run={"protocol": "http2", "edge_ip_version": "4"},
         access_summary={
@@ -492,7 +492,7 @@ def test_stabilize_tunnel_applies_stable_snapshot_family_override(monkeypatch):
     access_payloads = iter(
         [
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -501,7 +501,7 @@ def test_stabilize_tunnel_applies_stable_snapshot_family_override(monkeypatch):
                 authoritative_ttfb_ms=260,
             ),
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -555,7 +555,7 @@ def test_stabilize_tunnel_applies_stable_snapshot_family_override(monkeypatch):
             "output_dir": "/tmp/snap-override",
             "snapshots": [
                 {
-                    "hostname": "dev.blbl.top",
+                    "hostname": "dev.example.com",
                     "recommended_prefer_family": "ipv6",
                     "reason_codes": ["ipv6_only_success"],
                     "top_candidates": [{"ip": "2001:db8::10"}],
@@ -566,8 +566,8 @@ def test_stabilize_tunnel_applies_stable_snapshot_family_override(monkeypatch):
     )
 
     result = stabilize_tunnel(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         prefer_family="any",
         max_candidates=2,
@@ -589,7 +589,7 @@ def test_stabilize_tunnel_uses_auto_when_snapshot_family_flaps(monkeypatch):
     access_payloads = iter(
         [
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -599,7 +599,7 @@ def test_stabilize_tunnel_uses_auto_when_snapshot_family_flaps(monkeypatch):
                 authoritative_ttfb_ms=260,
             ),
             _access_payload(
-                "dev.blbl.top",
+                "dev.example.com",
                 system_ok=True,
                 cloudflare_ok=True,
                 authoritative_ok=True,
@@ -653,7 +653,7 @@ def test_stabilize_tunnel_uses_auto_when_snapshot_family_flaps(monkeypatch):
             "output_dir": "/tmp/snap-auto",
             "snapshots": [
                 {
-                    "hostname": "dev.blbl.top",
+                    "hostname": "dev.example.com",
                     "recommended_prefer_family": "ipv4",
                     "reason_codes": ["prefer_ipv4_due_to_dns_drift"],
                     "top_candidates": [{"ip": "198.51.100.10"}],
@@ -664,8 +664,8 @@ def test_stabilize_tunnel_uses_auto_when_snapshot_family_flaps(monkeypatch):
     )
 
     result = stabilize_tunnel(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         prefer_family="any",
         max_candidates=2,
@@ -699,7 +699,7 @@ def test_guard_tunnel_quality_triggers_stabilize_after_threshold(monkeypatch):
     monkeypatch.setattr(
         "webu.cf_tunnel.operations.access_diagnose",
         lambda tunnel_name=None, hostname=None: _access_payload(
-            "dev.blbl.top",
+            "dev.example.com",
             system_ok=False,
             cloudflare_ok=False,
             authoritative_ok=False,
@@ -723,8 +723,8 @@ def test_guard_tunnel_quality_triggers_stabilize_after_threshold(monkeypatch):
     )
 
     result = guard_tunnel_quality(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         interval_seconds=1,
         failure_threshold=2,
@@ -770,7 +770,7 @@ def test_guard_tunnel_quality_counts_observation_errors_toward_stabilize_thresho
     monkeypatch.setattr(
         "webu.cf_tunnel.operations.access_diagnose",
         lambda tunnel_name=None, hostname=None: _access_payload(
-            "dev.blbl.top",
+            "dev.example.com",
             system_ok=True,
             cloudflare_ok=True,
             authoritative_ok=True,
@@ -788,8 +788,8 @@ def test_guard_tunnel_quality_counts_observation_errors_toward_stabilize_thresho
     )
 
     result = guard_tunnel_quality(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         interval_seconds=1,
         failure_threshold=2,
@@ -828,7 +828,7 @@ def test_guard_tunnel_quality_snapshots_drift_before_threshold(monkeypatch):
     monkeypatch.setattr(
         "webu.cf_tunnel.operations.access_diagnose",
         lambda tunnel_name=None, hostname=None: _access_payload(
-            "dev.blbl.top",
+            "dev.example.com",
             system_ok=False,
             cloudflare_ok=True,
             authoritative_ok=True,
@@ -845,7 +845,7 @@ def test_guard_tunnel_quality_snapshots_drift_before_threshold(monkeypatch):
         lambda **kwargs: {
             "snapshot_label": "snap-drift",
             "output_dir": "/tmp/snap-drift",
-            "hostname": "dev.blbl.top",
+            "hostname": "dev.example.com",
             "recommended_prefer_family": "ipv4",
             "reason_codes": ["dns_mismatch", "recursive_dns_mismatch"],
             "first_round_strategy": "ipv4-first",
@@ -854,8 +854,8 @@ def test_guard_tunnel_quality_snapshots_drift_before_threshold(monkeypatch):
     )
 
     result = guard_tunnel_quality(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         interval_seconds=1,
         failure_threshold=2,
@@ -892,7 +892,7 @@ def test_guard_tunnel_quality_records_snapshot_errors_without_crashing(monkeypat
     monkeypatch.setattr(
         "webu.cf_tunnel.operations.access_diagnose",
         lambda tunnel_name=None, hostname=None: _access_payload(
-            "dev.blbl.top",
+            "dev.example.com",
             system_ok=True,
             cloudflare_ok=True,
             authoritative_ok=True,
@@ -904,8 +904,8 @@ def test_guard_tunnel_quality_records_snapshot_errors_without_crashing(monkeypat
     )
 
     result = guard_tunnel_quality(
-        tunnel_name="dev.blbl.top",
-        hostname="dev.blbl.top",
+        tunnel_name="dev.example.com",
+        hostname="dev.example.com",
         cf_token_mode="auto",
         interval_seconds=1,
         failure_threshold=2,

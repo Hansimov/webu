@@ -33,6 +33,13 @@ COMMAND_HELP = {
             "cftn tunnel-status --name app-example",
         ],
     },
+    "tunnel-disable": {
+        "summary": "停用已安装的 cloudflared tunnel/guard systemd 服务，并可选清理 unit 文件。",
+        "examples": [
+            "cftn tunnel-disable --name app-example",
+            "cftn tunnel-disable --all --purge-unit-files",
+        ],
+    },
     "tunnel-stabilize": {
         "summary": "做一次根因判定；如果 tunnel 控制面或公开 HTTPS 路径明显退化，就重放已验证基线并补一份快照。",
         "examples": [
@@ -142,6 +149,7 @@ def root_help_epilog() -> str:
             examples=[
                 "cftn token-ensure --zone-name example.com --cf-token-mode auto",
                 "cftn tunnel-status --name app-example",
+                "cftn tunnel-disable --name app-example",
                 "cftn tunnel-stabilize --name app-example",
                 "cftn tunnel-guard --name app-example --interval-seconds 60",
                 "cftn access-diagnose --name app-example",

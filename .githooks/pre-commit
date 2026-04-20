@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+set -eu
+
+python3 .githooks/scan_secrets.py --fast

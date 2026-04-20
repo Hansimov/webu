@@ -127,6 +127,44 @@ def _cloudflared_tunnel_service_override_path(tunnel_name: str) -> Path:
     )
 
 
+def _list_installed_cloudflared_units() -> list[str]:
+    completed = subprocess.run(
+        ["systemctl", "list-unit-files", "--type=service", "--no-legend", "--plain"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return []
+
+    units: list[str] = []
+    for line in completed.stdout.splitlines():
+        name = str(line).strip().split(maxsplit=1)[0]
+        if not name:
+            continue
+        if name.startswith(f"{CLOUDFLARED_TUNNEL_SERVICE_PREFIX}-"):
+            units.append(name)
+        elif name.startswith(f"{CLOUDFLARED_TUNNEL_GUARD_SERVICE_PREFIX}-"):
+            units.append(name)
+    return sorted(set(units))
+
+
+def _remove_path_if_exists(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": str(path), "removed": False, "reason": "missing"}
+    completed = sudo_run(
+        ["rm", "-rf", str(path)],
+        check=False,
+        capture_output=True,
+    )
+    summary = _summarize_completed_process(completed)
+    return {
+        "path": str(path),
+        "removed": completed.returncode == 0,
+        **summary,
+    }
+
+
 def _cftn_command_parts() -> list[str]:
     executable = shutil.which("cftn")
     if executable:
@@ -3232,6 +3270,104 @@ def guard_tunnel_quality(
 
 def config_schema_json() -> dict[str, Any]:
     return CF_TUNNEL_CONFIG.schema
+
+
+def disable_tunnel(
+    *,
+    tunnel_name: str | None = None,
+    disable_all: bool = False,
+    purge_unit_files: bool = False,
+) -> dict[str, Any]:
+    normalized_name = str(tunnel_name or "").strip()
+    if not disable_all and not normalized_name:
+        raise ValueError("tunnel_name is required unless disable_all is true")
+
+    if disable_all:
+        target_units = _list_installed_cloudflared_units()
+    else:
+        target_units = [
+            cloudflared_tunnel_service_name(normalized_name),
+            cloudflared_tunnel_guard_service_name(normalized_name),
+        ]
+
+    actions: list[dict[str, Any]] = []
+    removed_paths: list[dict[str, Any]] = []
+
+    for unit_name in target_units:
+        stop_result = sudo_run(
+            ["systemctl", "stop", unit_name],
+            check=False,
+            capture_output=True,
+        )
+        disable_result = sudo_run(
+            ["systemctl", "disable", unit_name],
+            check=False,
+            capture_output=True,
+        )
+        reset_failed_result = sudo_run(
+            ["systemctl", "reset-failed", unit_name],
+            check=False,
+            capture_output=True,
+        )
+        actions.append(
+            {
+                "unit": unit_name,
+                "stop": _summarize_completed_process(stop_result),
+                "disable": _summarize_completed_process(disable_result),
+                "reset_failed": _summarize_completed_process(reset_failed_result),
+            }
+        )
+
+    daemon_reload_result = None
+    if purge_unit_files:
+        if disable_all:
+            safe_names = {
+                unit_name.removeprefix(f"{CLOUDFLARED_TUNNEL_SERVICE_PREFIX}-")
+                .removeprefix(f"{CLOUDFLARED_TUNNEL_GUARD_SERVICE_PREFIX}-")
+                .removesuffix(".service")
+                for unit_name in target_units
+            }
+        else:
+            safe_names = {_safe_systemd_token(normalized_name)}
+
+        for safe_name in sorted(name for name in safe_names if name):
+            removed_paths.append(
+                _remove_path_if_exists(
+                    Path("/etc/systemd/system")
+                    / f"{CLOUDFLARED_TUNNEL_SERVICE_PREFIX}-{safe_name}.service"
+                )
+            )
+            removed_paths.append(
+                _remove_path_if_exists(
+                    Path("/etc/systemd/system")
+                    / f"{CLOUDFLARED_TUNNEL_GUARD_SERVICE_PREFIX}-{safe_name}.service"
+                )
+            )
+            removed_paths.append(
+                _remove_path_if_exists(
+                    Path("/etc/systemd/system")
+                    / f"{CLOUDFLARED_TUNNEL_SERVICE_PREFIX}-{safe_name}.service.d"
+                )
+            )
+        daemon_reload_result = sudo_run(
+            ["systemctl", "daemon-reload"],
+            check=False,
+            capture_output=True,
+        )
+
+    return {
+        "tunnel_name": normalized_name or None,
+        "disable_all": disable_all,
+        "purge_unit_files": purge_unit_files,
+        "target_units": target_units,
+        "actions": actions,
+        "removed_paths": removed_paths,
+        "daemon_reload": (
+            _summarize_completed_process(daemon_reload_result)
+            if daemon_reload_result is not None
+            else None
+        ),
+    }
 
 
 def config_check() -> list[str]:

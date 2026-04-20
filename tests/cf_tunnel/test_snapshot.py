@@ -24,11 +24,11 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
             {
                 "cf_account_id": "account-1",
                 "cf_api_token": "existing-token",
-                "domains": [{"domain_name": "blbl.top"}],
+                "domains": [{"domain_name": "example.com"}],
                 "cf_tunnels": [
                     {
-                        "tunnel_name": "dev.blbl.top",
-                        "domain_name": "dev.blbl.top",
+                        "tunnel_name": "dev.example.com",
+                        "domain_name": "dev.example.com",
                         "local_url": "http://127.0.0.1:21012",
                     }
                 ],
@@ -42,7 +42,7 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
     monkeypatch.setattr(
         "webu.cf_tunnel.snapshot.edge_trace",
         lambda tunnel_name=None, hostname=None: {
-            "hostname": "dev.blbl.top",
+            "hostname": "dev.example.com",
             "tunnel_name": tunnel_name,
             "unique_edge_results": [
                 {
@@ -63,7 +63,7 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
     monkeypatch.setattr(
         "webu.cf_tunnel.snapshot.client_override_plan",
         lambda tunnel_name=None, hostname=None, prefer_family="any", max_candidates=2: {
-            "hostname": "dev.blbl.top",
+            "hostname": "dev.example.com",
             "tunnel_name": tunnel_name,
             "recommended_prefer_family": "ipv4",
             "family_assessment": {
@@ -87,14 +87,14 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
     monkeypatch.setattr(
         "webu.cf_tunnel.snapshot.client_canary_bundle",
         lambda tunnel_name=None, hostname=None, prefer_family="any", max_candidates=2: {
-            "hostname": "dev.blbl.top",
+            "hostname": "dev.example.com",
             "recommended_prefer_family": "ipv4",
             "recommendations": ["Current probes recommend ipv4-first canaries."],
         },
     )
 
     result = capture_canary_snapshot(
-        names=["dev.blbl.top"],
+        names=["dev.example.com"],
         prefer_family="any",
         max_candidates=2,
         output_dir=Path("debugs/cf-tunnel-snapshots"),
@@ -116,8 +116,8 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
     )
     assert (snapshot_root / "summary.json").exists()
     assert (snapshot_root / "SUMMARY.md").exists()
-    assert (snapshot_root / "dev.blbl.top" / "edge-trace.json").exists()
-    assert (snapshot_root / "dev.blbl.top" / "client-override-plan.json").exists()
+    assert (snapshot_root / "dev.example.com" / "edge-trace.json").exists()
+    assert (snapshot_root / "dev.example.com" / "client-override-plan.json").exists()
     summary_text = (snapshot_root / "SUMMARY.md").read_text(encoding="utf-8")
     assert "operator_shortcuts" in summary_text
     assert "Chinaz Domestic Speed" in summary_text

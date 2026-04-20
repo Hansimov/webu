@@ -16,6 +16,23 @@ SENSITIVE_TOKEN_KEYS = {
 }
 SENSITIVE_SPACE_KEYS = {"space", "account"}
 SENSITIVE_URL_KEYS = {"base_url", "url"}
+SENSITIVE_DOMAIN_KEYS = {"domain_name", "zone_name", "site_name", "tunnel_name"}
+SENSITIVE_IDENTIFIER_KEYS = {
+    "cloudflare_zone_id",
+    "default_public_origin_ipv4",
+    "default_public_origin_ipv6",
+    "instance_id",
+    "registrar_task_no",
+    "site_id",
+    "verify_code",
+    "zone_id",
+}
+SENSITIVE_STRING_LIST_KEYS = {
+    "cloudflare_nameservers",
+    "current_ns",
+    "name_server_list",
+}
+SENSITIVE_PUBLIC_ADDRESS_KEYS = {"public_origin_address"}
 
 
 def _find_project_root() -> Path:
@@ -36,9 +53,32 @@ def _default_config_dir() -> Path:
     ).expanduser()
 
 
+def _is_placeholder_value(raw_value: Any) -> bool:
+    value = str(raw_value or "").strip()
+    lowered = value.lower()
+    if not value:
+        return True
+    if lowered in {"0", "example.com", "dev.example.com"}:
+        return True
+    if lowered.startswith(("your-", "your_", "dummy-", "fake-", "mock-")):
+        return True
+    if "example" in lowered or "placeholder" in lowered or "replace-me" in lowered:
+        return True
+    if value.startswith("http://127.0.0.1") or value.startswith("https://127.0.0.1"):
+        return True
+    return False
+
+
+def _add_string_value(values: set[str], raw_value: Any):
+    value = str(raw_value or "").strip()
+    if _is_placeholder_value(value):
+        return
+    values.add(value)
+
+
 def _add_space_value(values: set[str], raw_value: Any):
     space_name = str(raw_value or "").strip()
-    if not space_name:
+    if _is_placeholder_value(space_name):
         return
     values.add(space_name)
     if "/" in space_name:
@@ -50,7 +90,7 @@ def _add_space_value(values: set[str], raw_value: Any):
 
 def _add_url_value(values: set[str], raw_value: Any):
     url = str(raw_value or "").strip().rstrip("/")
-    if not url:
+    if _is_placeholder_value(url):
         return
     if ".hf.space" in url:
         values.add(url)
@@ -59,18 +99,29 @@ def _add_url_value(values: set[str], raw_value: Any):
             values.add(hostname)
 
 
+def _add_string_list_values(values: set[str], raw_value: Any):
+    if not isinstance(raw_value, list):
+        return
+    for item in raw_value:
+        _add_string_value(values, item)
+
+
 def _collect_from_payload(payload: Any, values: set[str], parent_key: str = ""):
     if isinstance(payload, dict):
         for key, value in payload.items():
             lowered = str(key).strip().lower()
             if lowered in SENSITIVE_TOKEN_KEYS:
-                token = str(value or "").strip()
-                if token:
-                    values.add(token)
+                _add_string_value(values, value)
             if lowered in SENSITIVE_SPACE_KEYS:
                 _add_space_value(values, value)
             if lowered in SENSITIVE_URL_KEYS:
                 _add_url_value(values, value)
+            if lowered in SENSITIVE_DOMAIN_KEYS or lowered in SENSITIVE_IDENTIFIER_KEYS:
+                _add_string_value(values, value)
+            if lowered in SENSITIVE_PUBLIC_ADDRESS_KEYS:
+                _add_string_value(values, value)
+            if lowered in SENSITIVE_STRING_LIST_KEYS:
+                _add_string_list_values(values, value)
             _collect_from_payload(value, values, lowered)
         return
 

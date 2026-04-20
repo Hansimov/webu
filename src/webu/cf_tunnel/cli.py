@@ -25,6 +25,7 @@ from .operations import (
     config_check,
     config_init,
     config_schema_json,
+    disable_tunnel,
     docs_sync,
     edge_trace,
     ensure_token,
@@ -121,6 +122,16 @@ def cmd_tunnel_apply(args):
 
 def cmd_tunnel_status(args):
     print_json(tunnel_status(tunnel_name=args.name, cf_token_mode=args.cf_token_mode))
+
+
+def cmd_tunnel_disable(args):
+    print_json(
+        disable_tunnel(
+            tunnel_name=args.name or None,
+            disable_all=bool(args.all),
+            purge_unit_files=bool(args.purge_unit_files),
+        )
+    )
 
 
 def cmd_tunnel_stabilize(args):
@@ -335,6 +346,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_runtime_path_options(tunnel_status_parser)
     tunnel_status_parser.set_defaults(func=cmd_tunnel_status)
+
+    tunnel_disable_parser = subparsers.add_parser(
+        "tunnel-disable",
+        help=COMMAND_HELP["tunnel-disable"]["summary"],
+        epilog=command_epilog("tunnel-disable"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    tunnel_disable_parser.add_argument("--name", default="")
+    tunnel_disable_parser.add_argument("--all", action="store_true")
+    tunnel_disable_parser.add_argument(
+        "--purge-unit-files",
+        action="store_true",
+        help="After stop/disable, remove the installed systemd unit files and reload the daemon.",
+    )
+    _add_runtime_path_options(tunnel_disable_parser)
+    tunnel_disable_parser.set_defaults(func=cmd_tunnel_disable)
 
     tunnel_stabilize_parser = subparsers.add_parser(
         "tunnel-stabilize",
