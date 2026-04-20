@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from tclogger import logger
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "src") not in sys.path:
@@ -37,12 +38,12 @@ def main(argv: list[str] | None = None) -> int:
     mode = "fast staged" if args.fast else "full"
 
     if violations:
-        print(f"Sensitive information scan failed ({mode} mode):")
+        logger.warn(f"Sensitive information scan failed ({mode} mode):")
         for violation in violations:
-            print(f"- {violation}")
+            logger.warn(f"- {violation}")
         return 1
 
-    print(f"Sensitive information scan passed ({mode} mode).")
+    logger.okay(f"Sensitive information scan passed ({mode} mode).")
     return 0
 
 

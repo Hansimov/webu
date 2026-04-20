@@ -1134,6 +1134,84 @@ def site_status(*, site_name: str) -> dict[str, Any]:
     }
 
 
+def site_records(
+    *,
+    site_name: str,
+    record_name: str = "",
+    record_type: str = "",
+) -> dict[str, Any]:
+    normalized_site_name = _require_text(site_name, "site_name")
+    config_payload = load_ali_esa_config(validate=False)
+    client = _build_esa_client(config_payload)
+    remote_site = client.get_site(site_name=normalized_site_name)
+    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
+    if not isinstance(site_id, int) or site_id <= 0:
+        raise ValueError(
+            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
+        )
+
+    current_ns: list[str] = []
+    try:
+        current_ns = client.get_site_current_ns(site_id=site_id)
+    except AliyunEsaApiError:
+        current_ns = []
+
+    records = client.list_records(
+        site_id=site_id,
+        record_name=str(record_name or "").strip() or None,
+        record_type=str(record_type or "").strip() or None,
+    )
+    return {
+        "site_name": normalized_site_name,
+        "remote_site": remote_site,
+        "current_ns": current_ns,
+        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "count": len(records),
+        "records": records,
+    }
+
+
+def site_origin_pools(
+    *,
+    site_name: str,
+    name: str = "",
+    match_type: str = "exact",
+) -> dict[str, Any]:
+    normalized_site_name = _require_text(site_name, "site_name")
+    config_payload = load_ali_esa_config(validate=False)
+    client = _build_esa_client(config_payload)
+    remote_site = client.get_site(site_name=normalized_site_name)
+    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
+    if not isinstance(site_id, int) or site_id <= 0:
+        raise ValueError(
+            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
+        )
+
+    current_ns: list[str] = []
+    try:
+        current_ns = client.get_site_current_ns(site_id=site_id)
+    except AliyunEsaApiError:
+        current_ns = []
+
+    normalized_match_type = str(match_type or "exact").strip().lower() or "exact"
+    if normalized_match_type not in {"exact", "fuzzy"}:
+        raise ValueError("match_type must be one of: exact, fuzzy")
+
+    origin_pools = client.list_origin_pools(
+        site_id=site_id,
+        name=str(name or "").strip() or None,
+        match_type=normalized_match_type,
+    )
+    return {
+        "site_name": normalized_site_name,
+        "remote_site": remote_site,
+        "current_ns": current_ns,
+        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "count": len(origin_pools),
+        "origin_pools": origin_pools,
+    }
+
+
 def _cf_record_data(record: dict[str, Any]) -> tuple[str, str, dict[str, Any] | None]:
     record_type = str(record.get("type") or "").strip().upper()
     content = _normalize_record_value(record.get("content"))

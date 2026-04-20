@@ -17,6 +17,8 @@ from .operations import (
     ensure_site,
     list_plan_instances,
     site_check,
+    site_origin_pools,
+    site_records,
     site_status,
     snapshot,
     sync_site_dns_from_cloudflare,
@@ -83,6 +85,26 @@ def cmd_site_ensure(args):
 
 def cmd_site_status(args):
     print_json(site_status(site_name=args.site_name))
+
+
+def cmd_site_records(args):
+    print_json(
+        site_records(
+            site_name=args.site_name,
+            record_name=args.record_name,
+            record_type=args.record_type,
+        )
+    )
+
+
+def cmd_site_origin_pools(args):
+    print_json(
+        site_origin_pools(
+            site_name=args.site_name,
+            name=args.name,
+            match_type=args.match_type,
+        )
+    )
 
 
 def cmd_site_sync_cloudflare_dns(args):
@@ -204,6 +226,43 @@ def build_parser() -> argparse.ArgumentParser:
     site_status_parser.add_argument("--site-name", required=True)
     _add_runtime_path_options(site_status_parser)
     site_status_parser.set_defaults(func=cmd_site_status)
+
+    site_records_parser = subparsers.add_parser(
+        "site-records",
+        help="List ESA DNS records currently configured for a site.",
+    )
+    site_records_parser.add_argument("--site-name", required=True)
+    site_records_parser.add_argument(
+        "--record-name",
+        default="",
+        help="Optional fully qualified record name filter.",
+    )
+    site_records_parser.add_argument(
+        "--record-type",
+        default="",
+        help="Optional record type filter such as A, AAAA, A/AAAA, CNAME, TXT, or MX.",
+    )
+    _add_runtime_path_options(site_records_parser)
+    site_records_parser.set_defaults(func=cmd_site_records)
+
+    site_origin_pools_parser = subparsers.add_parser(
+        "site-origin-pools",
+        help="List ESA origin pools currently configured for a site.",
+    )
+    site_origin_pools_parser.add_argument("--site-name", required=True)
+    site_origin_pools_parser.add_argument(
+        "--name",
+        default="",
+        help="Optional origin pool name filter.",
+    )
+    site_origin_pools_parser.add_argument(
+        "--match-type",
+        default="exact",
+        choices=["exact", "fuzzy"],
+        help="How --name should be matched when filtering origin pools.",
+    )
+    _add_runtime_path_options(site_origin_pools_parser)
+    site_origin_pools_parser.set_defaults(func=cmd_site_origin_pools)
 
     site_sync_parser = subparsers.add_parser(
         "site-sync-cloudflare-dns",

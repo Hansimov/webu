@@ -174,6 +174,81 @@ class AliyunEsaClient:
         items = payload.get("Records")
         return items if isinstance(items, list) else []
 
+    def get_origin_pool(
+        self,
+        *,
+        site_id: int,
+        origin_pool_id: int,
+    ) -> dict[str, Any]:
+        payload = self._call(
+            self._client.get_origin_pool,
+            esa_models.GetOriginPoolRequest(
+                site_id=int(site_id),
+                id=int(origin_pool_id),
+            ),
+        )
+        origin_pool = payload.get("OriginPool")
+        return origin_pool if isinstance(origin_pool, dict) else payload
+
+    def list_origin_pools(
+        self,
+        *,
+        site_id: int,
+        name: str | None = None,
+        match_type: str | None = None,
+        order_by: str | None = None,
+        page_size: int = 500,
+    ) -> list[dict[str, Any]]:
+        payload = self._call(
+            self._client.list_origin_pools,
+            esa_models.ListOriginPoolsRequest(
+                site_id=int(site_id),
+                name=str(name or "").strip() or None,
+                match_type=str(match_type or "").strip() or None,
+                order_by=str(order_by or "").strip() or None,
+                page_number=1,
+                page_size=max(1, min(500, int(page_size))),
+            ),
+        )
+        items = payload.get("OriginPools")
+        return items if isinstance(items, list) else []
+
+    def create_origin_pool(
+        self,
+        *,
+        site_id: int,
+        name: str,
+        origins: list[dict[str, Any]],
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "SiteId": int(site_id),
+            "Name": str(name).strip(),
+            "Origins": list(origins or []),
+        }
+        if enabled is not None:
+            payload["Enabled"] = bool(enabled)
+        request = esa_models.CreateOriginPoolRequest().from_map(payload)
+        return self._call(self._client.create_origin_pool, request)
+
+    def update_origin_pool(
+        self,
+        *,
+        site_id: int,
+        origin_pool_id: int,
+        origins: list[dict[str, Any]],
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "SiteId": int(site_id),
+            "Id": int(origin_pool_id),
+            "Origins": list(origins or []),
+        }
+        if enabled is not None:
+            payload["Enabled"] = bool(enabled)
+        request = esa_models.UpdateOriginPoolRequest().from_map(payload)
+        return self._call(self._client.update_origin_pool, request)
+
     def create_record(
         self,
         *,

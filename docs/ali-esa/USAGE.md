@@ -1,0 +1,292 @@
+# ali_esa 常用命令
+
+本文整理 `ali_esa` 模块的常见操作命令和一条已验证通过的 ddns-go / ESA origin pool 调试路径。
+
+命令默认在 `webu` 项目根目录执行，统一使用：
+
+```bash
+aesa
+```
+
+本文中的域名、路径和记录名示例均已脱敏。请把 `example.com` 一类占位值替换成你自己的实际对象。
+
+如果需要显式指定项目根目录或配置目录，可以给任意子命令追加：
+
+```bash
+--project-root /abs/path/to/webu --config-dir /abs/path/to/webu/configs
+```
+
+## 1. 配置和站点检查
+
+打印 schema：
+
+```bash
+aesa config-schema
+```
+
+校验本地配置：
+
+```bash
+aesa config-check
+```
+
+查看账号下可用的 ESA 套餐实例：
+
+```bash
+aesa plan-list
+```
+
+检查目标域名能否创建站点，以及 ESA 中是否已经存在：
+
+```bash
+aesa site-check --site-name example.com
+```
+
+确保站点存在，并把站点状态写回 `configs/ali_esa.json`：
+
+```bash
+aesa site-ensure \
+  --site-name example.com \
+  --coverage overseas \
+  --access-type NS \
+  --save-config
+```
+
+查看站点状态、分配的 NS 和当前公网 NS：
+
+```bash
+aesa site-status --site-name example.com
+```
+
+## 2. 查看 ESA 记录和 origin pool
+
+列出站点上的 ESA 记录：
+
+```bash
+aesa site-records --site-name example.com
+```
+
+按记录名过滤：
+
+```bash
+aesa site-records \
+  --site-name example.com \
+  --record-name search.example.com
+```
+
+按类型过滤，例如只看阿里云 `A/AAAA` 代理记录：
+
+```bash
+aesa site-records \
+  --site-name example.com \
+  --record-type A/AAAA
+```
+
+列出 origin pool：
+
+```bash
+aesa site-origin-pools --site-name example.com
+```
+
+精确匹配某一个 pool：
+
+```bash
+aesa site-origin-pools \
+  --site-name example.com \
+  --name ddnsgo-v6-probe \
+  --match-type exact
+```
+
+模糊匹配：
+
+```bash
+aesa site-origin-pools \
+  --site-name example.com \
+  --name probe \
+  --match-type fuzzy
+```
+
+## 3. 从 Cloudflare 导入 DNS
+
+把当前 Cloudflare zone 记录导入 ESA：
+
+```bash
+aesa site-sync-cloudflare-dns \
+  --site-name example.com \
+  --save-config
+```
+
+如果只想尽力导入，遇到不支持的记录类型跳过而不是整批失败：
+
+```bash
+aesa site-sync-cloudflare-dns \
+  --site-name example.com \
+  --allow-skip-unsupported \
+  --save-config
+```
+
+按完整记录名排除：
+
+```bash
+aesa site-sync-cloudflare-dns \
+  --site-name example.com \
+  --skip-record-name dev.example.com \
+  --skip-record-name old.example.com
+```
+
+导入逻辑会自动跳过：
+
+- SOA
+- 根域的 NS
+- 指向 `cfargotunnel.com` 的旧 Cloudflare Tunnel 记录
+- 严格模式下不支持的 Cloudflare 记录类型
+
+如果当前 Cloudflare token 已失效或无 zone 读取权限，导入会直接失败。这是当前已知的真实阻塞项之一。
+
+## 4. 创建或更新公开暴露记录
+
+把某个公开域名指向本机服务，并创建配套回源规则：
+
+```bash
+aesa exposure-apply \
+  --domain-name search.example.com \
+  --local-url http://127.0.0.1:8930 \
+  --origin-address auto \
+  --save-config
+```
+
+如果希望优先走公网 IPv6：
+
+```bash
+aesa exposure-apply \
+  --domain-name search.example.com \
+  --local-url http://127.0.0.1:8930 \
+  --origin-address auto6 \
+  --save-config
+```
+
+这里有两个必须牢记的限制：
+
+- ESA 当前公开代理路径使用的是 `A/AAAA`，不是独立 `AAAA`。
+- 即使使用 `auto6`，ESA 仍要求记录值中至少包含一个 IPv4 地址；因此请先在 `configs/ali_esa.json` 中配置 `default_public_origin_ipv4`。
+
+应用后可以再次用 `site-records` 检查生成的记录值和代理状态。
+
+## 5. 生成 ESA edge 快照
+
+对一个或多个域名抓取当前解析结果和 ESA edge 匹配情况：
+
+```bash
+aesa snapshot --name search.example.com
+```
+
+指定输出目录：
+
+```bash
+aesa snapshot \
+  --name search.example.com \
+  --name api.example.com \
+  --output-dir debugs/ali-esa-snapshots
+```
+
+如果快照里看到 `dns_lookup_failed`、`dns_mismatch` 或 `recursive_dns_mismatch`，说明公网 DNS 还没有完全切到 ESA edge。
+
+## 6. 切换注册商 NS
+
+仅在 ESA 站点、记录和公网回源验证都准备好之后，才执行 NS 切换：
+
+```bash
+aesa site-activate-ns \
+  --site-name example.com \
+  --wait \
+  --verify-site \
+  --save-config
+```
+
+常用参数：
+
+- `--wait`：轮询注册商任务直到不再是 pending。
+- `--verify-site`：切换后轮询 ESA 的站点校验结果。
+- `--verify-attempts`：校验尝试次数。
+- `--verify-interval-seconds`：校验间隔秒数。
+
+如果当前站点仍处于 `pending`，且公网 NS 还没有切到 ESA，那么这个命令依然不应提前执行。
+
+## 7. ddns-go 与 ESA origin pool 实测流程
+
+这一部分是目前已经跑通的实验路径，用于验证“纯 IPv6 origin pool 可行，且能被 ddns-go 更新”。
+
+### 7.1 生成测试 pool 和 ddns-go 配置
+
+```bash
+cd <webu-project-root>
+python debugs/ddns_go_aliesa_origin_pool_probe.py \
+  --site-name example.com \
+  --pool-name ddnsgo-v6-probe \
+  --origin-name home6 \
+  --seed-existing
+```
+
+这个调试脚本会：
+
+- 读取 `ali_esa.json` 和必要的 fallback 凭据
+- 创建或查找指定的 origin pool
+- 在需要时把 origin 重置为一个 seed IPv6，方便观察后续更新是否真的发生
+- 生成 ddns-go 配置文件 `debugs/ddns-go/ddnsgo-v6-probe.yaml`
+
+### 7.2 用 Go 探针验证配置是否被 ddns-go 正确加载
+
+查看 ddns-go 自己 marshal 出来的 canonical YAML 形状：
+
+```bash
+cd <webu-project-root>/debugs/ddns_go_run_once
+go run . --show-template
+```
+
+用 one-shot 探针执行一次 `dns.RunOnce()`：
+
+```bash
+cd <webu-project-root>/debugs/ddns_go_run_once
+go run . ../ddns-go/ddnsgo-v6-probe.yaml
+```
+
+如果输出中看到 `dns_conf_count: 1`，说明配置已经被 ddns-go 正确加载。
+
+关键注意事项：
+
+- ddns-go 识别的是它自己 Go 结构体 marshal 出来的全小写 YAML 键，例如 `dnsconf`、`dns`、`gettype`、`httpinterface`。
+- 如果误写成 `DnsConf`、`DNS`、`GetType` 这类 JSON 风格键名，ddns-go 会静默加载出 `0` 个 provider。
+
+### 7.3 用真实 ddns-go 二进制执行一次更新
+
+```bash
+cd <webu-project-root>/debugs/ddns-go/bin
+timeout 15s ./ddns-go -noweb -c ../ddnsgo-v6-probe.yaml -f 300 -cacheTimes 1
+```
+
+在 2026-04-21 的实测中，这条命令已经成功把 `ddnsgo-v6-probe.origin-pool.example.com?Name=home6` 对应的 origin 地址从 `2001:db8::1` 更新为真实公网 IPv6。
+
+### 7.4 回读 ESA 控制面确认更新结果
+
+```bash
+cd <webu-project-root>
+aesa site-origin-pools \
+  --site-name example.com \
+  --name ddnsgo-v6-probe \
+  --match-type exact
+```
+
+只要 `Origins[].Address` 已经变成目标公网 IPv6，就说明这条 ddns-go -> ESA origin pool 的更新链路已经成立。
+
+## 8. 常见故障与解释
+
+- `dns_conf_count: 0`：ddns-go 配置键名不对，通常是把 canonical lower-case YAML 写成了 `Dns` / `GetType` 风格。
+- `Record.AorAAAARecordValueContainInvalidIP`：你把 `*.origin-pool.<site>` 记录名当成了普通代理 `A/AAAA` 记录的值。ESA 当前不接受这种写法。
+- Cloudflare 导入时报鉴权错误：当前 token 无法读取 zone records，需要换成具备相应权限的新 token。
+- `site-status` 里 ESA 还是 `pending`：通常代表注册商 NS 还没有切过去，或者 ESA 还没有完成校验。
+
+## 9. 当前结论
+
+- 纯 IPv6 的 ESA origin pool 已经验证可创建、可查询、可由 ddns-go 自动更新。
+- 普通公开代理 `A/AAAA` 记录目前不能直接引用 origin pool 记录名。
+- 因此，ddns-go 当前的价值是“维护 origin pool 中的真实回源地址”，而不是直接替代现有公开代理记录流程。

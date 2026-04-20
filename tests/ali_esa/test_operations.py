@@ -9,6 +9,8 @@ from webu.ali_esa.operations import (
     _resolve_exposure_record,
     _resolve_origin_address,
     apply_exposure,
+    site_origin_pools,
+    site_records,
 )
 
 
@@ -179,3 +181,115 @@ def test_apply_exposure_uses_dual_stack_record_for_ipv6_origin(monkeypatch):
     assert recorded["data_value"] == "198.51.100.10,2001:db8:1::10"
     assert result["origin"]["public_address_family"] == "ipv6"
     assert result["origin"]["record_family"] == "dual-stack"
+
+
+def test_site_records_lists_filtered_records(monkeypatch):
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "pending"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return ["ns1.example.com", "ns2.example.com"]
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            assert site_id == 123
+            assert record_name == "dev.example.com"
+            assert record_type == "A/AAAA"
+            assert page_size == 500
+            return [
+                {
+                    "RecordId": 9,
+                    "RecordName": "dev.example.com",
+                    "RecordType": "A/AAAA",
+                    "Data": {"Value": "198.51.100.10,2001:db8::10"},
+                }
+            ]
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {
+            "sites": [
+                {
+                    "site_name": "example.com",
+                    "coverage": "overseas",
+                    "access_type": "NS",
+                    "instance_id": "instance-1",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    result = site_records(
+        site_name="example.com",
+        record_name="dev.example.com",
+        record_type="A/AAAA",
+    )
+
+    assert result["site_name"] == "example.com"
+    assert result["count"] == 1
+    assert result["current_ns"] == ["ns1.example.com", "ns2.example.com"]
+    assert result["records"][0]["RecordName"] == "dev.example.com"
+    assert result["config_site"]["site_name"] == "example.com"
+
+
+def test_site_origin_pools_lists_filtered_pools(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "pending"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return []
+
+        def list_origin_pools(
+            self, *, site_id, name=None, match_type=None, order_by=None, page_size=500
+        ):
+            observed["site_id"] = site_id
+            observed["name"] = name
+            observed["match_type"] = match_type
+            observed["order_by"] = order_by
+            observed["page_size"] = page_size
+            return [
+                {
+                    "Id": 21,
+                    "Name": "search-prod",
+                    "RecordName": "search-prod.origin-pool.example.com",
+                }
+            ]
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {"sites": [{"site_name": "example.com"}]},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    result = site_origin_pools(
+        site_name="example.com",
+        name="search",
+        match_type="fuzzy",
+    )
+
+    assert observed == {
+        "site_id": 123,
+        "name": "search",
+        "match_type": "fuzzy",
+        "order_by": None,
+        "page_size": 500,
+    }
+    assert result["site_name"] == "example.com"
+    assert result["count"] == 1
+    assert result["origin_pools"][0]["Name"] == "search-prod"
