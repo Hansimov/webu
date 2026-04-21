@@ -648,6 +648,9 @@ def _record_matches(
     data_value: str,
     ttl: int,
     proxied: bool | None,
+    biz_name: str | None = None,
+    source_type: str | None = None,
+    host_policy: str | None = None,
     data_extra: dict[str, Any] | None = None,
 ) -> bool:
     if _normalize_esa_record_type(
@@ -661,6 +664,23 @@ def _record_matches(
     if int(record.get("Ttl") or 0) != int(ttl):
         return False
     if proxied is not None and bool(record.get("Proxied")) != bool(proxied):
+        return False
+    if (
+        biz_name is not None
+        and str(record.get("BizName") or "").strip() != str(biz_name or "").strip()
+    ):
+        return False
+    if (
+        source_type is not None
+        and str(record.get("RecordSourceType") or "").strip()
+        != str(source_type or "").strip()
+    ):
+        return False
+    if (
+        host_policy is not None
+        and str(record.get("HostPolicy") or "").strip()
+        != str(host_policy or "").strip()
+    ):
         return False
     data_payload = record.get("Data") if isinstance(record.get("Data"), dict) else {}
     if data_extra:
@@ -734,6 +754,9 @@ def _ensure_record(
             data_value=normalized_data_value,
             ttl=ttl,
             proxied=proxied,
+            biz_name=biz_name,
+            source_type=source_type,
+            host_policy=host_policy,
             data_extra=data_extra,
         ):
             return {
@@ -1115,12 +1138,31 @@ def ensure_site(
 
 
 def site_status(*, site_name: str) -> dict[str, Any]:
+    context = _resolve_site_context(site_name, require_site_id=False)
+    return {
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
+    }
+
+
+def _resolve_site_context(
+    site_name: str,
+    *,
+    require_site_id: bool,
+) -> dict[str, Any]:
     normalized_site_name = _require_text(site_name, "site_name")
     config_payload = load_ali_esa_config(validate=False)
     client = _build_esa_client(config_payload)
     remote_site = client.get_site(site_name=normalized_site_name)
-    current_ns: list[str] = []
     site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
+    if require_site_id and (not isinstance(site_id, int) or site_id <= 0):
+        raise ValueError(
+            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
+        )
+
+    current_ns: list[str] = []
     if isinstance(site_id, int) and site_id > 0:
         try:
             current_ns = client.get_site_current_ns(site_id=site_id)
@@ -1128,6 +1170,9 @@ def site_status(*, site_name: str) -> dict[str, Any]:
             current_ns = []
     return {
         "site_name": normalized_site_name,
+        "config_payload": config_payload,
+        "client": client,
+        "site_id": site_id if isinstance(site_id, int) and site_id > 0 else None,
         "remote_site": remote_site,
         "current_ns": current_ns,
         "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
@@ -1140,32 +1185,18 @@ def site_records(
     record_name: str = "",
     record_type: str = "",
 ) -> dict[str, Any]:
-    normalized_site_name = _require_text(site_name, "site_name")
-    config_payload = load_ali_esa_config(validate=False)
-    client = _build_esa_client(config_payload)
-    remote_site = client.get_site(site_name=normalized_site_name)
-    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
-    if not isinstance(site_id, int) or site_id <= 0:
-        raise ValueError(
-            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
-        )
+    context = _resolve_site_context(site_name, require_site_id=True)
 
-    current_ns: list[str] = []
-    try:
-        current_ns = client.get_site_current_ns(site_id=site_id)
-    except AliyunEsaApiError:
-        current_ns = []
-
-    records = client.list_records(
-        site_id=site_id,
+    records = context["client"].list_records(
+        site_id=int(context["site_id"]),
         record_name=str(record_name or "").strip() or None,
         record_type=str(record_type or "").strip() or None,
     )
     return {
-        "site_name": normalized_site_name,
-        "remote_site": remote_site,
-        "current_ns": current_ns,
-        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
         "count": len(records),
         "records": records,
     }
@@ -1177,36 +1208,22 @@ def site_origin_pools(
     name: str = "",
     match_type: str = "exact",
 ) -> dict[str, Any]:
-    normalized_site_name = _require_text(site_name, "site_name")
-    config_payload = load_ali_esa_config(validate=False)
-    client = _build_esa_client(config_payload)
-    remote_site = client.get_site(site_name=normalized_site_name)
-    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
-    if not isinstance(site_id, int) or site_id <= 0:
-        raise ValueError(
-            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
-        )
-
-    current_ns: list[str] = []
-    try:
-        current_ns = client.get_site_current_ns(site_id=site_id)
-    except AliyunEsaApiError:
-        current_ns = []
+    context = _resolve_site_context(site_name, require_site_id=True)
 
     normalized_match_type = str(match_type or "exact").strip().lower() or "exact"
     if normalized_match_type not in {"exact", "fuzzy"}:
         raise ValueError("match_type must be one of: exact, fuzzy")
 
-    origin_pools = client.list_origin_pools(
-        site_id=site_id,
+    origin_pools = context["client"].list_origin_pools(
+        site_id=int(context["site_id"]),
         name=str(name or "").strip() or None,
         match_type=normalized_match_type,
     )
     return {
-        "site_name": normalized_site_name,
-        "remote_site": remote_site,
-        "current_ns": current_ns,
-        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
         "count": len(origin_pools),
         "origin_pools": origin_pools,
     }
@@ -1218,36 +1235,22 @@ def site_load_balancers(
     name: str = "",
     match_type: str = "exact",
 ) -> dict[str, Any]:
-    normalized_site_name = _require_text(site_name, "site_name")
-    config_payload = load_ali_esa_config(validate=False)
-    client = _build_esa_client(config_payload)
-    remote_site = client.get_site(site_name=normalized_site_name)
-    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
-    if not isinstance(site_id, int) or site_id <= 0:
-        raise ValueError(
-            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
-        )
-
-    current_ns: list[str] = []
-    try:
-        current_ns = client.get_site_current_ns(site_id=site_id)
-    except AliyunEsaApiError:
-        current_ns = []
+    context = _resolve_site_context(site_name, require_site_id=True)
 
     normalized_match_type = str(match_type or "exact").strip().lower() or "exact"
     if normalized_match_type not in {"exact", "fuzzy"}:
         raise ValueError("match_type must be one of: exact, fuzzy")
 
-    load_balancers = client.list_load_balancers(
-        site_id=site_id,
+    load_balancers = context["client"].list_load_balancers(
+        site_id=int(context["site_id"]),
         name=str(name or "").strip() or None,
         match_type=normalized_match_type,
     )
     return {
-        "site_name": normalized_site_name,
-        "remote_site": remote_site,
-        "current_ns": current_ns,
-        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
         "count": len(load_balancers),
         "load_balancers": load_balancers,
     }
@@ -1259,21 +1262,7 @@ def site_load_balancer_origin_status(
     load_balancer_ids: list[int] | None = None,
     pool_type: str = "",
 ) -> dict[str, Any]:
-    normalized_site_name = _require_text(site_name, "site_name")
-    config_payload = load_ali_esa_config(validate=False)
-    client = _build_esa_client(config_payload)
-    remote_site = client.get_site(site_name=normalized_site_name)
-    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
-    if not isinstance(site_id, int) or site_id <= 0:
-        raise ValueError(
-            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
-        )
-
-    current_ns: list[str] = []
-    try:
-        current_ns = client.get_site_current_ns(site_id=site_id)
-    except AliyunEsaApiError:
-        current_ns = []
+    context = _resolve_site_context(site_name, require_site_id=True)
 
     normalized_ids = [
         int(item)
@@ -1283,24 +1272,440 @@ def site_load_balancer_origin_status(
     if not normalized_ids:
         normalized_ids = [
             int(item.get("Id"))
-            for item in client.list_load_balancers(site_id=site_id)
+            for item in context["client"].list_load_balancers(
+                site_id=int(context["site_id"])
+            )
             if isinstance(item, dict) and isinstance(item.get("Id"), int)
         ]
 
-    origin_status = client.list_load_balancer_origin_status(
-        site_id=site_id,
+    origin_status = context["client"].list_load_balancer_origin_status(
+        site_id=int(context["site_id"]),
         load_balancer_ids=normalized_ids,
         pool_type=str(pool_type or "").strip() or None,
     )
     return {
-        "site_name": normalized_site_name,
-        "remote_site": remote_site,
-        "current_ns": current_ns,
-        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
         "load_balancer_ids": normalized_ids,
         "pool_type": str(pool_type or "").strip(),
         "count": len(origin_status),
         "origin_status": origin_status,
+    }
+
+
+def _normalize_load_balancer_name(value: str, *, site_name: str) -> str:
+    normalized = _normalize_subdomain_under_site(
+        value, site_name=site_name, label="name"
+    )
+
+    return normalized
+
+
+def _normalize_subdomain_under_site(
+    value: str,
+    *,
+    site_name: str,
+    label: str,
+) -> str:
+    normalized = _require_text(value, label).strip().lower()
+    normalized_site_name = _require_text(site_name, "site_name").strip().lower()
+    if "." not in normalized:
+        normalized = f"{normalized}.{normalized_site_name}"
+    if normalized == normalized_site_name or not normalized.endswith(
+        f".{normalized_site_name}"
+    ):
+        raise ValueError(f"{label} must be a subdomain under the target ESA site")
+    return normalized
+
+
+def _resolve_origin_pool_id(
+    client: AliyunEsaClient,
+    *,
+    site_id: int,
+    pool_id: int | None = None,
+    pool_name: str = "",
+) -> int:
+    if isinstance(pool_id, int) and pool_id > 0:
+        return int(pool_id)
+
+    normalized_name = _require_text(pool_name, "origin pool name").strip().lower()
+    matches = [
+        item
+        for item in client.list_origin_pools(
+            site_id=site_id,
+            name=normalized_name,
+            match_type="exact",
+        )
+        if isinstance(item, dict)
+        and str(item.get("Name") or "").strip().lower() == normalized_name
+        and isinstance(item.get("Id"), int)
+        and int(item.get("Id")) > 0
+    ]
+    if not matches:
+        raise ValueError(f"ESA origin pool '{normalized_name}' was not found")
+    return int(matches[0]["Id"])
+
+
+def _resolve_origin_pool_ids(
+    client: AliyunEsaClient,
+    *,
+    site_id: int,
+    pool_ids: list[int] | None = None,
+    pool_names: list[str] | None = None,
+) -> list[int]:
+    resolved: list[int] = []
+    for item in pool_ids or []:
+        if isinstance(item, int) and item > 0 and item not in resolved:
+            resolved.append(int(item))
+    for item in pool_names or []:
+        normalized_name = str(item or "").strip()
+        if not normalized_name:
+            continue
+        resolved_id = _resolve_origin_pool_id(
+            client,
+            site_id=site_id,
+            pool_name=normalized_name,
+        )
+        if resolved_id not in resolved:
+            resolved.append(resolved_id)
+    if not resolved:
+        raise ValueError("at least one default origin pool is required")
+    return resolved
+
+
+def _resolve_load_balancer_id(
+    client: AliyunEsaClient,
+    *,
+    site_id: int,
+    load_balancer_id: int | None = None,
+    name: str = "",
+) -> int:
+    if isinstance(load_balancer_id, int) and load_balancer_id > 0:
+        return int(load_balancer_id)
+
+    normalized_name = _require_text(name, "name").strip().lower()
+    matches = [
+        item
+        for item in client.list_load_balancers(
+            site_id=site_id,
+            name=normalized_name,
+            match_type="exact",
+        )
+        if isinstance(item, dict)
+        and str(item.get("Name") or "").strip().lower() == normalized_name
+        and isinstance(item.get("Id"), int)
+        and int(item.get("Id")) > 0
+    ]
+    if not matches:
+        raise ValueError(f"ESA load balancer '{normalized_name}' was not found")
+    return int(matches[0]["Id"])
+
+
+def _raise_load_balancer_create_error(
+    exc: AliyunEsaApiError,
+    *,
+    site_name: str,
+    load_balancer_name: str,
+) -> None:
+    detail = str(exc)
+    if "LoadBalancerQuotaCheckFailed" in detail:
+        raise ValueError(
+            f"ESA load balancer '{load_balancer_name}' cannot be created on site '{site_name}' because the current plan does not expose usable load balancer quota: {detail}"
+        ) from exc
+    raise exc
+
+
+def site_load_balancer_create(
+    *,
+    site_name: str,
+    name: str,
+    default_pool_ids: list[int] | None = None,
+    default_pool_names: list[str] | None = None,
+    fallback_pool_id: int | None = None,
+    fallback_pool_name: str = "",
+    description: str = "",
+    monitor_type: str = "off",
+    monitor_port: int = 0,
+    monitor_path: str = "",
+    monitor_method: str = "GET",
+    steering_policy: str = "order",
+    session_affinity: str = "off",
+    ttl: int = 30,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    context = _resolve_site_context(site_name, require_site_id=True)
+    site_id = int(context["site_id"])
+    client = context["client"]
+
+    load_balancer_name = _normalize_load_balancer_name(
+        name, site_name=context["site_name"]
+    )
+    normalized_steering_policy = (
+        str(steering_policy or "order").strip().lower() or "order"
+    )
+    if normalized_steering_policy not in {"order", "random"}:
+        raise ValueError("steering_policy must be one of: order, random")
+
+    normalized_session_affinity = (
+        str(session_affinity or "off").strip().lower() or "off"
+    )
+    if normalized_session_affinity not in {"off", "ip", "cookie"}:
+        raise ValueError("session_affinity must be one of: off, ip, cookie")
+
+    normalized_monitor_type = str(monitor_type or "off").strip() or "off"
+    resolved_default_pool_ids = _resolve_origin_pool_ids(
+        client,
+        site_id=site_id,
+        pool_ids=default_pool_ids,
+        pool_names=default_pool_names,
+    )
+    resolved_fallback_pool_id = (
+        _resolve_origin_pool_id(
+            client,
+            site_id=site_id,
+            pool_id=fallback_pool_id,
+            pool_name=fallback_pool_name,
+        )
+        if (isinstance(fallback_pool_id, int) and fallback_pool_id > 0)
+        or str(fallback_pool_name or "").strip()
+        else resolved_default_pool_ids[0]
+    )
+
+    monitor_payload: dict[str, Any] = {"Type": normalized_monitor_type}
+    if normalized_monitor_type.lower() != "off":
+        if int(monitor_port or 0) > 0:
+            monitor_payload["Port"] = int(monitor_port)
+        if str(monitor_path or "").strip():
+            monitor_payload["Path"] = str(monitor_path).strip()
+        if str(monitor_method or "").strip():
+            monitor_payload["Method"] = str(monitor_method).strip().upper()
+
+    try:
+        create_result = client.create_load_balancer(
+            site_id=site_id,
+            name=load_balancer_name,
+            default_pools=resolved_default_pool_ids,
+            fallback_pool=resolved_fallback_pool_id,
+            monitor=monitor_payload,
+            steering_policy=normalized_steering_policy,
+            description=str(description or "").strip() or None,
+            enabled=bool(enabled),
+            session_affinity=normalized_session_affinity,
+            ttl=max(10, min(600, int(ttl))),
+            random_steering=(
+                {"DefaultWeight": 100}
+                if normalized_steering_policy == "random"
+                else None
+            ),
+        )
+    except AliyunEsaApiError as exc:
+        _raise_load_balancer_create_error(
+            exc,
+            site_name=context["site_name"],
+            load_balancer_name=load_balancer_name,
+        )
+    created_id = create_result.get("Id") if isinstance(create_result, dict) else None
+    if not isinstance(created_id, int) or created_id <= 0:
+        raise RuntimeError(
+            f"ESA create load balancer returned an invalid Id for '{load_balancer_name}'"
+        )
+    load_balancer = client.get_load_balancer(
+        site_id=site_id,
+        load_balancer_id=created_id,
+    )
+    return {
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
+        "resolved_default_pool_ids": resolved_default_pool_ids,
+        "resolved_fallback_pool_id": resolved_fallback_pool_id,
+        "create_result": create_result,
+        "load_balancer": load_balancer,
+    }
+
+
+def site_load_balancer_delete(
+    *,
+    site_name: str,
+    load_balancer_id: int | None = None,
+    name: str = "",
+) -> dict[str, Any]:
+    context = _resolve_site_context(site_name, require_site_id=True)
+    site_id = int(context["site_id"])
+    client = context["client"]
+    resolved_load_balancer_id = _resolve_load_balancer_id(
+        client,
+        site_id=site_id,
+        load_balancer_id=load_balancer_id,
+        name=name,
+    )
+    load_balancer = client.get_load_balancer(
+        site_id=site_id,
+        load_balancer_id=resolved_load_balancer_id,
+    )
+    delete_result = client.delete_load_balancer(
+        site_id=site_id,
+        load_balancer_id=resolved_load_balancer_id,
+    )
+    remaining = [
+        item
+        for item in client.list_load_balancers(
+            site_id=site_id,
+            name=str(load_balancer.get("Name") or "").strip() or None,
+            match_type="exact",
+        )
+        if isinstance(item, dict)
+        and int(item.get("Id") or 0) == resolved_load_balancer_id
+    ]
+    return {
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
+        "load_balancer": load_balancer,
+        "delete_result": delete_result,
+        "deleted": len(remaining) == 0,
+    }
+
+
+def site_origin_pool_cname_apply(
+    *,
+    site_name: str,
+    record_name: str,
+    pool_name: str = "",
+    pool_id: int | None = None,
+    biz_name: str = "web",
+    host_policy: str = "",
+    ttl: int = 30,
+    comment: str = "",
+    purge_conflicts: bool = False,
+) -> dict[str, Any]:
+    context = _resolve_site_context(site_name, require_site_id=True)
+    site_id = int(context["site_id"])
+    client = context["client"]
+    normalized_record_name = _normalize_subdomain_under_site(
+        record_name,
+        site_name=context["site_name"],
+        label="record_name",
+    )
+    normalized_biz_name = str(biz_name or "web").strip() or "web"
+    if normalized_biz_name not in {"web", "api", "image_video"}:
+        raise ValueError("biz_name must be one of: web, api, image_video")
+
+    normalized_host_policy = str(host_policy or "").strip()
+    if normalized_host_policy not in {"", "follow_hostname", "follow_origin_domain"}:
+        raise ValueError(
+            "host_policy must be empty or one of: follow_hostname, follow_origin_domain"
+        )
+
+    resolved_pool_id = _resolve_origin_pool_id(
+        client,
+        site_id=site_id,
+        pool_id=pool_id,
+        pool_name=pool_name,
+    )
+    before_pool = client.get_origin_pool(
+        site_id=site_id, origin_pool_id=resolved_pool_id
+    )
+    pool_record_name = str(before_pool.get("RecordName") or "").strip()
+    if not pool_record_name:
+        raise ValueError(
+            f"ESA origin pool '{before_pool.get('Name')}' does not expose a usable RecordName"
+        )
+
+    record_result = _ensure_record(
+        client,
+        site_id=site_id,
+        record_name=normalized_record_name,
+        record_type="CNAME",
+        data_value=pool_record_name,
+        ttl=max(1, int(ttl)),
+        proxied=True,
+        biz_name=normalized_biz_name,
+        source_type="OP",
+        comment=str(comment or "").strip() or None,
+        host_policy=normalized_host_policy or None,
+        purge_conflicts=purge_conflicts,
+    )
+    after_pool = client.get_origin_pool(
+        site_id=site_id, origin_pool_id=resolved_pool_id
+    )
+    return {
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
+        "origin_pool": before_pool,
+        "record": record_result,
+        "before_references": before_pool.get("References"),
+        "after_references": after_pool.get("References"),
+        "after_reference_lb_count": after_pool.get("ReferenceLBCount"),
+    }
+
+
+def site_origin_pool_cname_delete(
+    *,
+    site_name: str,
+    record_name: str,
+) -> dict[str, Any]:
+    context = _resolve_site_context(site_name, require_site_id=True)
+    site_id = int(context["site_id"])
+    client = context["client"]
+    normalized_record_name = _normalize_subdomain_under_site(
+        record_name,
+        site_name=context["site_name"],
+        label="record_name",
+    )
+
+    matches = [
+        item
+        for item in client.list_records(
+            site_id=site_id, record_name=normalized_record_name
+        )
+        if isinstance(item, dict)
+        and str(item.get("RecordName") or "").strip().lower() == normalized_record_name
+        and _normalize_esa_record_type(str(item.get("RecordType") or "")) == "CNAME"
+        and str(item.get("RecordSourceType") or "").strip() == "OP"
+    ]
+    if not matches:
+        raise ValueError(
+            f"ESA OP-backed CNAME record '{normalized_record_name}' was not found"
+        )
+
+    deleted: list[dict[str, Any]] = []
+    for item in matches:
+        record_id = item.get("RecordId")
+        if not isinstance(record_id, int) or record_id <= 0:
+            continue
+        deleted.append(
+            {
+                "record": item,
+                "delete_result": client.delete_record(record_id=record_id),
+            }
+        )
+
+    remaining = [
+        item
+        for item in client.list_records(
+            site_id=site_id, record_name=normalized_record_name
+        )
+        if isinstance(item, dict)
+        and str(item.get("RecordName") or "").strip().lower() == normalized_record_name
+        and _normalize_esa_record_type(str(item.get("RecordType") or "")) == "CNAME"
+        and str(item.get("RecordSourceType") or "").strip() == "OP"
+    ]
+    return {
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
+        "record_name": normalized_record_name,
+        "deleted": deleted,
+        "deleted_count": len(deleted),
+        "remaining_count": len(remaining),
     }
 
 

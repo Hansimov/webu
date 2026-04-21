@@ -132,6 +132,67 @@ aesa site-load-balancer-origin-status \
 
 如果不传 `--load-balancer-id`，`aesa` 会先列出站点上的所有 load balancer，再批量查询这些对象的 origin status。
 
+创建一个最小可用的 load balancer probe：
+
+```bash
+aesa site-load-balancer-create \
+  --site-name example.com \
+  --name lb-probe \
+  --default-pool-name example-origin-pool \
+  --monitor-type off
+```
+
+如果只知道 pool ID，也可以直接传 ID：
+
+```bash
+aesa site-load-balancer-create \
+  --site-name example.com \
+  --name lb-probe \
+  --default-pool-id 101 \
+  --fallback-pool-id 101 \
+  --monitor-type off
+```
+
+删除一个 probe load balancer：
+
+```bash
+aesa site-load-balancer-delete \
+  --site-name example.com \
+  --name lb-probe.example.com
+```
+
+如果当前 ESA 套餐没有可用的 load balancer 配额，`aesa site-load-balancer-create` 会直接报出明确错误，例如：
+
+```text
+ESA load balancer 'lb-probe.example.com' cannot be created on site 'example.com' because the current plan does not expose usable load balancer quota
+```
+
+创建一个直接引用 origin pool 的代理 CNAME：
+
+```bash
+aesa site-origin-pool-cname-apply \
+  --site-name example.com \
+  --record-name op-probe \
+  --pool-name example-origin-pool \
+  --biz-name web
+```
+
+这个命令会创建或更新一个：
+
+- `RecordType=CNAME`
+- `Proxied=true`
+- `RecordSourceType=OP`
+
+并把记录值写成目标 origin pool 的 `RecordName`。
+
+删除这条 OP-backed CNAME：
+
+```bash
+aesa site-origin-pool-cname-delete \
+  --site-name example.com \
+  --record-name op-probe.example.com
+```
+
 ## 3. 从 Cloudflare 导入 DNS
 
 把当前 Cloudflare zone 记录导入 ESA：

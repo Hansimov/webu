@@ -17,8 +17,12 @@ from .operations import (
     ensure_site,
     list_plan_instances,
     site_check,
+    site_load_balancer_create,
+    site_load_balancer_delete,
     site_load_balancer_origin_status,
     site_load_balancers,
+    site_origin_pool_cname_apply,
+    site_origin_pool_cname_delete,
     site_origin_pools,
     site_records,
     site_status,
@@ -125,6 +129,67 @@ def cmd_site_load_balancer_origin_status(args):
             site_name=args.site_name,
             load_balancer_ids=list(args.load_balancer_id or []),
             pool_type=args.pool_type,
+        )
+    )
+
+
+def cmd_site_load_balancer_create(args):
+    print_json(
+        site_load_balancer_create(
+            site_name=args.site_name,
+            name=args.name,
+            default_pool_ids=list(args.default_pool_id or []),
+            default_pool_names=list(args.default_pool_name or []),
+            fallback_pool_id=(
+                args.fallback_pool_id if args.fallback_pool_id > 0 else None
+            ),
+            fallback_pool_name=args.fallback_pool_name,
+            description=args.description,
+            monitor_type=args.monitor_type,
+            monitor_port=args.monitor_port,
+            monitor_path=args.monitor_path,
+            monitor_method=args.monitor_method,
+            steering_policy=args.steering_policy,
+            session_affinity=args.session_affinity,
+            ttl=args.ttl,
+            enabled=(not args.disable),
+        )
+    )
+
+
+def cmd_site_load_balancer_delete(args):
+    print_json(
+        site_load_balancer_delete(
+            site_name=args.site_name,
+            load_balancer_id=(
+                args.load_balancer_id if args.load_balancer_id > 0 else None
+            ),
+            name=args.name,
+        )
+    )
+
+
+def cmd_site_origin_pool_cname_apply(args):
+    print_json(
+        site_origin_pool_cname_apply(
+            site_name=args.site_name,
+            record_name=args.record_name,
+            pool_name=args.pool_name,
+            pool_id=(args.pool_id if args.pool_id > 0 else None),
+            biz_name=args.biz_name,
+            host_policy=args.host_policy,
+            ttl=args.ttl,
+            comment=args.comment,
+            purge_conflicts=args.purge_conflicts,
+        )
+    )
+
+
+def cmd_site_origin_pool_cname_delete(args):
+    print_json(
+        site_origin_pool_cname_delete(
+            site_name=args.site_name,
+            record_name=args.record_name,
         )
     )
 
@@ -325,6 +390,163 @@ def build_parser() -> argparse.ArgumentParser:
     _add_runtime_path_options(site_load_balancer_origin_status_parser)
     site_load_balancer_origin_status_parser.set_defaults(
         func=cmd_site_load_balancer_origin_status
+    )
+
+    site_load_balancer_create_parser = subparsers.add_parser(
+        "site-load-balancer-create",
+        help="Create an ESA load balancer that references one or more origin pools.",
+    )
+    site_load_balancer_create_parser.add_argument("--site-name", required=True)
+    site_load_balancer_create_parser.add_argument(
+        "--name",
+        required=True,
+        help="Load balancer hostname. A bare label is expanded under the site domain.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--default-pool-id",
+        action="append",
+        type=int,
+        default=[],
+        help="Default origin pool ID. Repeat for multiple pools.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--default-pool-name",
+        action="append",
+        default=[],
+        help="Default origin pool name. Repeat for multiple pools.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--fallback-pool-id",
+        type=int,
+        default=0,
+        help="Optional fallback origin pool ID. Defaults to the first default pool.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--fallback-pool-name",
+        default="",
+        help="Optional fallback origin pool name. Defaults to the first default pool.",
+    )
+    site_load_balancer_create_parser.add_argument("--description", default="")
+    site_load_balancer_create_parser.add_argument(
+        "--monitor-type",
+        default="off",
+        help="Monitor type such as off, HTTP, HTTPS, or TCP.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--monitor-port",
+        type=int,
+        default=0,
+        help="Optional monitor port.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--monitor-path",
+        default="",
+        help="Optional monitor path for HTTP/HTTPS checks.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--monitor-method",
+        default="GET",
+        help="Optional monitor method for HTTP/HTTPS checks.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--steering-policy",
+        default="order",
+        choices=["order", "random"],
+        help="Load balancing strategy for the minimal supported wrapper.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--session-affinity",
+        default="off",
+        choices=["off", "ip", "cookie"],
+        help="Optional session affinity mode.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--ttl",
+        type=int,
+        default=30,
+        help="TTL for the load balancer hostname, clamped to 10-600.",
+    )
+    site_load_balancer_create_parser.add_argument(
+        "--disable",
+        action="store_true",
+        help="Create the load balancer in disabled state.",
+    )
+    _add_runtime_path_options(site_load_balancer_create_parser)
+    site_load_balancer_create_parser.set_defaults(func=cmd_site_load_balancer_create)
+
+    site_load_balancer_delete_parser = subparsers.add_parser(
+        "site-load-balancer-delete",
+        help="Delete an ESA load balancer by ID or exact name.",
+    )
+    site_load_balancer_delete_parser.add_argument("--site-name", required=True)
+    site_load_balancer_delete_parser.add_argument(
+        "--load-balancer-id",
+        type=int,
+        default=0,
+        help="Load balancer ID to delete.",
+    )
+    site_load_balancer_delete_parser.add_argument(
+        "--name",
+        default="",
+        help="Exact load balancer hostname to delete when ID is not provided.",
+    )
+    _add_runtime_path_options(site_load_balancer_delete_parser)
+    site_load_balancer_delete_parser.set_defaults(func=cmd_site_load_balancer_delete)
+
+    site_origin_pool_cname_apply_parser = subparsers.add_parser(
+        "site-origin-pool-cname-apply",
+        help="Create or update a proxied CNAME record that references an ESA origin pool through SourceType=OP.",
+    )
+    site_origin_pool_cname_apply_parser.add_argument("--site-name", required=True)
+    site_origin_pool_cname_apply_parser.add_argument("--record-name", required=True)
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--pool-name",
+        default="",
+        help="Origin pool name to reference.",
+    )
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--pool-id",
+        type=int,
+        default=0,
+        help="Origin pool ID to reference. Overrides --pool-name when provided.",
+    )
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--biz-name",
+        default="web",
+        choices=["web", "api", "image_video"],
+        help="Acceleration business type required by proxied CNAME records.",
+    )
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--host-policy",
+        default="",
+        choices=["", "follow_hostname", "follow_origin_domain"],
+        help="Optional host policy for the proxied CNAME.",
+    )
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--ttl",
+        type=int,
+        default=30,
+    )
+    site_origin_pool_cname_apply_parser.add_argument("--comment", default="")
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--purge-conflicts",
+        action="store_true",
+        help="Delete conflicting CNAME or A/AAAA records with the same name before applying the OP-backed CNAME.",
+    )
+    _add_runtime_path_options(site_origin_pool_cname_apply_parser)
+    site_origin_pool_cname_apply_parser.set_defaults(
+        func=cmd_site_origin_pool_cname_apply
+    )
+
+    site_origin_pool_cname_delete_parser = subparsers.add_parser(
+        "site-origin-pool-cname-delete",
+        help="Delete a proxied CNAME record that references an origin pool through SourceType=OP.",
+    )
+    site_origin_pool_cname_delete_parser.add_argument("--site-name", required=True)
+    site_origin_pool_cname_delete_parser.add_argument("--record-name", required=True)
+    _add_runtime_path_options(site_origin_pool_cname_delete_parser)
+    site_origin_pool_cname_delete_parser.set_defaults(
+        func=cmd_site_origin_pool_cname_delete
     )
 
     site_sync_parser = subparsers.add_parser(

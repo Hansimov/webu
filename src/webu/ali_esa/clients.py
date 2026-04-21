@@ -277,6 +277,56 @@ class AliyunEsaClient:
         items = payload.get("OriginStatus")
         return items if isinstance(items, list) else []
 
+    def create_load_balancer(
+        self,
+        *,
+        site_id: int,
+        name: str,
+        default_pools: list[int],
+        fallback_pool: int,
+        monitor: dict[str, Any],
+        steering_policy: str,
+        description: str | None = None,
+        enabled: bool | None = None,
+        session_affinity: str | None = None,
+        ttl: int | None = None,
+        random_steering: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "SiteId": int(site_id),
+            "Name": str(name).strip(),
+            "DefaultPools": [int(item) for item in default_pools],
+            "FallbackPool": int(fallback_pool),
+            "Monitor": dict(monitor or {}),
+            "SteeringPolicy": str(steering_policy).strip(),
+        }
+        if description is not None:
+            payload["Description"] = str(description)
+        if enabled is not None:
+            payload["Enabled"] = bool(enabled)
+        if session_affinity is not None:
+            payload["SessionAffinity"] = str(session_affinity).strip()
+        if ttl is not None:
+            payload["Ttl"] = int(ttl)
+        if random_steering:
+            payload["RandomSteering"] = dict(random_steering)
+        request = esa_models.CreateLoadBalancerRequest().from_map(payload)
+        return self._call(self._client.create_load_balancer, request)
+
+    def delete_load_balancer(
+        self,
+        *,
+        site_id: int,
+        load_balancer_id: int,
+    ) -> dict[str, Any]:
+        return self._call(
+            self._client.delete_load_balancer,
+            esa_models.DeleteLoadBalancerRequest(
+                site_id=int(site_id),
+                id=int(load_balancer_id),
+            ),
+        )
+
     def create_origin_pool(
         self,
         *,
