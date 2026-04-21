@@ -22,6 +22,9 @@ from webu.ali_esa.operations import (
 from webu.ali_esa.clients import AliyunEsaApiError
 
 
+TEST_CLOUDFLARE_NS = "unit-test-ns-a.cloudflare.com"
+
+
 def test_list_global_ipv6_candidates_prefers_default_route_stable(monkeypatch):
     def fake_run(command, check=False, capture_output=False, text=False):
         if command == ["ip", "-j", "-6", "route", "show", "default"]:
@@ -104,12 +107,95 @@ def test_resolve_exposure_record_requires_ipv4_companion_for_ipv6():
         _resolve_exposure_record(
             {},
             {"public_origin_address": "2001:db8:1::10"},
+            hostname="example.com",
             origin_address="auto6",
         )
     except ValueError as exc:
         assert "at least one IPv4" in str(exc)
     else:
         raise AssertionError("expected ValueError for IPv6-only ESA origin")
+
+
+def test_resolve_exposure_record_accepts_explicit_dual_stack_value():
+    result = _resolve_exposure_record(
+        {},
+        {},
+        hostname="example.com",
+        origin_address="104.21.57.71,2606:4700:3030::ac43:a0f1",
+    )
+
+    assert result == {
+        "address": "2606:4700:3030::ac43:a0f1",
+        "family": "ipv6",
+        "source": "explicit-dual",
+        "record_type": "A/AAAA",
+        "record_value": "104.21.57.71,2606:4700:3030::ac43:a0f1",
+        "record_addresses": ["104.21.57.71", "2606:4700:3030::ac43:a0f1"],
+        "record_family": "dual-stack",
+    }
+
+
+def test_resolve_exposure_record_can_use_cloudflare_authoritative_answers(
+    monkeypatch,
+):
+    def fake_run(command, check=False, capture_output=False, text=False):
+        if command == [
+            "dig",
+            "-4",
+            f"@{TEST_CLOUDFLARE_NS}",
+            "dev.example.com",
+            "A",
+            "+short",
+            "+time=2",
+            "+tries=1",
+        ]:
+            return CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="104.21.57.71\n172.67.160.241\n",
+                stderr="",
+            )
+        if command == [
+            "dig",
+            "-4",
+            f"@{TEST_CLOUDFLARE_NS}",
+            "dev.example.com",
+            "AAAA",
+            "+short",
+            "+time=2",
+            "+tries=1",
+        ]:
+            return CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="2606:4700:3030::ac43:a0f1\n2606:4700:3033::6815:3947\n",
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("webu.ali_esa.operations.subprocess.run", fake_run)
+
+    result = _resolve_exposure_record(
+        {},
+        {"cloudflare_name_server_list": [TEST_CLOUDFLARE_NS]},
+        hostname="dev.example.com",
+        origin_address="cloudflare",
+    )
+
+    assert result == {
+        "address": "2606:4700:3030::ac43:a0f1",
+        "family": "ipv6",
+        "source": "cloudflare-authoritative",
+        "record_type": "A/AAAA",
+        "record_value": "104.21.57.71,172.67.160.241,2606:4700:3030::ac43:a0f1,2606:4700:3033::6815:3947",
+        "record_addresses": [
+            "104.21.57.71",
+            "172.67.160.241",
+            "2606:4700:3030::ac43:a0f1",
+            "2606:4700:3033::6815:3947",
+        ],
+        "record_family": "dual-stack",
+    }
 
 
 def test_apply_exposure_uses_dual_stack_record_for_ipv6_origin(monkeypatch):
@@ -189,6 +275,211 @@ def test_apply_exposure_uses_dual_stack_record_for_ipv6_origin(monkeypatch):
     assert recorded["data_value"] == "198.51.100.10,2001:db8:1::10"
     assert result["origin"]["public_address_family"] == "ipv6"
     assert result["origin"]["record_family"] == "dual-stack"
+
+
+def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.ensure_site",
+        lambda **kwargs: {
+            "site": {
+                "site_name": "example.com",
+                "site_id": 123,
+                "coverage": "overseas",
+                "access_type": "NS",
+                "instance_id": "instance-1",
+                "name_server_list": [],
+                "current_ns": [],
+                "status": "pending",
+                "verify_code": "",
+                "public_origin_address": "",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client", lambda payload: object()
+    )
+
+    def fake_site_origin_pool_cname_apply(**kwargs):
+        observed.update(kwargs)
+        return {
+            "origin_pool": {
+                "Id": 21,
+                "Name": "home6-prod",
+                "RecordName": "home6-prod.origin-pool.example.com",
+                "Origins": [
+                    {
+                        "Address": "2001:db8:1::10",
+                    }
+                ],
+            },
+            "record": {
+                "record": {
+                    "RecordName": "prod.example.com",
+                    "RecordType": "CNAME",
+                    "RecordSourceType": "OP",
+                    "Data": {"Value": "home6-prod.origin-pool.example.com"},
+                },
+                "created": True,
+                "updated": False,
+                "deleted_conflicts": [],
+            },
+        }
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.site_origin_pool_cname_apply",
+        fake_site_origin_pool_cname_apply,
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._ensure_origin_rule",
+        lambda *args, **kwargs: {"rule": {"RuleName": "rule-1"}},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._upsert_site_payload",
+        lambda *args, **kwargs: {
+            "site_name": "example.com",
+            "site_id": 123,
+            "public_origin_address": kwargs.get("public_origin_address"),
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._persist_config_if_requested",
+        lambda *args, **kwargs: None,
+    )
+
+    result = apply_exposure(
+        domain_name="prod.example.com",
+        local_url="http://127.0.0.1:20002",
+        zone_name="example.com",
+        record_mode="origin-pool",
+        origin_pool_name="home6-prod",
+        biz_name="web",
+        purge_conflicts=True,
+        save_config=False,
+    )
+
+    assert observed == {
+        "site_name": "example.com",
+        "record_name": "prod.example.com",
+        "pool_name": "home6-prod",
+        "pool_id": None,
+        "biz_name": "web",
+        "host_policy": "",
+        "ttl": 30,
+        "comment": "",
+        "purge_conflicts": True,
+    }
+    assert result["origin"]["record_mode"] == "origin-pool"
+    assert result["origin"]["record_type"] == "CNAME"
+    assert result["origin"]["record_source_type"] == "OP"
+    assert result["origin"]["origin_pool"] == {
+        "id": 21,
+        "name": "home6-prod",
+        "record_name": "home6-prod.origin-pool.example.com",
+    }
+    assert result["origin"]["public_address"] == "2001:db8:1::10"
+    assert result["record"]["record"]["RecordSourceType"] == "OP"
+
+
+def test_apply_exposure_preserves_real_origin_when_using_cloudflare_bridge(
+    monkeypatch,
+):
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {
+            "sites": [
+                {
+                    "site_name": "example.com",
+                    "public_origin_address": "2001:db8:1::10",
+                    "cloudflare_name_server_list": [TEST_CLOUDFLARE_NS],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.ensure_site",
+        lambda **kwargs: {
+            "site": {
+                "site_name": "example.com",
+                "site_id": 123,
+                "coverage": "overseas",
+                "access_type": "NS",
+                "instance_id": "instance-1",
+                "name_server_list": [],
+                "current_ns": [TEST_CLOUDFLARE_NS],
+                "cloudflare_name_server_list": [TEST_CLOUDFLARE_NS],
+                "status": "active",
+                "verify_code": "",
+                "public_origin_address": "2001:db8:1::10",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client", lambda payload: object()
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._resolve_exposure_record",
+        lambda config_payload, site_payload, *, hostname, origin_address: {
+            "address": "2606:4700:3030::ac43:a0f1",
+            "family": "ipv6",
+            "source": "cloudflare-authoritative",
+            "record_type": "A/AAAA",
+            "record_value": "104.21.57.71,2606:4700:3030::ac43:a0f1",
+            "record_addresses": [
+                "104.21.57.71",
+                "2606:4700:3030::ac43:a0f1",
+            ],
+            "record_family": "dual-stack",
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._ensure_record",
+        lambda *args, **kwargs: {"record": {"RecordType": "A/AAAA"}},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._ensure_origin_rule",
+        lambda *args, **kwargs: {"rule": {"RuleName": "rule-1"}},
+    )
+
+    def fake_upsert_site_payload(*args, **kwargs):
+        recorded["public_origin_address"] = kwargs.get("public_origin_address")
+        recorded["cloudflare_name_server_list"] = kwargs.get(
+            "cloudflare_name_server_list"
+        )
+        return {
+            "site_name": "example.com",
+            "site_id": 123,
+            "public_origin_address": "2001:db8:1::10",
+            "cloudflare_name_server_list": [TEST_CLOUDFLARE_NS],
+        }
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._upsert_site_payload",
+        fake_upsert_site_payload,
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._persist_config_if_requested",
+        lambda *args, **kwargs: None,
+    )
+
+    result = apply_exposure(
+        domain_name="dev.example.com",
+        local_url="https://127.0.0.1:443",
+        zone_name="example.com",
+        origin_address="cloudflare",
+        save_config=False,
+    )
+
+    assert recorded["public_origin_address"] is None
+    assert recorded["cloudflare_name_server_list"] == [TEST_CLOUDFLARE_NS]
+    assert result["origin"]["public_address_source"] == "cloudflare-authoritative"
 
 
 def test_site_records_lists_filtered_records(monkeypatch):
@@ -704,6 +995,79 @@ def test_site_origin_pool_cname_apply_creates_op_backed_cname(monkeypatch):
     assert result["record"]["record"]["RecordSourceType"] == "OP"
     assert result["record"]["record"]["RecordName"] == "op-probe.example.com"
     assert result["after_references"]["DnsRecords"][0]["Name"] == "op-probe.example.com"
+
+
+def test_site_origin_pool_cname_apply_allows_apex_hostname(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "pending"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return []
+
+        def list_origin_pools(
+            self, *, site_id, name=None, match_type=None, order_by=None, page_size=500
+        ):
+            assert site_id == 123
+            return [{"Id": 101, "Name": "search-prod"}]
+
+        def get_origin_pool(self, *, site_id, origin_pool_id):
+            assert site_id == 123
+            assert origin_pool_id == 101
+            return {
+                "Id": 101,
+                "Name": "search-prod",
+                "RecordName": "search-prod.origin-pool.example.com",
+                "References": {"DnsRecords": [], "IPARecords": [], "LoadBalancers": []},
+                "ReferenceLBCount": 0,
+            }
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            assert site_id == 123
+            observed["record_name"] = record_name
+            if observed.get("record") is None:
+                return []
+            return [observed["record"]]
+
+        def create_record(self, **kwargs):
+            observed["create_kwargs"] = kwargs
+            observed["record"] = {
+                "RecordId": 55,
+                "RecordName": kwargs["record_name"],
+                "RecordType": kwargs["record_type"],
+                "RecordSourceType": kwargs.get("source_type"),
+                "BizName": kwargs.get("biz_name"),
+                "Proxied": kwargs.get("proxied"),
+                "Ttl": kwargs.get("ttl"),
+                "Data": {"Value": kwargs.get("data_value")},
+            }
+            return observed["record"]
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {"sites": [{"site_name": "example.com"}]},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    result = site_origin_pool_cname_apply(
+        site_name="example.com",
+        record_name="example.com",
+        pool_name="search-prod",
+        biz_name="web",
+    )
+
+    assert observed["record_name"] == "example.com"
+    assert observed["create_kwargs"]["record_name"] == "example.com"
+    assert result["record"]["record"]["RecordName"] == "example.com"
 
 
 def test_site_origin_pool_cname_delete_removes_op_backed_record(monkeypatch):

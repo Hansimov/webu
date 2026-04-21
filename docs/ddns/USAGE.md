@@ -43,6 +43,17 @@ wdns target-upsert \
   --save-config
 ```
 
+创建或更新一个 ESA direct-record target：
+
+```bash
+wdns target-upsert \
+  --name example-direct-record \
+  --provider aliesa-record \
+  --site-name example.com \
+  --record-name home.example.com \
+  --save-config
+```
+
 显式指定 target IPv6 和 ddns-go binary 路径：
 
 ```bash
@@ -74,13 +85,13 @@ wdns target-upsert \
 wdns target-delete --name example-origin-pool
 ```
 
-## 3. 生成 ddns-go YAML 并准备 origin pool
+## 3. 生成 ddns-go YAML 并准备 ESA 对象
 
 准备 target，对应动作包括：
 
 - 确认 ESA site 存在
-- 创建或查找 origin pool
-- 在需要时把 origin 重置成 seed IPv6
+- origin-pool target：创建或查找 origin pool，并在需要时把 origin 重置成 seed IPv6
+- direct-record target：按需创建或回读 direct `A/AAAA` 记录，并在需要时把记录值重置成 seed IPv6，同时切到 DNS-only 模式
 - 生成 ddns-go YAML
 
 命令：
@@ -119,8 +130,12 @@ wdns target-run-once \
 - `process.stdout` / `process.stderr`
 - `verified`
 - `current_origin_address`
+- `current_record_value`
 
-只要 `verified=true`，并且 `current_origin_address` 已经变成目标 IPv6，就说明这条 `wdns -> ddns-go -> ESA origin pool` 链路已经成立。
+对于 origin-pool target，只要 `verified=true`，并且 `current_origin_address` 已经变成目标 IPv6，就说明这条 `wdns -> ddns-go -> ESA origin pool` 链路已经成立。
+
+对于 direct-record target，只要 `verified=true`，并且 `current_record_value` 已经变成目标 IPv6，就说明这条 `wdns -> ddns-go -> ESA direct AAAA record` 链路已经成立。
+对于 direct-record target，只要 `verified=true`，并且 `current_record_value` 已经变成目标 IPv6，就说明这条 `wdns -> ddns-go -> ESA direct A/AAAA record` 链路已经成立。
 
 ## 5. 托管为 systemd 服务
 
@@ -196,15 +211,25 @@ aesa site-load-balancer-origin-status \
 
 ## 7. 当前推荐调试链路
 
+origin-pool 路径：
+
 1. 用 `aesa site-origin-pools` 确认目标 pool 存在。
 2. 用 `wdns target-prepare --seed-existing` 把 pool 准备到可观察状态。
 3. 用 `wdns target-run-once` 验证 ddns-go 是否真的把 origin 地址更新回目标 IPv6。
 4. 如果准备长期开启，再用 `wdns service-install` 托管为 systemd 服务。
 5. 用 `aesa site-load-balancers` 和 `aesa site-load-balancer-origin-status` 继续确认这个 origin pool 是否已经被公网对象引用。
 
+direct-record 路径：
+
+1. 用 `wdns target-prepare --name example-direct-record` 生成 direct-record 的 ddns-go YAML。
+2. 如果想观察一次真实改动，用 `wdns target-prepare --name example-direct-record --seed-existing` 先把记录回退到 seed IPv6。
+3. 用 `wdns target-run-once --name example-direct-record` 验证 ddns-go 是否真的把 ESA 的 direct `A/AAAA` 记录更新回目标 IPv6。
+4. 如果准备长期开启，再用 `wdns service-install --name example-direct-record` 托管为 systemd 服务。
+
 ## 8. 常见故障
 
 - `Could not find ddns-go binary`：需要在 `configs/ddns.json` 中设置 `ddns_go_binary` 或 target 级 `binary_path`，或者把 `ddns-go` 放到 PATH。
 - `target_ipv6 is required`：`configs/ali_esa.json` 中没有可回退使用的 IPv6，需要在 target 里显式传 `--target-ipv6`。
-- `verified=false`：ddns-go 可能没有真正更新 pool，需要结合 `process.stdout`、`process.stderr` 和 `aesa site-origin-pools` 继续排查。
+- `verified=false`：ddns-go 可能没有真正更新 ESA 对象；origin-pool target 继续配合 `aesa site-origin-pools` 排查，direct-record target 则配合 `aesa site-records --record-name <fqdn> --record-type 'A/AAAA'` 排查。
 - `service-install` 失败：通常是 sudo / systemd 权限不足，或者目标 binary / YAML 路径不可访问。
+- 想用 direct-record 彻底替代当前 Cloudflare bridge：先确认家宽公网 `443/TLS` 入口已经补齐；仅有 DDNS 自动更新还不够，当前实测只确认了 IPv6 `80` 直达，本机并没有可用的公网 `443` 监听。

@@ -228,6 +228,14 @@ def cmd_exposure_apply(args):
             access_type=args.access_type,
             instance_id=args.instance_id,
             origin_address=args.origin_address,
+            record_mode=args.record_mode,
+            origin_pool_name=args.origin_pool_name,
+            origin_pool_id=(args.origin_pool_id if args.origin_pool_id > 0 else None),
+            biz_name=args.biz_name,
+            host_policy=args.host_policy,
+            ttl=args.ttl,
+            comment=args.comment,
+            purge_conflicts=args.purge_conflicts,
             save_config=args.save_config,
             verify_site_after_apply=args.verify_site,
         )
@@ -609,6 +617,51 @@ def build_parser() -> argparse.ArgumentParser:
             "or use 'auto4' / 'auto6' to prefer a specific family. ESA proxied records use Alibaba Cloud's "
             "A/AAAA model and still require at least one IPv4 origin address."
         ),
+    )
+    exposure_apply_parser.add_argument(
+        "--record-mode",
+        default="direct",
+        choices=["direct", "origin-pool"],
+        help="Whether exposure-apply should write a direct A/AAAA record or a proxied CNAME backed by an ESA origin pool.",
+    )
+    exposure_apply_parser.add_argument(
+        "--origin-pool-name",
+        default="",
+        help="Origin pool name used when --record-mode origin-pool is selected.",
+    )
+    exposure_apply_parser.add_argument(
+        "--origin-pool-id",
+        type=int,
+        default=0,
+        help="Origin pool ID used when --record-mode origin-pool is selected.",
+    )
+    exposure_apply_parser.add_argument(
+        "--biz-name",
+        default="web",
+        choices=["web", "api", "image_video"],
+        help="ESA business type used for proxied records; relevant for --record-mode origin-pool.",
+    )
+    exposure_apply_parser.add_argument(
+        "--host-policy",
+        default="",
+        choices=["", "follow_hostname", "follow_origin_domain"],
+        help="Optional ESA host policy used for --record-mode origin-pool.",
+    )
+    exposure_apply_parser.add_argument(
+        "--ttl",
+        type=int,
+        default=30,
+        help="Record TTL used for --record-mode origin-pool.",
+    )
+    exposure_apply_parser.add_argument(
+        "--comment",
+        default="",
+        help="Optional record comment used for --record-mode origin-pool.",
+    )
+    exposure_apply_parser.add_argument(
+        "--purge-conflicts",
+        action="store_true",
+        help="Delete conflicting A/AAAA or CNAME records with the same name before applying the desired public record.",
     )
     exposure_apply_parser.add_argument("--verify-site", action="store_true")
     exposure_apply_parser.add_argument("--save-config", action="store_true")

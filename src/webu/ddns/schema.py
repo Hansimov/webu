@@ -7,7 +7,7 @@ from typing import Any
 from webu.schema import ConfigSpec, load_json_config, save_json_config
 
 
-_ALLOWED_PROVIDERS = {"aliesa-origin-pool"}
+_ALLOWED_PROVIDERS = {"aliesa-origin-pool", "aliesa-record"}
 _ALLOWED_IPV6_SOURCE_MODES = {"cmd", "url"}
 
 DEFAULT_PROVIDER = "aliesa-origin-pool"
@@ -24,10 +24,11 @@ DDNS_CONFIG = ConfigSpec(
     file_name="ddns.json",
     purpose=[
         "管理 ddns-go 在本地的运行配置和 systemd 服务。",
-        "让 wdns 可以为阿里云 ESA origin pool 生成配置、执行单次更新并管理常驻 DDNS 服务。",
+        "让 wdns 可以为阿里云 ESA origin pool 或 direct record 生成配置、执行单次更新并管理常驻 DDNS 服务。",
     ],
     notes=[
-        "当前支持的 provider 是 aliesa-origin-pool，用于维护阿里云 ESA origin pool 中的 origin 地址。",
+        "当前支持的 provider 包括 aliesa-origin-pool 和 aliesa-record。",
+        "aliesa-origin-pool 用于维护阿里云 ESA origin pool 中的 origin 地址；aliesa-record 用于维护 ESA 站点内的 direct A/AAAA 记录，并以 IPv6 值运行在 DNS-only 模式。",
         "如果 target_ipv6 留空，wdns 会回退读取 configs/ali_esa.json 中的 default_public_origin_ipv6 或站点级 public_origin_address。",
         "如果 binary_path 留空，wdns 会优先尝试使用 ddns_go_binary，然后回退到 debugs/ddns-go/bin/ddns-go 或 PATH 中的 ddns-go。",
         "本文件属于本地运行时配置，不应提交真实站点、origin 或公网地址。",
@@ -54,11 +55,12 @@ DDNS_CONFIG = ConfigSpec(
                         "name": {"type": "string", "minLength": 1},
                         "provider": {
                             "type": "string",
-                            "enum": ["aliesa-origin-pool"],
+                            "enum": ["aliesa-origin-pool", "aliesa-record"],
                         },
                         "site_name": {"type": "string", "minLength": 1},
-                        "pool_name": {"type": "string", "minLength": 1},
-                        "origin_name": {"type": "string", "minLength": 1},
+                        "pool_name": {"type": "string"},
+                        "origin_name": {"type": "string"},
+                        "record_name": {"type": "string"},
                         "enabled": {"type": "boolean"},
                         "target_ipv6": {"type": "string"},
                         "seed_ipv6": {"type": "string"},
@@ -74,12 +76,33 @@ DDNS_CONFIG = ConfigSpec(
                         "cache_times": {"type": "integer"},
                         "service_name": {"type": "string"},
                     },
-                    "required": [
-                        "name",
-                        "provider",
-                        "site_name",
-                        "pool_name",
-                        "origin_name",
+                    "oneOf": [
+                        {
+                            "properties": {
+                                "provider": {"const": "aliesa-origin-pool"},
+                                "pool_name": {"minLength": 1},
+                                "origin_name": {"minLength": 1},
+                            },
+                            "required": [
+                                "name",
+                                "provider",
+                                "site_name",
+                                "pool_name",
+                                "origin_name",
+                            ],
+                        },
+                        {
+                            "properties": {
+                                "provider": {"const": "aliesa-record"},
+                                "record_name": {"minLength": 1},
+                            },
+                            "required": [
+                                "name",
+                                "provider",
+                                "site_name",
+                                "record_name",
+                            ],
+                        },
                     ],
                 },
             },
@@ -95,6 +118,7 @@ class DdnsTargetConfig:
     site_name: str
     pool_name: str
     origin_name: str
+    record_name: str
     enabled: bool
     target_ipv6: str
     seed_ipv6: str
@@ -142,10 +166,16 @@ def list_targets(payload: dict[str, Any]) -> list[DdnsTargetConfig]:
         if not isinstance(raw_item, dict):
             continue
         name = str(raw_item.get("name") or "").strip()
+        provider = normalize_provider(raw_item.get("provider"))
         site_name = str(raw_item.get("site_name") or "").strip()
         pool_name = str(raw_item.get("pool_name") or "").strip()
         origin_name = str(raw_item.get("origin_name") or "").strip()
-        if not name or not site_name or not pool_name or not origin_name:
+        record_name = str(raw_item.get("record_name") or "").strip()
+        if not name or not site_name:
+            continue
+        if provider == "aliesa-origin-pool" and (not pool_name or not origin_name):
+            continue
+        if provider == "aliesa-record" and not record_name:
             continue
         ttl = raw_item.get("ttl")
         run_interval_seconds = raw_item.get("run_interval_seconds")
@@ -153,10 +183,11 @@ def list_targets(payload: dict[str, Any]) -> list[DdnsTargetConfig]:
         items.append(
             DdnsTargetConfig(
                 name=name,
-                provider=normalize_provider(raw_item.get("provider")),
+                provider=provider,
                 site_name=site_name,
                 pool_name=pool_name,
                 origin_name=origin_name,
+                record_name=record_name,
                 enabled=bool(raw_item.get("enabled", True)),
                 target_ipv6=str(raw_item.get("target_ipv6") or "").strip(),
                 seed_ipv6=str(
@@ -223,6 +254,7 @@ def upsert_target(payload: dict[str, Any], target: DdnsTargetConfig) -> dict[str
         "site_name": target.site_name,
         "pool_name": target.pool_name,
         "origin_name": target.origin_name,
+        "record_name": target.record_name,
         "enabled": target.enabled,
         "target_ipv6": target.target_ipv6,
         "seed_ipv6": target.seed_ipv6,

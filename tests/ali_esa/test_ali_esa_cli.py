@@ -35,3 +35,64 @@ def test_parser_supports_load_balancer_create_and_delete_commands():
     assert delete_args.command == "site-load-balancer-delete"
     assert delete_args.site_name == "example.com"
     assert delete_args.name == "lb-probe.example.com"
+
+
+def test_parser_supports_exposure_apply_origin_pool_mode():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "exposure-apply",
+            "--domain",
+            "prod.example.com",
+            "--local-url",
+            "http://127.0.0.1:20002",
+            "--zone-name",
+            "example.com",
+            "--record-mode",
+            "origin-pool",
+            "--origin-pool-name",
+            "home6-prod",
+            "--biz-name",
+            "web",
+            "--purge-conflicts",
+        ]
+    )
+
+    assert args.command == "exposure-apply"
+    assert args.domain_name == "prod.example.com"
+    assert args.local_url == "http://127.0.0.1:20002"
+    assert args.zone_name == "example.com"
+    assert args.record_mode == "origin-pool"
+    assert args.origin_pool_name == "home6-prod"
+    assert args.biz_name == "web"
+    assert args.purge_conflicts is True
+
+
+def test_parser_supports_exposure_apply_cloudflare_bridge_mode():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "exposure-apply",
+            "--domain",
+            "dev.example.com",
+            "--local-url",
+            "https://127.0.0.1:443",
+            "--zone-name",
+            "example.com",
+            "--record-mode",
+            "direct",
+            "--origin-address",
+            "cloudflare",
+            "--purge-conflicts",
+        ]
+    )
+
+    assert args.command == "exposure-apply"
+    assert args.domain_name == "dev.example.com"
+    assert args.local_url == "https://127.0.0.1:443"
+    assert args.zone_name == "example.com"
+    assert args.record_mode == "direct"
+    assert args.origin_address == "cloudflare"
+    assert args.purge_conflicts is True

@@ -252,10 +252,51 @@ aesa exposure-apply \
   --save-config
 ```
 
+如果当前公网 IPv4 并不适合作为 ESA 回源，而你已经有一个由 `wdns` 维护的 IPv6 origin pool，可以改成让公开 hostname 通过 origin pool 暴露：
+
+```bash
+aesa exposure-apply \
+  --domain-name search.example.com \
+  --local-url http://127.0.0.1:8930 \
+  --zone-name example.com \
+  --record-mode origin-pool \
+  --origin-pool-name home6-prod \
+  --biz-name web \
+  --purge-conflicts \
+  --save-config
+```
+
+这个模式会同时做两件事：
+
+- 创建或更新一个 `RecordType=CNAME`、`Proxied=true`、`RecordSourceType=OP` 的公开记录。
+- 为该 hostname 创建或更新 ESA origin rule，把流量送到 `--local-url` 对应的本机端口。
+
+如果站点的真实 origin 仍然只能通过现有 Cloudflare Tunnel 对外提供，而你又已经把权威 NS 切到了 ESA，可以改成让 ESA 通过 Cloudflare 双栈边缘地址做 HTTPS bridge：
+
+```bash
+aesa exposure-apply \
+  --domain-name search.example.com \
+  --local-url https://127.0.0.1:443 \
+  --zone-name example.com \
+  --record-mode direct \
+  --origin-address cloudflare \
+  --purge-conflicts \
+  --save-config
+```
+
+这个模式会从本地 `configs/ali_esa.json` 里保存的 `sites[].cloudflare_name_server_list` 直接查询旧 Cloudflare 权威 NS 的 A/AAAA 结果，并生成：
+
+- 指向当前 Cloudflare 双栈边缘地址的 ESA 代理 `A/AAAA` 记录。
+- `OriginScheme=https`、`OriginHttpsPort=443`、`OriginSni=<hostname>` 的 hostname 级 origin rule。
+
+它适合“ESA authoritative DNS 已接管，但 ESA edge 还不能直连真实 home origin”的过渡阶段。这个模式不会覆盖 `sites[].public_origin_address` 中保存的真实回源地址。
+
 这里有两个必须牢记的限制：
 
 - ESA 当前公开代理路径使用的是 `A/AAAA`，不是独立 `AAAA`。
 - 即使使用 `auto6`，ESA 仍要求记录值中至少包含一个 IPv4 地址；因此请先在 `configs/ali_esa.json` 中配置 `default_public_origin_ipv4`。
+
+如果使用 `--record-mode origin-pool`，上面第二条 IPv4 限制就不再由公开记录承担，而是改由 origin pool 自己维护真实回源地址。这也是当前公网 IPv4 不通、但公网 IPv6 可用时更稳妥的路径。
 
 应用后可以再次用 `site-records` 检查生成的记录值和代理状态。
 

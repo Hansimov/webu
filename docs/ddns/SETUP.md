@@ -4,15 +4,17 @@
 
 ## 模块定位
 
-`webu.ddns` 当前面向一个明确场景：
+`webu.ddns` 当前面向两个紧邻的阿里云 DDNS 场景：
 
 - 用 `ddns-go` 维护阿里云 ESA origin pool 中的 origin 地址。
+- 用 `ddns-go` 维护阿里云 ESA 站点中的 direct record。
 - 把 ddns-go 的配置生成、单次执行和常驻服务管理统一到 `wdns` CLI。
 - 避免继续把 DDNS 相关逻辑散落在 `debugs/` 脚本里。
 
 当前已支持的 provider：
 
 - `aliesa-origin-pool`
+- `aliesa-record`
 
 ## 运行前提
 
@@ -67,10 +69,11 @@ wdns config-check
 每个 target 的关键字段：
 
 - `name`：本地 target 标识，也是默认 systemd unit 名称的来源。
-- `provider`：当前固定为 `aliesa-origin-pool`。
+- `provider`：当前支持 `aliesa-origin-pool` 或 `aliesa-record`。
 - `site_name`：ESA 站点名。
 - `pool_name`：目标 origin pool 名称。
 - `origin_name`：pool 中具体要维护的 origin 名称。
+- `record_name`：当 provider=`aliesa-record` 时要维护的完整记录名。
 - `target_ipv6`：目标 IPv6；留空时回退读取 `ali_esa.json`。
 - `seed_ipv6`：用于可观察测试的 seed IPv6。
 - `ipv6_source_mode`：`cmd` 或 `url`。
@@ -85,9 +88,9 @@ wdns config-check
 ## 推荐配置流程
 
 1. 用 `wdns config-init` 生成 `configs/ddns.json`。
-2. 用 `wdns target-upsert` 创建一个 ESA origin-pool target，而不是手工编辑 JSON。
+2. 用 `wdns target-upsert` 创建一个 ESA origin-pool 或 direct-record target，而不是手工编辑 JSON。
 3. 如果误加了 target，用 `wdns target-delete` 清理本地配置。
-4. 用 `wdns target-prepare` 确认 origin pool 和 ddns-go YAML 能正常生成。
+4. 用 `wdns target-prepare` 确认目标对象和 ddns-go YAML 能正常生成。
 5. 用 `wdns target-run-once` 做一次可验证的单次更新。
 6. 确认无误后，再用 `wdns service-install` 把目标托管为 systemd 服务。
 
@@ -102,8 +105,21 @@ wdns target-upsert \
   --save-config
 ```
 
+direct-record 示例：
+
+```bash
+wdns target-upsert \
+  --name example-direct-record \
+  --provider aliesa-record \
+  --site-name example.com \
+  --record-name home.example.com \
+  --save-config
+```
+
 ## 当前已知限制
 
-- 当前 `wdns` 只负责维护 ESA origin pool 中的 origin 地址，不直接创建可公开接入的 ESA load balancer 或其他公网对象。
+- 当前 `wdns` 负责维护 ESA origin pool 中的 origin 地址，以及 ESA direct record；它仍然不负责创建更复杂的公网对象，例如 ESA load balancer。
+- `aliesa-record` 在 ESA 实际接口上使用 direct `A/AAAA` 记录，并以单个 IPv6 值运行在 DNS-only 模式，适合家宽 IPv6 直出或单独的 IPv6 探测链路，不自动补齐 IPv4 能力。
 - `wdns` 生成的 ddns-go YAML 已经验证必须使用 ddns-go 自己 Go YAML marshal 出来的 canonical lower-case 键名。
 - 普通 ESA 代理 `A/AAAA` 记录不能直接把 `*.origin-pool.<site>` 记录名当成值；如果需要对公网生效，仍要进一步结合 ESA 的 load balancer / IPA 等对象。
+- 如果目标是彻底下线当前 Cloudflare bridge，除了 DDNS 控制面，还必须先补齐本机公网 `443/TLS` 入口；当前仅验证到 IPv6 `80` 可直达，IPv6 `443` 仍拒绝，IPv4 明文入口也未证实可公网直达。

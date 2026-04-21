@@ -29,6 +29,19 @@ def test_parser_supports_config_target_and_service_commands():
             config_dir,
         ]
     )
+    record_upsert_args = parser.parse_args(
+        [
+            "target-upsert",
+            "--name",
+            "example-direct-record",
+            "--provider",
+            "aliesa-record",
+            "--site-name",
+            "example.com",
+            "--record-name",
+            "home.example.com",
+        ]
+    )
     prepare_args = parser.parse_args(
         ["target-prepare", "--name", "example-origin-pool"]
     )
@@ -55,6 +68,8 @@ def test_parser_supports_config_target_and_service_commands():
     assert upsert_args.site_name == "example.com"
     assert upsert_args.project_root == project_root
     assert upsert_args.config_dir == config_dir
+    assert record_upsert_args.provider == "aliesa-record"
+    assert record_upsert_args.record_name == "home.example.com"
     assert prepare_args.seed_existing is False
     assert delete_args.name == "example-origin-pool"
     assert run_once_args.timeout_seconds == 9

@@ -48,6 +48,7 @@ DEFAULT_SNAPSHOT_OUTPUT_DIR = Path("debugs/ali-esa-snapshots")
 DEFAULT_PUBLIC_IP_DETECTION_URL = "https://ifconfig.me/ip"
 DEFAULT_SITE_VERIFY_ATTEMPTS = 10
 DEFAULT_SITE_VERIFY_INTERVAL_SECONDS = 15
+DEFAULT_EXPOSURE_RECORD_MODE = "direct"
 SUPPORTED_CLOUDFLARE_IMPORT_RECORD_TYPES = {
     "A",
     "AAAA",
@@ -120,6 +121,7 @@ def _serialize_site(site: SiteConfig | dict[str, Any] | None) -> dict[str, Any] 
             "verify_code": site.verify_code,
             "name_server_list": site.name_server_list,
             "current_ns": site.current_ns,
+            "cloudflare_name_server_list": site.cloudflare_name_server_list,
             "public_origin_address": site.public_origin_address,
             "cloudflare_zone_id": site.cloudflare_zone_id,
             "registrar_task_no": site.registrar_task_no,
@@ -244,6 +246,7 @@ def _upsert_site_payload(
     instance_id: str,
     site_data: dict[str, Any],
     current_ns: list[str] | None = None,
+    cloudflare_name_server_list: list[str] | None = None,
     public_origin_address: str | None = None,
     registrar_task_no: str | None = None,
     last_verified_at: str | None = None,
@@ -277,6 +280,11 @@ def _upsert_site_payload(
             current_ns
             if current_ns is not None
             else (existing.current_ns if existing is not None else [])
+        ),
+        cloudflare_name_server_list=(
+            cloudflare_name_server_list
+            if cloudflare_name_server_list is not None
+            else (existing.cloudflare_name_server_list if existing is not None else [])
         ),
         public_origin_address=str(
             public_origin_address
@@ -540,6 +548,32 @@ def _resolve_origin_address(
     }
 
 
+def _normalize_exposure_record_mode(value: object) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    if not normalized:
+        return DEFAULT_EXPOSURE_RECORD_MODE
+    aliases = {
+        "originpool": "origin-pool",
+        "origin-pool-cname": "origin-pool",
+        "op": "origin-pool",
+        "pool": "origin-pool",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"direct", "origin-pool"}:
+        raise ValueError("record_mode must be one of: direct, origin-pool")
+    return normalized
+
+
+def _serialize_record_result(record_result: dict[str, Any]) -> dict[str, Any]:
+    record_payload = record_result.get("record")
+    return {
+        "record": record_payload,
+        "created": bool(record_result.get("created")),
+        "updated": bool(record_result.get("updated")),
+        "deleted_conflicts": list(record_result.get("deleted_conflicts") or []),
+    }
+
+
 def _normalize_record_value(value: object) -> str:
     if value is None:
         return ""
@@ -579,8 +613,43 @@ def _resolve_exposure_record(
     config_payload: dict[str, Any],
     site_payload: dict[str, Any],
     *,
+    hostname: str,
     origin_address: str,
 ) -> dict[str, Any]:
+    raw_origin_address = str(origin_address or "").strip()
+    if raw_origin_address.lower() == "cloudflare":
+        return _resolve_cloudflare_bridge_record(site_payload, hostname=hostname)
+
+    if "," in raw_origin_address:
+        explicit_addresses = _normalize_esa_record_data_value(
+            _ESA_ADDRESS_RECORD_TYPE,
+            raw_origin_address,
+        )
+        record_addresses = [item for item in explicit_addresses.split(",") if item]
+        record_versions = {
+            ip_address(item).version for item in record_addresses if item.strip()
+        }
+        if 4 not in record_versions:
+            raise ValueError(
+                "Alibaba Cloud ESA proxied A/AAAA records require at least one IPv4 origin address; set default_public_origin_ipv4 in configs/ali_esa.json or use an IPv4 origin."
+            )
+        preferred_address = next(
+            (item for item in record_addresses if ip_address(item).version == 6),
+            record_addresses[0],
+        )
+        preferred_family = f"ipv{ip_address(preferred_address).version}"
+        return {
+            "address": preferred_address,
+            "family": preferred_family,
+            "source": "explicit-dual",
+            "record_type": _ESA_ADDRESS_RECORD_TYPE,
+            "record_value": explicit_addresses,
+            "record_addresses": record_addresses,
+            "record_family": (
+                "dual-stack" if len(record_versions) > 1 else preferred_family
+            ),
+        }
+
     resolved = _resolve_origin_address(
         config_payload,
         site_payload,
@@ -628,6 +697,108 @@ def _resolve_exposure_record(
             if resolved["family"] == "ipv6" and bool(companion_ipv4)
             else resolved["family"]
         ),
+    }
+
+
+def _cloudflare_authoritative_nameservers(site_payload: dict[str, Any]) -> list[str]:
+    configured = _normalize_nameservers(
+        site_payload.get("cloudflare_name_server_list")
+        or site_payload.get("current_ns")
+    )
+    return [item for item in configured if item.lower().endswith(".cloudflare.com")]
+
+
+def _query_authoritative_dns(
+    *,
+    nameserver: str,
+    hostname: str,
+    record_type: str,
+) -> list[str]:
+    completed = subprocess.run(
+        [
+            "dig",
+            "-4",
+            f"@{nameserver}",
+            hostname,
+            record_type,
+            "+short",
+            "+time=2",
+            "+tries=1",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0 and not str(completed.stdout or "").strip():
+        return []
+
+    expected_version = 4 if str(record_type).upper() == "A" else 6
+    resolved: list[str] = []
+    for line in str(completed.stdout or "").splitlines():
+        candidate = str(line or "").strip()
+        if not candidate:
+            continue
+        try:
+            parsed = ip_address(candidate)
+        except ValueError:
+            continue
+        if parsed.version == expected_version:
+            resolved.append(str(parsed))
+    return resolved
+
+
+def _resolve_cloudflare_bridge_record(
+    site_payload: dict[str, Any],
+    *,
+    hostname: str,
+) -> dict[str, Any]:
+    nameservers = _cloudflare_authoritative_nameservers(site_payload)
+    if not nameservers:
+        raise ValueError(
+            "origin_address=cloudflare requires sites[].cloudflare_name_server_list or current_ns with Cloudflare authoritative nameservers in configs/ali_esa.json"
+        )
+
+    resolved_a: list[str] = []
+    resolved_aaaa: list[str] = []
+    for nameserver in nameservers:
+        if not resolved_a:
+            resolved_a = _query_authoritative_dns(
+                nameserver=nameserver,
+                hostname=hostname,
+                record_type="A",
+            )
+        if not resolved_aaaa:
+            resolved_aaaa = _query_authoritative_dns(
+                nameserver=nameserver,
+                hostname=hostname,
+                record_type="AAAA",
+            )
+        if resolved_a and resolved_aaaa:
+            break
+
+    if not resolved_a:
+        raise ValueError(
+            f"Could not resolve Cloudflare authoritative A records for {hostname}"
+        )
+
+    record_value = _normalize_esa_record_data_value(
+        _ESA_ADDRESS_RECORD_TYPE,
+        ",".join(resolved_a + resolved_aaaa),
+    )
+    record_addresses = [item for item in record_value.split(",") if item]
+    preferred_address = next(
+        (item for item in record_addresses if ip_address(item).version == 6),
+        record_addresses[0],
+    )
+    preferred_family = f"ipv{ip_address(preferred_address).version}"
+    return {
+        "address": preferred_address,
+        "family": preferred_family,
+        "source": "cloudflare-authoritative",
+        "record_type": _ESA_ADDRESS_RECORD_TYPE,
+        "record_value": record_value,
+        "record_addresses": record_addresses,
+        "record_family": ("dual-stack" if bool(resolved_aaaa) else "ipv4"),
     }
 
 
@@ -1308,11 +1479,14 @@ def _normalize_subdomain_under_site(
     *,
     site_name: str,
     label: str,
+    allow_apex: bool = False,
 ) -> str:
     normalized = _require_text(value, label).strip().lower()
     normalized_site_name = _require_text(site_name, "site_name").strip().lower()
     if "." not in normalized:
         normalized = f"{normalized}.{normalized_site_name}"
+    if normalized == normalized_site_name and allow_apex:
+        return normalized
     if normalized == normalized_site_name or not normalized.endswith(
         f".{normalized_site_name}"
     ):
@@ -1590,6 +1764,7 @@ def site_origin_pool_cname_apply(
         record_name,
         site_name=context["site_name"],
         label="record_name",
+        allow_apex=True,
     )
     normalized_biz_name = str(biz_name or "web").strip() or "web"
     if normalized_biz_name not in {"web", "api", "image_video"}:
@@ -1658,6 +1833,7 @@ def site_origin_pool_cname_delete(
         record_name,
         site_name=context["site_name"],
         label="record_name",
+        allow_apex=True,
     )
 
     matches = [
@@ -2052,12 +2228,21 @@ def apply_exposure(
     access_type: str = "",
     instance_id: str = "",
     origin_address: str = "auto",
+    record_mode: str = DEFAULT_EXPOSURE_RECORD_MODE,
+    origin_pool_name: str = "",
+    origin_pool_id: int | None = None,
+    biz_name: str = "web",
+    host_policy: str = "",
+    ttl: int = 30,
+    comment: str = "",
+    purge_conflicts: bool = False,
     save_config: bool = False,
     verify_site_after_apply: bool = False,
 ) -> dict[str, Any]:
     hostname = _require_text(domain_name, "domain_name")
     normalized_site_name = str(zone_name or infer_site_name(hostname)).strip()
     origin = _parse_origin(local_url)
+    normalized_record_mode = _normalize_exposure_record_mode(record_mode)
     config_payload = load_ali_esa_config(validate=False)
     ensured_site = ensure_site(
         site_name=normalized_site_name,
@@ -2073,29 +2258,75 @@ def apply_exposure(
             f"ESA site '{normalized_site_name}' does not have a valid SiteId"
         )
 
-    exposure_record = _resolve_exposure_record(
-        config_payload,
-        site_payload,
-        origin_address=origin_address,
-    )
+    client = _build_esa_client(config_payload)
+
+    exposure_record: dict[str, Any]
+    record_result: dict[str, Any]
+    if normalized_record_mode == "origin-pool":
+        origin_pool_result = site_origin_pool_cname_apply(
+            site_name=normalized_site_name,
+            record_name=hostname,
+            pool_name=origin_pool_name,
+            pool_id=origin_pool_id,
+            biz_name=biz_name,
+            host_policy=host_policy,
+            ttl=ttl,
+            comment=comment,
+            purge_conflicts=purge_conflicts,
+        )
+        origin_pool_payload = origin_pool_result.get("origin_pool") or {}
+        origins = origin_pool_payload.get("Origins") or []
+        primary_origin = origins[0] if origins else {}
+        resolved_origin_address = str(primary_origin.get("Address") or "").strip()
+        if not resolved_origin_address:
+            raise ValueError(
+                f"ESA origin pool '{origin_pool_payload.get('Name')}' does not expose a usable origin address"
+            )
+        parsed_origin_address = ip_address(resolved_origin_address)
+        pool_record_name = str(origin_pool_payload.get("RecordName") or "").strip()
+        exposure_record = {
+            "address": resolved_origin_address,
+            "family": f"ipv{parsed_origin_address.version}",
+            "source": "origin-pool",
+            "record_type": "CNAME",
+            "record_value": pool_record_name,
+            "record_addresses": [resolved_origin_address],
+            "record_family": f"ipv{parsed_origin_address.version}",
+            "record_mode": normalized_record_mode,
+            "record_source_type": "OP",
+            "origin_pool": {
+                "id": origin_pool_payload.get("Id"),
+                "name": origin_pool_payload.get("Name"),
+                "record_name": pool_record_name,
+            },
+        }
+        record_result = _serialize_record_result(origin_pool_result.get("record") or {})
+    else:
+        exposure_record = _resolve_exposure_record(
+            config_payload,
+            site_payload,
+            hostname=hostname,
+            origin_address=origin_address,
+        )
+        resolved_origin_address = str(exposure_record["address"])
+        record_result = _ensure_record(
+            client,
+            site_id=site_id,
+            record_name=hostname,
+            record_type=str(exposure_record["record_type"]),
+            data_value=str(exposure_record["record_value"]),
+            ttl=1,
+            proxied=True,
+            biz_name="web",
+            purge_conflicts=True,
+        )
+
     resolved_origin_address = str(exposure_record["address"])
     origin_address_source = str(exposure_record["source"])
     origin_address_family = str(exposure_record["family"])
     record_type = str(exposure_record["record_type"])
     record_value = str(exposure_record["record_value"])
 
-    client = _build_esa_client(config_payload)
-    record_result = _ensure_record(
-        client,
-        site_id=site_id,
-        record_name=hostname,
-        record_type=record_type,
-        data_value=record_value,
-        ttl=1,
-        proxied=True,
-        biz_name="web",
-        purge_conflicts=True,
-    )
     origin_verify = None if origin["scheme"] == "http" else "off"
     origin_rule_result = _ensure_origin_rule(
         client,
@@ -2107,6 +2338,12 @@ def apply_exposure(
         origin_sni=(hostname if origin["scheme"] == "https" else None),
         origin_verify=origin_verify,
         origin_read_timeout=10,
+    )
+
+    persisted_public_origin_address = (
+        None
+        if origin_address_source == "cloudflare-authoritative"
+        else resolved_origin_address
     )
 
     verify_result = None
@@ -2150,7 +2387,11 @@ def apply_exposure(
             if current_ns is not None
             else site_payload.get("current_ns") or []
         ),
-        public_origin_address=resolved_origin_address,
+        cloudflare_name_server_list=(
+            site_payload.get("cloudflare_name_server_list")
+            or site_payload.get("current_ns")
+        ),
+        public_origin_address=persisted_public_origin_address,
         last_verified_at=(
             _utc_now_iso() if bool((verify_result or {}).get("Passed")) else None
         ),
@@ -2169,10 +2410,13 @@ def apply_exposure(
             "public_address": resolved_origin_address,
             "public_address_family": origin_address_family,
             "public_address_source": origin_address_source,
+            "record_mode": normalized_record_mode,
             "record_type": record_type,
             "record_value": record_value,
             "record_addresses": list(exposure_record["record_addresses"]),
             "record_family": str(exposure_record["record_family"]),
+            "record_source_type": str(exposure_record.get("record_source_type") or ""),
+            "origin_pool": exposure_record.get("origin_pool"),
         },
         "record": record_result,
         "origin_rule": origin_rule_result,

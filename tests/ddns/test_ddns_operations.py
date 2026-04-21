@@ -159,6 +159,189 @@ def test_target_delete_removes_existing_target(monkeypatch, tmp_path):
     assert result["remaining_count"] == 1
 
 
+def test_target_prepare_can_seed_direct_record(monkeypatch, tmp_path):
+    project_root = tmp_path
+    (project_root / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    config_dir = project_root / "configs"
+    config_dir.mkdir()
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(project_root))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    target_upsert(
+        name="example-direct-record",
+        provider="aliesa-record",
+        site_name="example.com",
+        record_name="home.example.com",
+        save_config=True,
+    )
+
+    monkeypatch.setattr(
+        "webu.ddns.operations.load_ali_esa_config",
+        lambda validate=False: {
+            "default_public_origin_ipv6": "2001:db8::10",
+            "aliyun_access_id": "ak-test",
+            "aliyun_access_secret": "sk-test",
+            "sites": [{"site_name": "example.com", "public_origin_address": ""}],
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ddns.operations.resolve_credentials",
+        lambda payload: {
+            "aliyun_access_id": "ak-test",
+            "aliyun_access_secret": "sk-test",
+            "region_id": "cn-hangzhou",
+        },
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.value = "2001:db8::20"
+            self.proxied = True
+
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name}
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            assert site_id == 123
+            assert record_name == "home.example.com"
+            assert record_type == "A/AAAA"
+            return [
+                {
+                    "RecordId": 11,
+                    "RecordName": "home.example.com",
+                    "RecordType": "A/AAAA",
+                    "Data": {"Value": self.value},
+                    "Proxied": self.proxied,
+                }
+            ]
+
+        def update_record(
+            self,
+            *,
+            record_id,
+            record_type,
+            ttl,
+            data_value,
+            proxied=None,
+            **kwargs,
+        ):
+            assert record_id == 11
+            assert record_type == "A/AAAA"
+            assert ttl == 600
+            assert proxied is False
+            self.value = data_value
+            self.proxied = proxied
+            return {"RecordId": record_id}
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(
+        "webu.ddns.operations._build_esa_client", lambda payload: fake_client
+    )
+
+    result = target_prepare(name="example-direct-record", seed_existing=True)
+
+    config_path = Path(result["ddns_go_config_path"])
+    assert config_path.exists()
+    rendered = config_path.read_text(encoding="utf-8")
+    assert "home.example.com" in rendered
+    assert result["record_action"] == "seeded"
+    assert result["current_record_value"] == "2001:db8::1"
+
+
+def test_target_prepare_can_create_direct_record_when_absent(monkeypatch, tmp_path):
+    project_root = tmp_path
+    (project_root / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    config_dir = project_root / "configs"
+    config_dir.mkdir()
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(project_root))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    target_upsert(
+        name="example-direct-record",
+        provider="aliesa-record",
+        site_name="example.com",
+        record_name="home.example.com",
+        save_config=True,
+    )
+
+    monkeypatch.setattr(
+        "webu.ddns.operations.load_ali_esa_config",
+        lambda validate=False: {
+            "default_public_origin_ipv6": "2001:db8::10",
+            "aliyun_access_id": "ak-test",
+            "aliyun_access_secret": "sk-test",
+            "sites": [{"site_name": "example.com", "public_origin_address": ""}],
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ddns.operations.resolve_credentials",
+        lambda payload: {
+            "aliyun_access_id": "ak-test",
+            "aliyun_access_secret": "sk-test",
+            "region_id": "cn-hangzhou",
+        },
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.record: dict[str, object] | None = None
+
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name}
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            assert site_id == 123
+            assert record_name == "home.example.com"
+            assert record_type == "A/AAAA"
+            return [self.record] if isinstance(self.record, dict) else []
+
+        def create_record(
+            self,
+            *,
+            site_id,
+            record_name,
+            record_type,
+            ttl,
+            data_value,
+            proxied=None,
+            **kwargs,
+        ):
+            assert site_id == 123
+            assert record_name == "home.example.com"
+            assert record_type == "A/AAAA"
+            assert ttl == 600
+            assert data_value == "2001:db8::1"
+            assert proxied is False
+            self.record = {
+                "RecordId": 11,
+                "RecordName": record_name,
+                "RecordType": record_type,
+                "Data": {"Value": data_value},
+                "Proxied": proxied,
+            }
+            return {"RecordId": 11}
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(
+        "webu.ddns.operations._build_esa_client", lambda payload: fake_client
+    )
+
+    result = target_prepare(name="example-direct-record", seed_existing=True)
+
+    assert result["record_action"] == "seed-created"
+    assert result["current_record_value"] == "2001:db8::1"
+
+
 def test_target_run_once_verifies_origin_pool_after_timeout(monkeypatch, tmp_path):
     project_root = tmp_path
     (project_root / "pyproject.toml").write_text(
@@ -244,6 +427,88 @@ def test_target_run_once_verifies_origin_pool_after_timeout(monkeypatch, tmp_pat
     assert result["log_contains_update"] is True
 
 
+def test_target_run_once_verifies_direct_record_after_timeout(monkeypatch, tmp_path):
+    project_root = tmp_path
+    (project_root / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    config_dir = project_root / "configs"
+    config_dir.mkdir()
+    binary_path = project_root / "debugs" / "ddns-go" / "bin"
+    binary_path.mkdir(parents=True)
+    (binary_path / "ddns-go").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(project_root))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    target_upsert(
+        name="example-direct-record",
+        provider="aliesa-record",
+        site_name="example.com",
+        record_name="home.example.com",
+        binary_path="debugs/ddns-go/bin/ddns-go",
+        save_config=True,
+    )
+
+    monkeypatch.setattr(
+        "webu.ddns.operations.load_ali_esa_config",
+        lambda validate=False: {
+            "default_public_origin_ipv6": "2001:db8::10",
+            "aliyun_access_id": "ak-test",
+            "aliyun_access_secret": "sk-test",
+            "sites": [{"site_name": "example.com", "public_origin_address": ""}],
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ddns.operations.resolve_credentials",
+        lambda payload: {
+            "aliyun_access_id": "ak-test",
+            "aliyun_access_secret": "sk-test",
+            "region_id": "cn-hangzhou",
+        },
+    )
+
+    class FakeClient:
+        def get_site(self, *, site_name):
+            return {"SiteId": 123, "SiteName": site_name}
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            return [
+                {
+                    "RecordId": 11,
+                    "RecordName": "home.example.com",
+                    "RecordType": "A/AAAA",
+                    "Data": {"Value": "2001:db8::10"},
+                }
+            ]
+
+    monkeypatch.setattr(
+        "webu.ddns.operations._build_esa_client", lambda payload: FakeClient()
+    )
+
+    def fake_run(
+        command, check=False, capture_output=False, text=False, cwd=None, timeout=None
+    ):
+        import subprocess
+
+        raise subprocess.TimeoutExpired(
+            command,
+            timeout,
+            output="Added domain home.example.com successfully!",
+            stderr="",
+        )
+
+    monkeypatch.setattr("webu.ddns.operations.subprocess.run", fake_run)
+
+    result = target_run_once(name="example-direct-record", timeout_seconds=3)
+
+    assert result["verified"] is True
+    assert result["current_record_value"] == "2001:db8::10"
+    assert result["timed_out"] is True
+    assert result["log_contains_update"] is True
+
+
 def test_render_ddns_service_unit_contains_binary_and_config_path():
     from webu.ddns.schema import DdnsTargetConfig
 
@@ -253,6 +518,7 @@ def test_render_ddns_service_unit_contains_binary_and_config_path():
         site_name="example.com",
         pool_name="example-origin-pool",
         origin_name="home6",
+        record_name="",
         enabled=True,
         target_ipv6="",
         seed_ipv6="2001:db8::1",

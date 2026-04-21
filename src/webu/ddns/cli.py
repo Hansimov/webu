@@ -85,6 +85,7 @@ def cmd_target_upsert(args):
             site_name=args.site_name,
             pool_name=args.pool_name,
             origin_name=args.origin_name,
+            record_name=args.record_name,
             provider=args.provider,
             enabled=enabled,
             target_ipv6=args.target_ipv6,
@@ -182,10 +183,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create or update a ddns target in configs/ddns.json.",
     )
     target_upsert_parser.add_argument("--name", required=True)
-    target_upsert_parser.add_argument("--provider", default="aliesa-origin-pool")
+    target_upsert_parser.add_argument(
+        "--provider",
+        choices=["aliesa-origin-pool", "aliesa-record"],
+        default="aliesa-origin-pool",
+    )
     target_upsert_parser.add_argument("--site-name", required=True)
-    target_upsert_parser.add_argument("--pool-name", required=True)
-    target_upsert_parser.add_argument("--origin-name", required=True)
+    target_upsert_parser.add_argument("--pool-name", default="")
+    target_upsert_parser.add_argument("--origin-name", default="")
+    target_upsert_parser.add_argument("--record-name", default="")
     target_upsert_parser.add_argument("--target-ipv6", default="")
     target_upsert_parser.add_argument("--seed-ipv6", default=DEFAULT_TARGET_SEED_IPV6)
     target_upsert_parser.add_argument(
@@ -214,7 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     target_prepare_parser = subparsers.add_parser(
         "target-prepare",
-        help="Ensure the ESA origin pool exists and write the ddns-go config for a target.",
+        help="Prepare a DDNS target in ESA when needed and write the ddns-go config for it.",
     )
     target_prepare_parser.add_argument("--name", required=True)
     target_prepare_parser.add_argument("--seed-existing", action="store_true")
@@ -232,7 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     target_run_once_parser = subparsers.add_parser(
         "target-run-once",
-        help="Run ddns-go once for a target and verify the ESA origin pool state afterwards.",
+        help="Run ddns-go once for a target and verify the corresponding ESA state afterwards.",
     )
     target_run_once_parser.add_argument("--name", required=True)
     target_run_once_parser.add_argument("--seed-existing", action="store_true")

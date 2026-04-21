@@ -43,6 +43,9 @@ from .schema import (
 
 
 DEFAULT_DDNS_RUN_TIMEOUT_SECONDS = 15
+ORIGIN_POOL_PROVIDER = "aliesa-origin-pool"
+DIRECT_RECORD_PROVIDER = "aliesa-record"
+DIRECT_RECORD_TYPE = "A/AAAA"
 
 
 def _printable_process_output(value: Any) -> str:
@@ -96,6 +99,7 @@ def _serialize_target(target: DdnsTargetConfig) -> dict[str, Any]:
         "site_name": target.site_name,
         "pool_name": target.pool_name,
         "origin_name": target.origin_name,
+        "record_name": target.record_name,
         "enabled": target.enabled,
         "target_ipv6": target.target_ipv6,
         "seed_ipv6": target.seed_ipv6,
@@ -144,8 +148,9 @@ def target_upsert(
     *,
     name: str,
     site_name: str,
-    pool_name: str,
-    origin_name: str,
+    pool_name: str = "",
+    origin_name: str = "",
+    record_name: str = "",
     provider: str = DEFAULT_PROVIDER,
     enabled: bool | None = None,
     target_ipv6: str = "",
@@ -163,19 +168,31 @@ def target_upsert(
     payload = _ensure_payload(load_ddns_config(validate=False))
     existing = find_target(payload, name)
     raw = dict(existing.raw) if existing is not None else {}
+    normalized_provider = normalize_provider(provider)
+    resolved_site_name = _require_text(
+        site_name or (existing.site_name if existing else ""), "site_name"
+    )
+    resolved_pool_name = str(
+        pool_name or (existing.pool_name if existing else "")
+    ).strip()
+    resolved_origin_name = str(
+        origin_name or (existing.origin_name if existing else "")
+    ).strip()
+    resolved_record_name = str(
+        record_name or (existing.record_name if existing else "")
+    ).strip()
+    if normalized_provider == ORIGIN_POOL_PROVIDER:
+        resolved_pool_name = _require_text(resolved_pool_name, "pool_name")
+        resolved_origin_name = _require_text(resolved_origin_name, "origin_name")
+    elif normalized_provider == DIRECT_RECORD_PROVIDER:
+        resolved_record_name = _require_text(resolved_record_name, "record_name")
     updated = DdnsTargetConfig(
         name=_require_text(name, "name"),
-        provider=normalize_provider(provider),
-        site_name=_require_text(
-            site_name or (existing.site_name if existing else ""), "site_name"
-        ),
-        pool_name=_require_text(
-            pool_name or (existing.pool_name if existing else ""), "pool_name"
-        ),
-        origin_name=_require_text(
-            origin_name or (existing.origin_name if existing else ""),
-            "origin_name",
-        ),
+        provider=normalized_provider,
+        site_name=resolved_site_name,
+        pool_name=resolved_pool_name,
+        origin_name=resolved_origin_name,
+        record_name=resolved_record_name,
         enabled=(
             bool(enabled)
             if enabled is not None
@@ -494,6 +511,7 @@ def _upsert_origin_pool(
 
 def _build_ddns_go_config_payload(
     *,
+    config_name: str = "aliesa-origin-pool-ipv6",
     access_key_id: str,
     access_key_secret: str,
     domain: str,
@@ -515,7 +533,7 @@ def _build_ddns_go_config_payload(
         ipv6_block["cmd"] = f"printf '%s\\n' '{target_ipv6}'"
 
     return {
-        "name": "aliesa-origin-pool-ipv6",
+        "name": config_name,
         "ttl": str(ttl),
         "dns": {
             "name": "aliesa",
@@ -539,6 +557,7 @@ def _build_ddns_go_config_payload(
 def _write_ddns_go_config(
     *,
     config_path: Path,
+    config_name: str = "aliesa-origin-pool-ipv6",
     access_key_id: str,
     access_key_secret: str,
     domain: str,
@@ -548,6 +567,7 @@ def _write_ddns_go_config(
     ipv6_url: str,
 ) -> Path:
     payload = _build_ddns_go_config_payload(
+        config_name=config_name,
         access_key_id=access_key_id,
         access_key_secret=access_key_secret,
         domain=domain,
@@ -572,22 +592,114 @@ def _extract_origin_address(pool: dict[str, Any], *, origin_name: str) -> str:
     return ""
 
 
-def _load_target_or_raise(name: str) -> tuple[dict[str, Any], DdnsTargetConfig]:
-    payload = _ensure_payload(load_ddns_config(validate=False))
-    target = find_target(payload, name)
-    if target is None:
-        raise ValueError(f"ddns target '{name}' not found in configs/ddns.json")
-    if not target.enabled:
-        raise ValueError(f"ddns target '{name}' is disabled")
-    return payload, target
+def _find_site_record(
+    client: AliyunEsaClient,
+    *,
+    site_id: int,
+    record_name: str,
+    record_type: str = DIRECT_RECORD_TYPE,
+) -> dict[str, Any] | None:
+    normalized_record_name = record_name.strip().lower()
+    normalized_record_type = record_type.strip().upper()
+    for item in client.list_records(
+        site_id=site_id,
+        record_name=record_name,
+        record_type=record_type,
+    ):
+        if str(item.get("RecordName") or "").strip().lower() != normalized_record_name:
+            continue
+        item_record_type = (
+            str(item.get("RecordType") or item.get("Type") or "").strip().upper()
+        )
+        if item_record_type != normalized_record_type:
+            continue
+        record_id = item.get("RecordId")
+        if isinstance(record_id, int) and record_id > 0:
+            return item
+    return None
 
 
-def target_prepare(*, name: str, seed_existing: bool = False) -> dict[str, Any]:
-    payload, target = _load_target_or_raise(name)
-    if target.provider != DEFAULT_PROVIDER:
-        raise NotImplementedError(f"unsupported ddns provider: {target.provider}")
+def _extract_record_value(record: dict[str, Any] | None) -> str:
+    if not isinstance(record, dict):
+        return ""
+    data = record.get("Data")
+    if isinstance(data, dict):
+        return str(data.get("Value") or "").strip()
+    return ""
 
+
+def _upsert_site_record(
+    client: AliyunEsaClient,
+    *,
+    site_id: int,
+    target: DdnsTargetConfig,
+    seed_existing: bool,
+) -> tuple[dict[str, Any] | None, str]:
+    record = _find_site_record(
+        client,
+        site_id=site_id,
+        record_name=target.record_name,
+        record_type=DIRECT_RECORD_TYPE,
+    )
+    if record is None:
+        if not seed_existing:
+            return None, "absent"
+        client.create_record(
+            site_id=site_id,
+            record_name=target.record_name,
+            record_type=DIRECT_RECORD_TYPE,
+            ttl=max(60, int(target.ttl)),
+            data_value=target.seed_ipv6,
+            proxied=False,
+        )
+        refreshed = _find_site_record(
+            client,
+            site_id=site_id,
+            record_name=target.record_name,
+            record_type=DIRECT_RECORD_TYPE,
+        )
+        if refreshed is None:
+            raise RuntimeError(f"Failed to create record '{target.record_name}'")
+        return refreshed, "seed-created"
+
+    if not seed_existing:
+        return record, "existing"
+
+    current_value = _extract_record_value(record)
+    if current_value == target.seed_ipv6:
+        return record, "unchanged"
+
+    record_id = record.get("RecordId")
+    if not isinstance(record_id, int) or record_id <= 0:
+        raise RuntimeError(
+            f"Record '{target.record_name}' does not have a valid RecordId"
+        )
+    client.update_record(
+        record_id=record_id,
+        record_type=DIRECT_RECORD_TYPE,
+        ttl=max(60, int(target.ttl)),
+        data_value=target.seed_ipv6,
+        proxied=False,
+    )
+    refreshed = _find_site_record(
+        client,
+        site_id=site_id,
+        record_name=target.record_name,
+        record_type=DIRECT_RECORD_TYPE,
+    )
+    if refreshed is None:
+        raise RuntimeError(f"Record '{target.record_name}' disappeared after seeding")
+    return refreshed, "seeded"
+
+
+def _prepare_origin_pool_target(
+    payload: dict[str, Any],
+    target: DdnsTargetConfig,
+    *,
+    seed_existing: bool,
+) -> dict[str, Any]:
     ali_esa_payload = load_ali_esa_config(validate=False)
+    credentials = resolve_credentials(ali_esa_payload)
     client = _build_esa_client(ali_esa_payload)
     site_id = _find_site_id(client, target.site_name)
     target_ipv6 = _resolve_target_ipv6(ali_esa_payload, target=target)
@@ -600,12 +712,13 @@ def target_prepare(*, name: str, seed_existing: bool = False) -> dict[str, Any]:
     )
     config_path = _write_ddns_go_config(
         config_path=_resolve_config_path(target),
+        config_name=f"{ORIGIN_POOL_PROVIDER}-ipv6",
         access_key_id=_require_text(
-            resolve_credentials(ali_esa_payload).get("aliyun_access_id"),
+            credentials.get("aliyun_access_id"),
             "aliyun_access_id",
         ),
         access_key_secret=_require_text(
-            resolve_credentials(ali_esa_payload).get("aliyun_access_secret"),
+            credentials.get("aliyun_access_secret"),
             "aliyun_access_secret",
         ),
         domain=f"{target.pool_name}.origin-pool.{target.site_name}?Name={target.origin_name}",
@@ -628,6 +741,81 @@ def target_prepare(*, name: str, seed_existing: bool = False) -> dict[str, Any]:
         "binary_path": _maybe_resolve_binary_path(payload, target),
         "service_name": _ddns_service_name(target),
     }
+
+
+def _prepare_record_target(
+    payload: dict[str, Any],
+    target: DdnsTargetConfig,
+    *,
+    seed_existing: bool,
+) -> dict[str, Any]:
+    ali_esa_payload = load_ali_esa_config(validate=False)
+    credentials = resolve_credentials(ali_esa_payload)
+    client = _build_esa_client(ali_esa_payload)
+    site_id = _find_site_id(client, target.site_name)
+    target_ipv6 = _resolve_target_ipv6(ali_esa_payload, target=target)
+    record, record_action = _upsert_site_record(
+        client,
+        site_id=site_id,
+        target=target,
+        seed_existing=seed_existing,
+    )
+    config_path = _write_ddns_go_config(
+        config_path=_resolve_config_path(target),
+        config_name=f"{DIRECT_RECORD_PROVIDER}-ipv6",
+        access_key_id=_require_text(
+            credentials.get("aliyun_access_id"),
+            "aliyun_access_id",
+        ),
+        access_key_secret=_require_text(
+            credentials.get("aliyun_access_secret"),
+            "aliyun_access_secret",
+        ),
+        domain=target.record_name,
+        ttl=max(60, int(target.ttl)),
+        ipv6_source_mode=target.ipv6_source_mode,
+        target_ipv6=target_ipv6,
+        ipv6_url=target.ipv6_url,
+    )
+    return {
+        "target": _serialize_target(target),
+        "site_id": site_id,
+        "target_ipv6": target_ipv6,
+        "record_action": record_action,
+        "site_record": record,
+        "current_record_value": _extract_record_value(record),
+        "record_ddns_go_domain": target.record_name,
+        "ddns_go_config_path": str(config_path),
+        "binary_path": _maybe_resolve_binary_path(payload, target),
+        "service_name": _ddns_service_name(target),
+    }
+
+
+def _load_target_or_raise(name: str) -> tuple[dict[str, Any], DdnsTargetConfig]:
+    payload = _ensure_payload(load_ddns_config(validate=False))
+    target = find_target(payload, name)
+    if target is None:
+        raise ValueError(f"ddns target '{name}' not found in configs/ddns.json")
+    if not target.enabled:
+        raise ValueError(f"ddns target '{name}' is disabled")
+    return payload, target
+
+
+def target_prepare(*, name: str, seed_existing: bool = False) -> dict[str, Any]:
+    payload, target = _load_target_or_raise(name)
+    if target.provider == ORIGIN_POOL_PROVIDER:
+        return _prepare_origin_pool_target(
+            payload,
+            target,
+            seed_existing=seed_existing,
+        )
+    if target.provider == DIRECT_RECORD_PROVIDER:
+        return _prepare_record_target(
+            payload,
+            target,
+            seed_existing=seed_existing,
+        )
+    raise NotImplementedError(f"unsupported ddns provider: {target.provider}")
 
 
 def target_run_once(
@@ -678,15 +866,32 @@ def target_run_once(
     ali_esa_payload = load_ali_esa_config(validate=False)
     client = _build_esa_client(ali_esa_payload)
     site_id = int(prepared["site_id"])
-    pool = _find_origin_pool(client, site_id=site_id, pool_name=target.pool_name)
-    if pool is None:
-        raise RuntimeError(
-            f"origin pool '{target.pool_name}' disappeared after ddns-go run"
-        )
-    current_origin_address = _extract_origin_address(
-        pool, origin_name=target.origin_name
-    )
     target_ipv6 = str(prepared["target_ipv6"])
+    if target.provider == ORIGIN_POOL_PROVIDER:
+        pool = _find_origin_pool(client, site_id=site_id, pool_name=target.pool_name)
+        if pool is None:
+            raise RuntimeError(
+                f"origin pool '{target.pool_name}' disappeared after ddns-go run"
+            )
+        current_value = _extract_origin_address(pool, origin_name=target.origin_name)
+        verification_state = {
+            "current_origin_address": current_value,
+            "origin_pool": pool,
+        }
+    elif target.provider == DIRECT_RECORD_PROVIDER:
+        record = _find_site_record(
+            client,
+            site_id=site_id,
+            record_name=target.record_name,
+            record_type=DIRECT_RECORD_TYPE,
+        )
+        current_value = _extract_record_value(record)
+        verification_state = {
+            "current_record_value": current_value,
+            "site_record": record,
+        }
+    else:
+        raise NotImplementedError(f"unsupported ddns provider: {target.provider}")
     output_text = "\n".join(
         [
             part
@@ -694,15 +899,18 @@ def target_run_once(
             if part
         ]
     )
+    normalized_output_text = output_text.lower()
     return {
         **prepared,
         "command": command,
         "process": process_summary,
         "timed_out": timed_out,
-        "current_origin_address": current_origin_address,
-        "origin_pool": pool,
-        "verified": current_origin_address == target_ipv6,
-        "log_contains_update": "Updated domain" in output_text,
+        **verification_state,
+        "verified": current_value == target_ipv6,
+        "log_contains_update": (
+            "updated domain" in normalized_output_text
+            or "added domain" in normalized_output_text
+        ),
     }
 
 

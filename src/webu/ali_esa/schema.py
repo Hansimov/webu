@@ -50,6 +50,7 @@ ALI_ESA_CONFIG = ConfigSpec(
                 "verify_code": "",
                 "name_server_list": [],
                 "current_ns": [],
+                "cloudflare_name_server_list": [],
                 "public_origin_address": "",
                 "cloudflare_zone_id": "",
                 "registrar_task_no": "",
@@ -107,6 +108,10 @@ ALI_ESA_CONFIG = ConfigSpec(
                             "type": "array",
                             "items": {"type": "string"},
                         },
+                        "cloudflare_name_server_list": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "public_origin_address": {"type": "string"},
                         "cloudflare_zone_id": {"type": "string"},
                         "registrar_task_no": {"type": "string"},
@@ -133,6 +138,7 @@ class SiteConfig:
     verify_code: str
     name_server_list: list[str]
     current_ns: list[str]
+    cloudflare_name_server_list: list[str]
     public_origin_address: str
     cloudflare_zone_id: str
     registrar_task_no: str
@@ -211,6 +217,9 @@ def list_sites(payload: dict[str, Any]) -> list[SiteConfig]:
                     raw_item.get("name_server_list")
                 ),
                 current_ns=_normalize_string_list(raw_item.get("current_ns")),
+                cloudflare_name_server_list=_normalize_string_list(
+                    raw_item.get("cloudflare_name_server_list")
+                ),
                 public_origin_address=str(
                     raw_item.get("public_origin_address", "")
                 ).strip(),
@@ -253,6 +262,7 @@ def upsert_site(payload: dict[str, Any], site: SiteConfig) -> dict[str, Any]:
         "verify_code": site.verify_code,
         "name_server_list": site.name_server_list,
         "current_ns": site.current_ns,
+        "cloudflare_name_server_list": site.cloudflare_name_server_list,
         "public_origin_address": site.public_origin_address,
         "cloudflare_zone_id": site.cloudflare_zone_id,
         "registrar_task_no": site.registrar_task_no,
