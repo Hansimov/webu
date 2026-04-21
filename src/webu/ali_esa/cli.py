@@ -14,6 +14,8 @@ from .operations import (
     config_check,
     config_init,
     config_schema_json,
+    dns01_auth,
+    dns01_cleanup,
     ensure_site,
     list_plan_instances,
     site_check,
@@ -99,6 +101,29 @@ def cmd_site_records(args):
             site_name=args.site_name,
             record_name=args.record_name,
             record_type=args.record_type,
+        )
+    )
+
+
+def cmd_dns01_auth(args):
+    print_json(
+        dns01_auth(
+            site_name=args.site_name,
+            domain=args.domain,
+            validation=args.validation,
+            ttl=args.ttl,
+            wait_seconds=args.wait_seconds,
+            comment=args.comment,
+        )
+    )
+
+
+def cmd_dns01_cleanup(args):
+    print_json(
+        dns01_cleanup(
+            site_name=args.site_name,
+            domain=args.domain,
+            validation=args.validation,
         )
     )
 
@@ -339,6 +364,67 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_runtime_path_options(site_records_parser)
     site_records_parser.set_defaults(func=cmd_site_records)
+
+    dns01_auth_parser = subparsers.add_parser(
+        "dns-01-auth",
+        help="Create or reuse an ESA TXT record for ACME DNS-01 validation.",
+    )
+    dns01_auth_parser.add_argument(
+        "--site-name",
+        default="",
+        help="ESA site name. If omitted, infer it from --domain or CERTBOT_DOMAIN.",
+    )
+    dns01_auth_parser.add_argument(
+        "--domain",
+        default="",
+        help="Certificate domain. Defaults to CERTBOT_DOMAIN or CERTBOT_IDENTIFIER.",
+    )
+    dns01_auth_parser.add_argument(
+        "--validation",
+        default="",
+        help="ACME TXT validation value. Defaults to CERTBOT_VALIDATION.",
+    )
+    dns01_auth_parser.add_argument(
+        "--ttl",
+        type=int,
+        default=60,
+        help="TXT record TTL in seconds.",
+    )
+    dns01_auth_parser.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=30,
+        help="Sleep after applying the TXT record to give public DNS time to converge.",
+    )
+    dns01_auth_parser.add_argument(
+        "--comment",
+        default="",
+        help="Optional TXT record comment.",
+    )
+    _add_runtime_path_options(dns01_auth_parser)
+    dns01_auth_parser.set_defaults(func=cmd_dns01_auth)
+
+    dns01_cleanup_parser = subparsers.add_parser(
+        "dns-01-cleanup",
+        help="Delete ESA TXT records created for ACME DNS-01 validation.",
+    )
+    dns01_cleanup_parser.add_argument(
+        "--site-name",
+        default="",
+        help="ESA site name. If omitted, infer it from --domain or CERTBOT_DOMAIN.",
+    )
+    dns01_cleanup_parser.add_argument(
+        "--domain",
+        default="",
+        help="Certificate domain. Defaults to CERTBOT_DOMAIN or CERTBOT_IDENTIFIER.",
+    )
+    dns01_cleanup_parser.add_argument(
+        "--validation",
+        default="",
+        help="ACME TXT validation value. Defaults to CERTBOT_VALIDATION.",
+    )
+    _add_runtime_path_options(dns01_cleanup_parser)
+    dns01_cleanup_parser.set_defaults(func=cmd_dns01_cleanup)
 
     site_origin_pools_parser = subparsers.add_parser(
         "site-origin-pools",

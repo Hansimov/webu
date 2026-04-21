@@ -300,7 +300,51 @@ aesa exposure-apply \
 
 应用后可以再次用 `site-records` 检查生成的记录值和代理状态。
 
-## 5. 生成 ESA edge 快照
+## 5. 用 DNS-01 管理 ACME TXT 记录
+
+创建或复用一个 `_acme-challenge` TXT 记录：
+
+```bash
+aesa dns-01-auth \
+  --site-name example.com \
+  --domain api.example.com \
+  --validation test-token \
+  --wait-seconds 15
+```
+
+删除这条 TXT 记录：
+
+```bash
+aesa dns-01-cleanup \
+  --site-name example.com \
+  --domain api.example.com \
+  --validation test-token
+```
+
+如果命令是由 `certbot --manual` 调用，`aesa` 会自动读取 `CERTBOT_DOMAIN` / `CERTBOT_IDENTIFIER` / `CERTBOT_VALIDATION`，因此 hook 里通常只需要固定 `--site-name`、`--project-root` 和 `--config-dir`。
+
+下面是一条已经实测通过的 staging 签发模式；它不会为了 ACME 验证去暴露公网 `80/443`：
+
+```bash
+certbot certonly --manual --preferred-challenges dns \
+  --manual-auth-hook 'conda run -n ai aesa dns-01-auth --project-root /abs/path/to/webu --config-dir /abs/path/to/webu/configs --site-name example.com --wait-seconds 15' \
+  --manual-cleanup-hook 'conda run -n ai aesa dns-01-cleanup --project-root /abs/path/to/webu --config-dir /abs/path/to/webu/configs --site-name example.com' \
+  --register-unsafely-without-email \
+  --agree-tos \
+  --non-interactive \
+  --test-cert \
+  --config-dir /tmp/certbot/config \
+  --work-dir /tmp/certbot/work \
+  --logs-dir /tmp/certbot/logs \
+  -d api.example.com
+```
+
+需要注意两点：
+
+- DNS-01 只解决“证书怎么签发”的问题，不解决“浏览器如何直连到 home origin”的问题。
+- 如果最终目标是让 ESA 直接回源到家宽主机，那么真实公网 `443` 仍然必须可达；DNS-01 不能替代真实业务流量的公网入站能力。
+
+## 6. 生成 ESA edge 快照
 
 对一个或多个域名抓取当前解析结果和 ESA edge 匹配情况：
 

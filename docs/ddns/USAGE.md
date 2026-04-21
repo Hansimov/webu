@@ -134,7 +134,6 @@ wdns target-run-once \
 
 对于 origin-pool target，只要 `verified=true`，并且 `current_origin_address` 已经变成目标 IPv6，就说明这条 `wdns -> ddns-go -> ESA origin pool` 链路已经成立。
 
-对于 direct-record target，只要 `verified=true`，并且 `current_record_value` 已经变成目标 IPv6，就说明这条 `wdns -> ddns-go -> ESA direct AAAA record` 链路已经成立。
 对于 direct-record target，只要 `verified=true`，并且 `current_record_value` 已经变成目标 IPv6，就说明这条 `wdns -> ddns-go -> ESA direct A/AAAA record` 链路已经成立。
 
 ## 5. 托管为 systemd 服务
@@ -225,6 +224,7 @@ direct-record 路径：
 2. 如果想观察一次真实改动，用 `wdns target-prepare --name example-direct-record --seed-existing` 先把记录回退到 seed IPv6。
 3. 用 `wdns target-run-once --name example-direct-record` 验证 ddns-go 是否真的把 ESA 的 direct `A/AAAA` 记录更新回目标 IPv6。
 4. 如果准备长期开启，再用 `wdns service-install --name example-direct-record` 托管为 systemd 服务。
+5. 如果这个 direct-record hostname 还需要 HTTPS 证书，优先用 `aesa dns-01-auth` / `aesa dns-01-cleanup` 配合 `certbot --manual --preferred-challenges dns` 验证证书签发链路，不要为了 `HTTP-01` 临时暴露 `80`。
 
 ## 8. 常见故障
 
@@ -232,4 +232,4 @@ direct-record 路径：
 - `target_ipv6 is required`：`configs/ali_esa.json` 中没有可回退使用的 IPv6，需要在 target 里显式传 `--target-ipv6`。
 - `verified=false`：ddns-go 可能没有真正更新 ESA 对象；origin-pool target 继续配合 `aesa site-origin-pools` 排查，direct-record target 则配合 `aesa site-records --record-name <fqdn> --record-type 'A/AAAA'` 排查。
 - `service-install` 失败：通常是 sudo / systemd 权限不足，或者目标 binary / YAML 路径不可访问。
-- 想用 direct-record 彻底替代当前 Cloudflare bridge：先确认家宽公网 `443/TLS` 入口已经补齐；仅有 DDNS 自动更新还不够，当前实测只确认了 IPv6 `80` 直达，本机并没有可用的公网 `443` 监听。
+- 想用 direct-record 彻底替代当前 Cloudflare bridge：先确认真实公网 `443/TLS` 入站已经补齐；最新实测已经确认本机 `*:80` / `*:443` 监听和主机侧防火墙都不是阻塞点，问题仍在主机外层 IPv6 入站路径。证书签发本身可以先改走 DNS-01，但这不会替代真实用户流量对公网 `443` 的要求。

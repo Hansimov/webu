@@ -10,6 +10,8 @@ from webu.ali_esa.operations import (
     _resolve_exposure_record,
     _resolve_origin_address,
     apply_exposure,
+    dns01_auth,
+    dns01_cleanup,
     site_load_balancer_create,
     site_load_balancer_delete,
     site_load_balancer_origin_status,
@@ -1117,3 +1119,149 @@ def test_site_origin_pool_cname_delete_removes_op_backed_record(monkeypatch):
 
     assert result["deleted_count"] == 1
     assert result["remaining_count"] == 0
+
+
+def test_dns01_auth_creates_txt_record_and_strips_wildcard(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "active"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return []
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            assert site_id == 123
+            assert record_type == "TXT"
+            observed["record_name"] = record_name
+            if observed.get("record") is None:
+                return []
+            return [observed["record"]]
+
+        def create_record(
+            self,
+            *,
+            site_id,
+            record_name,
+            record_type,
+            ttl,
+            data_value,
+            proxied=None,
+            biz_name=None,
+            source_type=None,
+            comment=None,
+            host_policy=None,
+            data_extra=None,
+        ):
+            observed["create_kwargs"] = {
+                "site_id": site_id,
+                "record_name": record_name,
+                "record_type": record_type,
+                "ttl": ttl,
+                "data_value": data_value,
+                "comment": comment,
+            }
+            observed["record"] = {
+                "RecordId": 501,
+                "RecordName": record_name,
+                "RecordType": record_type,
+                "Ttl": ttl,
+                "Comment": comment,
+                "Data": {"Value": data_value},
+            }
+            return {"RecordId": 501}
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {"sites": [{"site_name": "example.com"}]},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    result = dns01_auth(
+        domain="*.example.com",
+        validation="token-value",
+        ttl=120,
+        wait_seconds=0,
+        comment="manual hook",
+    )
+
+    assert observed["record_name"] == "_acme-challenge.example.com"
+    assert observed["create_kwargs"]["record_name"] == "_acme-challenge.example.com"
+    assert observed["create_kwargs"]["record_type"] == "TXT"
+    assert observed["create_kwargs"]["ttl"] == 120
+    assert observed["create_kwargs"]["data_value"] == "token-value"
+    assert result["site_name"] == "example.com"
+    assert result["domain"] == "example.com"
+    assert result["record_name"] == "_acme-challenge.example.com"
+    assert result["created"] is True
+    assert result["matching_count"] == 1
+
+
+def test_dns01_cleanup_deletes_matching_txt_records(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.records = [
+                {
+                    "RecordId": 701,
+                    "RecordName": "_acme-challenge.api.example.com",
+                    "RecordType": "TXT",
+                    "Data": {"Value": "token-value"},
+                },
+                {
+                    "RecordId": 702,
+                    "RecordName": "_acme-challenge.api.example.com",
+                    "RecordType": "TXT",
+                    "Data": {"Value": "other-token"},
+                },
+            ]
+
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "active"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return []
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            assert site_id == 123
+            assert record_name == "_acme-challenge.api.example.com"
+            assert record_type == "TXT"
+            return list(self.records)
+
+        def delete_record(self, *, record_id):
+            self.records = [
+                item for item in self.records if item.get("RecordId") != record_id
+            ]
+            return {"RecordId": record_id}
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {"sites": [{"site_name": "example.com"}]},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: fake_client,
+    )
+
+    result = dns01_cleanup(
+        site_name="example.com",
+        domain="api.example.com",
+        validation="token-value",
+    )
+
+    assert result["deleted_count"] == 1
+    assert result["remaining_count"] == 0
+    assert len(fake_client.records) == 1
+    assert fake_client.records[0]["Data"]["Value"] == "other-token"

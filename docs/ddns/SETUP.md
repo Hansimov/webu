@@ -122,4 +122,5 @@ wdns target-upsert \
 - `aliesa-record` 在 ESA 实际接口上使用 direct `A/AAAA` 记录，并以单个 IPv6 值运行在 DNS-only 模式，适合家宽 IPv6 直出或单独的 IPv6 探测链路，不自动补齐 IPv4 能力。
 - `wdns` 生成的 ddns-go YAML 已经验证必须使用 ddns-go 自己 Go YAML marshal 出来的 canonical lower-case 键名。
 - 普通 ESA 代理 `A/AAAA` 记录不能直接把 `*.origin-pool.<site>` 记录名当成值；如果需要对公网生效，仍要进一步结合 ESA 的 load balancer / IPA 等对象。
-- 如果目标是彻底下线当前 Cloudflare bridge，除了 DDNS 控制面，还必须先补齐本机公网 `443/TLS` 入口；当前仅验证到 IPv6 `80` 可直达，IPv6 `443` 仍拒绝，IPv4 明文入口也未证实可公网直达。
+- 如果目标是彻底下线当前 Cloudflare bridge，除了 DDNS 控制面，还必须先补齐真实公网 `443/TLS` 入口；最新实测已经确认本机 `*:80` / `*:443` 监听和主机侧 `nftables` INPUT 放行都不是阻塞点，问题仍在主机外层的 IPv6 入站路径。
+- 如果只是为直连 canary 或 home origin 申请证书，已经不必再为了 ACME 临时暴露 `80/443`；最新实测已确认可以使用 `aesa dns-01-auth` / `aesa dns-01-cleanup` 配合 `certbot --manual --preferred-challenges dns` 完成 DNS-01 staging 签发。

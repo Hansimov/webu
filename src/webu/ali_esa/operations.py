@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import subprocess
@@ -1370,6 +1371,209 @@ def site_records(
         "config_site": context["config_site"],
         "count": len(records),
         "records": records,
+    }
+
+
+def _dns01_domain(domain: str) -> str:
+    normalized = _require_text(domain, "domain").strip().lower()
+    if normalized.startswith("*."):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _dns01_record_name(domain: str) -> str:
+    return f"_acme-challenge.{_dns01_domain(domain)}"
+
+
+def _dns01_value_from_env_or_arg(
+    value: str, *, label: str, env_names: list[str]
+) -> str:
+    normalized = str(value or "").strip()
+    if normalized:
+        return normalized
+    for env_name in env_names:
+        candidate = str(os.environ.get(env_name) or "").strip()
+        if candidate:
+            return candidate
+    raise ValueError(f"{label} is required")
+
+
+def _resolve_dns01_request(
+    *,
+    site_name: str = "",
+    domain: str = "",
+    validation: str = "",
+) -> dict[str, Any]:
+    raw_domain = _dns01_value_from_env_or_arg(
+        domain,
+        label="domain",
+        env_names=["CERTBOT_DOMAIN", "CERTBOT_IDENTIFIER"],
+    )
+    normalized_domain = _dns01_domain(raw_domain)
+    normalized_site_name = (
+        _require_text(site_name, "site_name").strip().lower()
+        if str(site_name or "").strip()
+        else infer_site_name(normalized_domain)
+    )
+    context = _resolve_site_context(normalized_site_name, require_site_id=True)
+    record_name = _normalize_subdomain_under_site(
+        _dns01_record_name(normalized_domain),
+        site_name=context["site_name"],
+        label="record_name",
+    )
+    normalized_validation = _dns01_value_from_env_or_arg(
+        validation,
+        label="validation",
+        env_names=["CERTBOT_VALIDATION"],
+    )
+    return {
+        "context": context,
+        "site_name": context["site_name"],
+        "domain": normalized_domain,
+        "record_name": record_name,
+        "validation": normalized_validation,
+    }
+
+
+def dns01_auth(
+    *,
+    site_name: str = "",
+    domain: str = "",
+    validation: str = "",
+    ttl: int = 60,
+    wait_seconds: int = 30,
+    comment: str = "",
+) -> dict[str, Any]:
+    request = _resolve_dns01_request(
+        site_name=site_name,
+        domain=domain,
+        validation=validation,
+    )
+    context = request["context"]
+    client = context["client"]
+    site_id = int(context["site_id"])
+    normalized_ttl = max(1, int(ttl))
+    normalized_wait_seconds = max(0, int(wait_seconds))
+    normalized_comment = str(comment or "").strip() or "certbot dns-01"
+
+    existing_records = [
+        item
+        for item in client.list_records(
+            site_id=site_id,
+            record_name=str(request["record_name"]),
+            record_type="TXT",
+        )
+        if isinstance(item, dict)
+        and _normalize_esa_record_type(str(item.get("RecordType") or "")) == "TXT"
+        and _record_data_value(item)
+        == _normalize_record_value(str(request["validation"]))
+    ]
+
+    created = False
+    created_result: dict[str, Any] | None = None
+    if not existing_records:
+        created_result = client.create_record(
+            site_id=site_id,
+            record_name=str(request["record_name"]),
+            record_type="TXT",
+            ttl=normalized_ttl,
+            data_value=str(request["validation"]),
+            comment=normalized_comment,
+        )
+        created = True
+
+    refreshed_records = [
+        item
+        for item in client.list_records(
+            site_id=site_id,
+            record_name=str(request["record_name"]),
+            record_type="TXT",
+        )
+        if isinstance(item, dict)
+        and _normalize_esa_record_type(str(item.get("RecordType") or "")) == "TXT"
+        and _record_data_value(item)
+        == _normalize_record_value(str(request["validation"]))
+    ]
+    active_record = refreshed_records[0] if refreshed_records else None
+
+    if normalized_wait_seconds > 0:
+        time.sleep(normalized_wait_seconds)
+
+    return {
+        "site_name": str(request["site_name"]),
+        "domain": str(request["domain"]),
+        "record_name": str(request["record_name"]),
+        "validation": str(request["validation"]),
+        "ttl": normalized_ttl,
+        "wait_seconds": normalized_wait_seconds,
+        "created": created,
+        "create_result": created_result,
+        "record": active_record,
+        "matching_count": len(refreshed_records),
+    }
+
+
+def dns01_cleanup(
+    *,
+    site_name: str = "",
+    domain: str = "",
+    validation: str = "",
+) -> dict[str, Any]:
+    request = _resolve_dns01_request(
+        site_name=site_name,
+        domain=domain,
+        validation=validation,
+    )
+    context = request["context"]
+    client = context["client"]
+    site_id = int(context["site_id"])
+
+    existing_records = [
+        item
+        for item in client.list_records(
+            site_id=site_id,
+            record_name=str(request["record_name"]),
+            record_type="TXT",
+        )
+        if isinstance(item, dict)
+        and _normalize_esa_record_type(str(item.get("RecordType") or "")) == "TXT"
+        and _record_data_value(item)
+        == _normalize_record_value(str(request["validation"]))
+    ]
+
+    deleted: list[dict[str, Any]] = []
+    for item in existing_records:
+        record_id = item.get("RecordId")
+        if not isinstance(record_id, int) or record_id <= 0:
+            continue
+        deleted.append(
+            {
+                "record": item,
+                "delete_result": client.delete_record(record_id=record_id),
+            }
+        )
+
+    remaining_records = [
+        item
+        for item in client.list_records(
+            site_id=site_id,
+            record_name=str(request["record_name"]),
+            record_type="TXT",
+        )
+        if isinstance(item, dict)
+        and _normalize_esa_record_type(str(item.get("RecordType") or "")) == "TXT"
+        and _record_data_value(item)
+        == _normalize_record_value(str(request["validation"]))
+    ]
+
+    return {
+        "site_name": str(request["site_name"]),
+        "domain": str(request["domain"]),
+        "record_name": str(request["record_name"]),
+        "validation": str(request["validation"]),
+        "deleted": deleted,
+        "deleted_count": len(deleted),
+        "remaining_count": len(remaining_records),
     }
 
 
