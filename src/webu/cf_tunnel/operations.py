@@ -628,6 +628,71 @@ def _write_payload(payload: dict[str, Any], *, save_config: bool) -> Path | None
     return save_cf_tunnel_config(payload)
 
 
+def _cloudflare_auth_error(detail: object) -> bool:
+    normalized = str(detail or "").strip().lower()
+    if not normalized:
+        return False
+    return any(
+        token in normalized
+        for token in [
+            "invalid api token",
+            "authentication error",
+            "authentication failed",
+            "valid user-level authentication not found",
+            "unauthorized",
+        ]
+    )
+
+
+def _verify_cloudflare_working_token(
+    api_token: str,
+    *,
+    account_id: str,
+    zone_name: str,
+    required_tunnel_id: str | None = None,
+) -> None:
+    client = CloudflareClient(api_token)
+    client.list_zones(name=zone_name, account_id=account_id)
+    normalized_tunnel_id = str(required_tunnel_id or "").strip()
+    if normalized_tunnel_id:
+        client.get_tunnel(account_id=account_id, tunnel_id=normalized_tunnel_id)
+        return
+    client.list_tunnels(account_id=account_id)
+
+
+def _ali_esa_cloudflare_token() -> str:
+    try:
+        from webu.ali_esa.schema import load_ali_esa_config
+
+        payload = load_ali_esa_config(validate=False)
+    except Exception:
+        return ""
+    return str(payload.get("cf_api_token") or "").strip()
+
+
+def _candidate_cloudflare_api_tokens(
+    payload: dict[str, Any],
+    *,
+    invalid_tokens: set[str] | None = None,
+) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    blocked = {
+        str(item).strip() for item in invalid_tokens or set() if str(item).strip()
+    }
+
+    def add_candidate(raw_value: object, source: str) -> None:
+        token = str(raw_value or "").strip()
+        if not token or token in seen or token in blocked:
+            return
+        seen.add(token)
+        candidates.append((token, source))
+
+    add_candidate(payload.get("cf_api_token"), "config")
+    add_candidate(_ali_esa_cloudflare_token(), "ali_esa.config")
+    return candidates
+
+
 def ensure_cf_api_token(
     payload: dict[str, Any],
     *,
@@ -636,13 +701,40 @@ def ensure_cf_api_token(
     zone_id: str | None,
     token_mode: str,
     save_config: bool,
+    required_tunnel_id: str | None = None,
+    invalid_tokens: set[str] | None = None,
 ) -> CloudflareCredentialResolution:
-    configured_api_token = str(payload.get("cf_api_token", "")).strip()
-    if configured_api_token:
-        return CloudflareCredentialResolution(configured_api_token, "config", False)
+    last_auth_error: CloudflareApiError | None = None
+    for candidate_token, source in _candidate_cloudflare_api_tokens(
+        payload,
+        invalid_tokens=invalid_tokens,
+    ):
+        try:
+            _verify_cloudflare_working_token(
+                candidate_token,
+                account_id=account_id,
+                zone_name=zone_name,
+                required_tunnel_id=required_tunnel_id,
+            )
+        except CloudflareApiError as exc:
+            if not _cloudflare_auth_error(exc):
+                return CloudflareCredentialResolution(candidate_token, source, False)
+            last_auth_error = exc
+            continue
+
+        if source != "config":
+            payload["cf_api_token"] = candidate_token
+            _write_payload(payload, save_config=save_config)
+        return CloudflareCredentialResolution(candidate_token, source, False)
 
     if token_mode == "manual":
         manual_token = prompt_secret("Cloudflare API token")
+        _verify_cloudflare_working_token(
+            manual_token,
+            account_id=account_id,
+            zone_name=zone_name,
+            required_tunnel_id=required_tunnel_id,
+        )
         payload["cf_api_token"] = manual_token
         _write_payload(payload, save_config=save_config)
         return CloudflareCredentialResolution(manual_token, "manual", False)
@@ -655,21 +747,44 @@ def ensure_cf_api_token(
             )
             if chosen == "manual":
                 manual_token = prompt_secret("Cloudflare API token")
+                _verify_cloudflare_working_token(
+                    manual_token,
+                    account_id=account_id,
+                    zone_name=zone_name,
+                    required_tunnel_id=required_tunnel_id,
+                )
                 payload["cf_api_token"] = manual_token
                 _write_payload(payload, save_config=save_config)
                 return CloudflareCredentialResolution(manual_token, "manual", False)
+        if last_auth_error is not None:
+            raise CloudflareApiError(
+                "All local Cloudflare working tokens are invalid and no bootstrap token is available"
+            ) from last_auth_error
         raise ValueError(
             "cf_api_token is missing and cf_account_api_tokens_edit_token is unavailable for auto creation"
         )
 
     bootstrap_client = CloudflareClient(bootstrap_token)
     token_name = f"cftn-{zone_name}"
-    created = bootstrap_client.create_api_token(
-        name=token_name,
+    try:
+        created = bootstrap_client.create_api_token(
+            name=token_name,
+            account_id=account_id,
+            zone_id=zone_id,
+            include_zone_write=not bool(zone_id),
+            expires_in_days=30,
+        )
+    except CloudflareApiError as exc:
+        if last_auth_error is not None and _cloudflare_auth_error(exc):
+            raise CloudflareApiError(
+                "All local Cloudflare working tokens are invalid and the bootstrap token could not create a replacement"
+            ) from exc
+        raise
+    _verify_cloudflare_working_token(
+        str(created.get("value") or "").strip(),
         account_id=account_id,
-        zone_id=zone_id,
-        include_zone_write=not bool(zone_id),
-        expires_in_days=30,
+        zone_name=zone_name,
+        required_tunnel_id=required_tunnel_id,
     )
     payload["cf_api_token"] = created["value"]
     _write_payload(payload, save_config=save_config)
@@ -956,6 +1071,7 @@ def tunnel_status(*, tunnel_name: str | None, cf_token_mode: str) -> dict[str, A
     payload = load_cf_tunnel_config()
     account_id = _require_text(str(payload.get("cf_account_id", "")), "cf_account_id")
     target = _tunnel_lookup(payload, tunnel_name=tunnel_name)
+    tunnel_id = target.tunnel_id
     credential = ensure_cf_api_token(
         payload,
         account_id=account_id,
@@ -963,15 +1079,36 @@ def tunnel_status(*, tunnel_name: str | None, cf_token_mode: str) -> dict[str, A
         zone_id=None,
         token_mode=cf_token_mode,
         save_config=False,
+        required_tunnel_id=tunnel_id or None,
     )
     cf_client = CloudflareClient(credential.api_token)
-    tunnel_id = target.tunnel_id
     if not tunnel_id:
         tunnel = cf_client.ensure_tunnel(
             account_id=account_id, tunnel_name=target.tunnel_name
         )
         tunnel_id = str(tunnel.get("id", "")).strip()
-    result = cf_client.get_tunnel(account_id=account_id, tunnel_id=tunnel_id)
+    try:
+        result = cf_client.get_tunnel(account_id=account_id, tunnel_id=tunnel_id)
+    except CloudflareApiError as exc:
+        if not _cloudflare_auth_error(exc):
+            raise
+        refreshed_credential = ensure_cf_api_token(
+            payload,
+            account_id=account_id,
+            zone_name=target.zone_name,
+            zone_id=None,
+            token_mode=cf_token_mode,
+            save_config=True,
+            required_tunnel_id=tunnel_id or None,
+            invalid_tokens={credential.api_token},
+        )
+        if refreshed_credential.api_token == credential.api_token:
+            raise
+        credential = refreshed_credential
+        payload["cf_api_token"] = credential.api_token
+        _write_payload(payload, save_config=True)
+        cf_client = CloudflareClient(credential.api_token)
+        result = cf_client.get_tunnel(account_id=account_id, tunnel_id=tunnel_id)
     return {
         "tunnel_name": target.tunnel_name,
         "tunnel_id": tunnel_id,
@@ -991,6 +1128,11 @@ def ensure_token(
         item for item in list_domains(payload) if item.zone_name == zone_name
     ]
     zone_id = zone_matches[0].zone_id if zone_matches else ""
+    zone_tunnel_ids = [
+        item.tunnel_id
+        for item in list_tunnels(payload)
+        if item.zone_name == zone_name and str(item.tunnel_id).strip()
+    ]
     credential = ensure_cf_api_token(
         payload,
         account_id=account_id,
@@ -998,6 +1140,7 @@ def ensure_token(
         zone_id=zone_id or None,
         token_mode=cf_token_mode,
         save_config=save_config,
+        required_tunnel_id=(zone_tunnel_ids[0] if zone_tunnel_ids else None),
     )
     return {
         "zone_name": zone_name,

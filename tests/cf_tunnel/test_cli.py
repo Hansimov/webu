@@ -5,7 +5,10 @@ from copy import deepcopy
 from pathlib import Path
 from subprocess import CompletedProcess
 
+import pytest
+
 from webu.cf_tunnel.cli import _apply_runtime_path_overrides, build_parser
+from webu.cf_tunnel.clients import CloudflareApiError
 from webu.cf_tunnel.operations import (
     _install_cloudflared_tunnel_service,
     _render_cloudflared_tunnel_guard_service_unit,
@@ -19,8 +22,10 @@ from webu.cf_tunnel.operations import (
     config_init,
     docs_sync,
     edge_trace,
+    ensure_cf_api_token,
     migrate_dns_to_cloudflare,
     page_audit,
+    tunnel_status,
 )
 
 
@@ -235,6 +240,312 @@ def test_config_init_writes_project_config(monkeypatch, tmp_path):
     assert (tmp_path / "configs" / "cf_tunnel.json").exists()
 
 
+def test_ensure_cf_api_token_falls_back_to_valid_ali_esa_token(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload = deepcopy(_sample_cf_tunnel_config())
+    local_payload["cf_api_token"] = "invalid-cf-token"
+    local_payload["cf_account_api_tokens_edit_token"] = "invalid-bootstrap-token"
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    (config_dir / "ali_esa.json").write_text(
+        json.dumps(
+            {
+                "cf_api_token": "ali-esa-valid-token",
+                "cf_account_id": local_payload["cf_account_id"],
+                "sites": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            if self.api_token == "ali-esa-valid-token":
+                return []
+            raise CloudflareApiError("Invalid API Token")
+
+        def list_tunnels(self, account_id, *, name=None):
+            if self.api_token == "ali-esa-valid-token":
+                return []
+            raise CloudflareApiError("Invalid API Token")
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+
+    result = ensure_cf_api_token(
+        local_payload,
+        account_id=str(local_payload["cf_account_id"]),
+        zone_name=DOC_ZONE_NAME,
+        zone_id="zone-1",
+        token_mode="auto",
+        save_config=True,
+    )
+
+    saved = json.loads((config_dir / "cf_tunnel.json").read_text(encoding="utf-8"))
+    assert result.api_token == "ali-esa-valid-token"
+    assert result.source == "ali_esa.config"
+    assert result.created is False
+    assert saved["cf_api_token"] == "ali-esa-valid-token"
+
+
+def test_ensure_cf_api_token_recreates_worker_token_when_current_one_is_invalid(
+    monkeypatch, tmp_path
+):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload = deepcopy(_sample_cf_tunnel_config())
+    local_payload["cf_api_token"] = "invalid-cf-token"
+    local_payload["cf_account_api_tokens_edit_token"] = "valid-bootstrap-token"
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            if self.api_token == "new-worker-token":
+                return []
+            raise CloudflareApiError("Invalid API Token")
+
+        def list_tunnels(self, account_id, *, name=None):
+            if self.api_token == "new-worker-token":
+                return []
+            raise CloudflareApiError("Invalid API Token")
+
+        def create_api_token(
+            self,
+            *,
+            name,
+            account_id,
+            zone_id=None,
+            include_zone_write=False,
+            expires_in_days=None,
+        ):
+            assert self.api_token == "valid-bootstrap-token"
+            return {"value": "new-worker-token"}
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+
+    result = ensure_cf_api_token(
+        local_payload,
+        account_id=str(local_payload["cf_account_id"]),
+        zone_name=DOC_ZONE_NAME,
+        zone_id="zone-1",
+        token_mode="auto",
+        save_config=True,
+    )
+
+    saved = json.loads((config_dir / "cf_tunnel.json").read_text(encoding="utf-8"))
+    assert result.api_token == "new-worker-token"
+    assert result.source == "auto"
+    assert result.created is True
+    assert saved["cf_api_token"] == "new-worker-token"
+
+
+def test_ensure_cf_api_token_recreates_worker_token_when_current_one_cannot_read_tunnel(
+    monkeypatch, tmp_path
+):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload = deepcopy(_sample_cf_tunnel_config())
+    local_payload["cf_api_token"] = "list-only-token"
+    local_payload["cf_account_api_tokens_edit_token"] = "valid-bootstrap-token"
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
+
+        def get_tunnel(self, *, account_id, tunnel_id):
+            if self.api_token == "new-worker-token":
+                return {"id": tunnel_id, "status": "healthy", "connections": []}
+            raise CloudflareApiError("Authentication error")
+
+        def create_api_token(
+            self,
+            *,
+            name,
+            account_id,
+            zone_id=None,
+            include_zone_write=False,
+            expires_in_days=None,
+        ):
+            assert self.api_token == "valid-bootstrap-token"
+            return {"value": "new-worker-token"}
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+
+    result = ensure_cf_api_token(
+        local_payload,
+        account_id=str(local_payload["cf_account_id"]),
+        zone_name=DOC_ZONE_NAME,
+        zone_id="zone-1",
+        token_mode="auto",
+        save_config=True,
+        required_tunnel_id="tunnel-1",
+    )
+
+    saved = json.loads((config_dir / "cf_tunnel.json").read_text(encoding="utf-8"))
+    assert result.api_token == "new-worker-token"
+    assert result.source == "auto"
+    assert result.created is True
+    assert saved["cf_api_token"] == "new-worker-token"
+
+
+def test_ensure_cf_api_token_fails_when_all_local_tokens_are_invalid(
+    monkeypatch, tmp_path
+):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload = deepcopy(_sample_cf_tunnel_config())
+    local_payload["cf_api_token"] = "invalid-cf-token"
+    local_payload["cf_account_api_tokens_edit_token"] = "invalid-bootstrap-token"
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    (config_dir / "ali_esa.json").write_text(
+        json.dumps(
+            {
+                "cf_api_token": "invalid-ali-esa-token",
+                "cf_account_id": local_payload["cf_account_id"],
+                "sites": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            raise CloudflareApiError("Invalid API Token")
+
+        def list_tunnels(self, account_id, *, name=None):
+            raise CloudflareApiError("Invalid API Token")
+
+        def create_api_token(
+            self,
+            *,
+            name,
+            account_id,
+            zone_id=None,
+            include_zone_write=False,
+            expires_in_days=None,
+        ):
+            raise CloudflareApiError("Authentication error")
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+
+    with pytest.raises(
+        CloudflareApiError, match="All local Cloudflare working tokens are invalid"
+    ):
+        ensure_cf_api_token(
+            local_payload,
+            account_id=str(local_payload["cf_account_id"]),
+            zone_name=DOC_ZONE_NAME,
+            zone_id="zone-1",
+            token_mode="auto",
+            save_config=True,
+        )
+
+
+def test_tunnel_status_refreshes_token_after_auth_error(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    local_payload = deepcopy(_sample_cf_tunnel_config())
+    local_payload["cf_api_token"] = "list-only-token"
+    local_payload["cf_account_api_tokens_edit_token"] = "valid-bootstrap-token"
+    local_payload["cf_tunnels"][0]["tunnel_id"] = "tunnel-1"
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(local_payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    class _FakeCfClient:
+        def __init__(self, api_token):
+            self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
+
+        def create_api_token(
+            self,
+            *,
+            name,
+            account_id,
+            zone_id=None,
+            include_zone_write=False,
+            expires_in_days=None,
+        ):
+            assert self.api_token == "valid-bootstrap-token"
+            return {"value": "new-worker-token"}
+
+        def get_tunnel(self, *, account_id, tunnel_id):
+            if self.api_token == "new-worker-token":
+                return {
+                    "id": tunnel_id,
+                    "status": "healthy",
+                    "connections": [{"id": "conn-1"}],
+                    "conns_active_at": None,
+                    "conns_inactive_at": None,
+                }
+            raise CloudflareApiError("Authentication error")
+
+    monkeypatch.setattr("webu.cf_tunnel.operations.CloudflareClient", _FakeCfClient)
+
+    result = tunnel_status(tunnel_name=DOC_HOSTNAME, cf_token_mode="auto")
+
+    assert result["tunnel_id"] == "tunnel-1"
+    assert result["status"] == "healthy"
+
+
 def test_migrate_dns_updates_config(monkeypatch, tmp_path):
     local_payload = deepcopy(_sample_cf_tunnel_config())
     domain_name = str(local_payload["domains"][0]["domain_name"]).strip()
@@ -265,6 +576,12 @@ def test_migrate_dns_updates_config(monkeypatch, tmp_path):
     class _FakeCfClient:
         def __init__(self, api_token):
             self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
 
         def ensure_zone(self, *, account_id, zone_name):
             assert account_id == expected_account_id
@@ -333,6 +650,12 @@ def test_apply_tunnel_updates_config_without_printing_secret(monkeypatch, tmp_pa
     class _FakeCfClient:
         def __init__(self, api_token):
             self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
 
         def ensure_zone(self, *, account_id, zone_name):
             return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
@@ -408,6 +731,12 @@ def test_apply_tunnel_pushes_origin_request_settings(monkeypatch, tmp_path):
         def __init__(self, api_token):
             self.api_token = api_token
 
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
+
         def ensure_zone(self, *, account_id, zone_name):
             return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
 
@@ -473,6 +802,12 @@ def test_apply_tunnel_persists_runtime_overrides(monkeypatch, tmp_path):
     class _FakeCfClient:
         def __init__(self, api_token):
             self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
 
         def ensure_zone(self, *, account_id, zone_name):
             return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
@@ -572,6 +907,12 @@ def test_apply_tunnel_installs_dedicated_systemd_service(monkeypatch, tmp_path):
         def __init__(self, api_token):
             self.api_token = api_token
 
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
+
         def ensure_zone(self, *, account_id, zone_name):
             return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
 
@@ -665,6 +1006,12 @@ def test_apply_tunnel_can_install_guard_sidecar_when_requested(monkeypatch, tmp_
     class _FakeCfClient:
         def __init__(self, api_token):
             self.api_token = api_token
+
+        def list_zones(self, *, name=None, account_id=None):
+            return []
+
+        def list_tunnels(self, account_id, *, name=None):
+            return []
 
         def ensure_zone(self, *, account_id, zone_name):
             return {"id": "zone-1", "name_servers": ["a.ns", "b.ns"]}
