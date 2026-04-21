@@ -30,7 +30,7 @@ def test_build_ddns_go_config_payload_uses_canonical_lowercase_keys():
     payload = _build_ddns_go_config_payload(
         access_key_id="ak-test",
         access_key_secret="sk-test",
-        domain="pool.origin-pool.example.com?Name=home6",
+        domain="pool.origin-pool.example.com?Name=origin-alpha",
         ttl=600,
         ipv6_source_mode="cmd",
         target_ipv6="2001:db8::10",
@@ -59,7 +59,7 @@ def test_target_upsert_and_prepare_write_yaml(monkeypatch, tmp_path):
         name="example-origin-pool",
         site_name="example.com",
         pool_name="example-origin-pool",
-        origin_name="home6",
+        origin_name="origin-alpha",
         save_config=True,
     )
 
@@ -97,7 +97,7 @@ def test_target_upsert_and_prepare_write_yaml(monkeypatch, tmp_path):
             assert site_id == 123
             assert name == "example-origin-pool"
             assert enabled is True
-            assert origins[0]["Name"] == "home6"
+            assert origins[0]["Name"] == "origin-alpha"
             return {"Id": 10}
 
         def get_origin_pool(self, *, site_id, origin_pool_id):
@@ -107,7 +107,7 @@ def test_target_upsert_and_prepare_write_yaml(monkeypatch, tmp_path):
                 "RecordName": "example-origin-pool.origin-pool.example.com",
                 "Origins": [
                     {
-                        "Name": "home6",
+                        "Name": "origin-alpha",
                         "Address": "2001:db8::10",
                     }
                 ],
@@ -124,7 +124,7 @@ def test_target_upsert_and_prepare_write_yaml(monkeypatch, tmp_path):
     rendered = config_path.read_text(encoding="utf-8")
     assert "dns:" in rendered
     assert "gettype: cmd" in rendered
-    assert "example-origin-pool.origin-pool.example.com?Name=home6" in rendered
+    assert "example-origin-pool.origin-pool.example.com?Name=origin-alpha" in rendered
 
 
 def test_target_delete_removes_existing_target(monkeypatch, tmp_path):
@@ -142,14 +142,14 @@ def test_target_delete_removes_existing_target(monkeypatch, tmp_path):
         name="example-origin-pool",
         site_name="example.com",
         pool_name="example-origin-pool",
-        origin_name="home6",
+        origin_name="origin-alpha",
         save_config=True,
     )
     target_upsert(
         name="keep-origin-pool",
         site_name="example.com",
         pool_name="keep-origin-pool",
-        origin_name="home6",
+        origin_name="origin-alpha",
         save_config=True,
     )
 
@@ -359,7 +359,7 @@ def test_target_run_once_verifies_origin_pool_after_timeout(monkeypatch, tmp_pat
         name="example-origin-pool",
         site_name="example.com",
         pool_name="example-origin-pool",
-        origin_name="home6",
+        origin_name="origin-alpha",
         binary_path="debugs/ddns-go/bin/ddns-go",
         save_config=True,
     )
@@ -396,7 +396,7 @@ def test_target_run_once_verifies_origin_pool_after_timeout(monkeypatch, tmp_pat
                 "Id": 10,
                 "Name": "example-origin-pool",
                 "RecordName": "example-origin-pool.origin-pool.example.com",
-                "Origins": [{"Name": "home6", "Address": "2001:db8::10"}],
+                "Origins": [{"Name": "origin-alpha", "Address": "2001:db8::10"}],
             }
 
         def update_origin_pool(self, *, site_id, origin_pool_id, enabled, origins):
@@ -517,7 +517,7 @@ def test_render_ddns_service_unit_contains_binary_and_config_path():
         provider="aliesa-origin-pool",
         site_name="example.com",
         pool_name="example-origin-pool",
-        origin_name="home6",
+        origin_name="origin-alpha",
         record_name="",
         enabled=True,
         target_ipv6="",

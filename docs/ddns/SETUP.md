@@ -101,7 +101,7 @@ wdns target-upsert \
   --name example-origin-pool \
   --site-name example.com \
   --pool-name example-origin-pool \
-  --origin-name home6 \
+  --origin-name origin-alpha \
   --save-config
 ```
 

@@ -43,17 +43,121 @@ def test_collect_sensitive_local_values_extracts_ali_esa_runtime_fields(tmp_path
     assert "2001:db8:1::10" in values
 
 
+def test_collect_sensitive_local_values_extracts_ssh_and_frp_runtime_fields(tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "ssh.json").write_text(
+        json.dumps(
+            {
+                "hosts": [
+                    {
+                        "name": "relay-vps",
+                        "ip": "198.51.100.24",
+                        "username": "root",
+                        "password": "secret",
+                    }
+                ],
+                "tunnels": [
+                    {
+                        "name": "relay-prod",
+                        "host_name": "relay-vps",
+                        "local_port": 20002,
+                        "remote_port": 32002,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "frp.json").write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "name": "relay-frps",
+                        "ssh_host_name": "relay-vps",
+                        "auth_token": "secret",
+                        "remote_binary_path": "/root/frps",
+                        "remote_config_path": "/root/frps.toml",
+                    }
+                ],
+                "clients": [
+                    {
+                        "name": "relay-public-web",
+                        "server_name": "relay-frps",
+                        "server_addr": "198.51.100.24",
+                        "local_port": 20002,
+                        "remote_port": 32002,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    values = collect_sensitive_local_values(config_dir)
+
+    assert "relay-vps" in values
+    assert "relay-prod" in values
+    assert "relay-frps" in values
+    assert "198.51.100.24" in values
+
+
+def test_collect_sensitive_local_values_extracts_ddns_runtime_fields(tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "ddns.json").write_text(
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "name": "home-ddns",
+                        "site_name": "corp.invalid",
+                        "record_name": "home.corp.invalid",
+                        "pool_name": "home-pool",
+                        "origin_name": "origin-alpha",
+                        "target_ipv6": "2001:db8:1::10",
+                        "client_secret": "secret",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    values = collect_sensitive_local_values(config_dir)
+
+    assert "home-ddns" in values
+    assert "home.corp.invalid" in values
+    assert "home-pool" in values
+    assert "origin-alpha" in values
+    assert "2001:db8:1::10" in values
+
+
 def test_public_ali_esa_and_cf_tunnel_sources_do_not_leak_local_sensitive_values():
     project_root = Path(__file__).resolve().parents[2]
     sensitive_values = collect_sensitive_local_values(project_root / "configs")
 
     target_paths = [
+        project_root / "docs" / "ssh" / "SETUP.md",
+        project_root / "docs" / "ssh" / "USAGE.md",
+        project_root / "docs" / "frp" / "SETUP.md",
+        project_root / "docs" / "frp" / "USAGE.md",
+        project_root / "docs" / "nginx" / "SETUP.md",
+        project_root / "docs" / "nginx" / "USAGE.md",
         project_root / "src" / "webu" / "ali_esa" / "schema.py",
         project_root / "src" / "webu" / "ali_esa" / "operations.py",
         project_root / "src" / "webu" / "ali_esa" / "cli.py",
+        project_root / "src" / "webu" / "frp" / "schema.py",
         project_root / "tests" / "cf_tunnel" / "test_cli.py",
         project_root / "tests" / "cf_tunnel" / "test_guard.py",
         project_root / "tests" / "cf_tunnel" / "test_snapshot.py",
+        project_root / "tests" / "ssh" / "test_ssh_cli.py",
+        project_root / "tests" / "ssh" / "test_ssh_operations.py",
+        project_root / "tests" / "frp" / "test_frp_cli.py",
+        project_root / "tests" / "frp" / "test_frp_operations.py",
+        project_root / "tests" / "nginx" / "test_nginx_cli.py",
+        project_root / "tests" / "nginx" / "test_nginx_operations.py",
     ]
 
     leaked = {}

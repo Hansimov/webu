@@ -8,22 +8,41 @@ from typing import Any
 
 
 SENSITIVE_TOKEN_KEYS = {
+    "access_key_secret",
+    "access_secret",
     "admin_token",
     "api_key",
     "api_token",
+    "auth_token",
+    "authorization",
+    "bearer_token",
+    "cf_account_api_tokens_edit_token",
+    "cf_api_token",
+    "client_secret",
+    "cookie",
+    "cookie_value",
     "hf_token",
     "search_api_token",
+    "tunnel_token",
+    "aliyun_access_secret",
+    "password",
 }
 SENSITIVE_SPACE_KEYS = {"space", "account"}
 SENSITIVE_URL_KEYS = {"base_url", "url"}
 SENSITIVE_DOMAIN_KEYS = {"domain_name", "zone_name", "site_name", "tunnel_name"}
 SENSITIVE_IDENTIFIER_KEYS = {
+    "aliyun_access_id",
+    "cf_account_id",
     "cloudflare_zone_id",
     "default_public_origin_ipv4",
     "default_public_origin_ipv6",
     "instance_id",
+    "origin_name",
+    "pool_name",
     "registrar_task_no",
+    "record_name",
     "site_id",
+    "tunnel_id",
     "verify_code",
     "zone_id",
 }
@@ -32,7 +51,13 @@ SENSITIVE_STRING_LIST_KEYS = {
     "current_ns",
     "name_server_list",
 }
-SENSITIVE_PUBLIC_ADDRESS_KEYS = {"public_origin_address"}
+SENSITIVE_PUBLIC_ADDRESS_KEYS = {"public_origin_address", "target_ipv6"}
+GENERIC_SECRET_KEY_TOKENS = ("token", "secret", "password", "credential")
+SENSITIVE_FILE_EXTRACTION_KEYS = {
+    "ssh.json": {"name", "host_name", "hostname", "ip"},
+    "ddns.json": {"name", "record_name", "pool_name", "origin_name"},
+    "frp.json": {"name", "server_addr", "server_name", "ssh_host_name"},
+}
 
 
 def _find_project_root() -> Path:
@@ -106,11 +131,19 @@ def _add_string_list_values(values: set[str], raw_value: Any):
         _add_string_value(values, item)
 
 
-def _collect_from_payload(payload: Any, values: set[str], parent_key: str = ""):
+def _collect_from_payload(
+    payload: Any,
+    values: set[str],
+    parent_key: str = "",
+    *,
+    extra_keys: set[str] | frozenset[str] = frozenset(),
+):
     if isinstance(payload, dict):
         for key, value in payload.items():
             lowered = str(key).strip().lower()
-            if lowered in SENSITIVE_TOKEN_KEYS:
+            if lowered in SENSITIVE_TOKEN_KEYS or any(
+                token in lowered for token in GENERIC_SECRET_KEY_TOKENS
+            ):
                 _add_string_value(values, value)
             if lowered in SENSITIVE_SPACE_KEYS:
                 _add_space_value(values, value)
@@ -122,12 +155,14 @@ def _collect_from_payload(payload: Any, values: set[str], parent_key: str = ""):
                 _add_string_value(values, value)
             if lowered in SENSITIVE_STRING_LIST_KEYS:
                 _add_string_list_values(values, value)
-            _collect_from_payload(value, values, lowered)
+            if lowered in extra_keys:
+                _add_string_value(values, value)
+            _collect_from_payload(value, values, lowered, extra_keys=extra_keys)
         return
 
     if isinstance(payload, list):
         for item in payload:
-            _collect_from_payload(item, values, parent_key)
+            _collect_from_payload(item, values, parent_key, extra_keys=extra_keys)
 
 
 def collect_sensitive_local_values(config_dir: Path | None = None) -> list[str]:
@@ -138,7 +173,13 @@ def collect_sensitive_local_values(config_dir: Path | None = None) -> list[str]:
             payload = json.loads(config_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        _collect_from_payload(payload, values)
+        _collect_from_payload(
+            payload,
+            values,
+            extra_keys=SENSITIVE_FILE_EXTRACTION_KEYS.get(
+                config_path.name.lower(), frozenset()
+            ),
+        )
 
     return sorted(value for value in values if value)
 

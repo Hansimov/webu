@@ -312,8 +312,8 @@ def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):
         return {
             "origin_pool": {
                 "Id": 21,
-                "Name": "home6-prod",
-                "RecordName": "home6-prod.origin-pool.example.com",
+                "Name": "pool-alpha-prod",
+                "RecordName": "pool-alpha-prod.origin-pool.example.com",
                 "Origins": [
                     {
                         "Address": "2001:db8:1::10",
@@ -325,7 +325,7 @@ def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):
                     "RecordName": "prod.example.com",
                     "RecordType": "CNAME",
                     "RecordSourceType": "OP",
-                    "Data": {"Value": "home6-prod.origin-pool.example.com"},
+                    "Data": {"Value": "pool-alpha-prod.origin-pool.example.com"},
                 },
                 "created": True,
                 "updated": False,
@@ -359,7 +359,7 @@ def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):
         local_url="http://127.0.0.1:20002",
         zone_name="example.com",
         record_mode="origin-pool",
-        origin_pool_name="home6-prod",
+        origin_pool_name="pool-alpha-prod",
         biz_name="web",
         purge_conflicts=True,
         save_config=False,
@@ -368,7 +368,7 @@ def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):
     assert observed == {
         "site_name": "example.com",
         "record_name": "prod.example.com",
-        "pool_name": "home6-prod",
+        "pool_name": "pool-alpha-prod",
         "pool_id": None,
         "biz_name": "web",
         "host_policy": "",
@@ -381,8 +381,8 @@ def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):
     assert result["origin"]["record_source_type"] == "OP"
     assert result["origin"]["origin_pool"] == {
         "id": 21,
-        "name": "home6-prod",
-        "record_name": "home6-prod.origin-pool.example.com",
+        "name": "pool-alpha-prod",
+        "record_name": "pool-alpha-prod.origin-pool.example.com",
     }
     assert result["origin"]["public_address"] == "2001:db8:1::10"
     assert result["record"]["record"]["RecordSourceType"] == "OP"

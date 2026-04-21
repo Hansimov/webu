@@ -2452,7 +2452,7 @@ def access_diagnose(*, tunnel_name: str | None, hostname: str | None) -> dict[st
         "Do not replace a proxied Cloudflare Tunnel hostname with a manually selected 'preferred Cloudflare IP'. Community preferred-IP workflows are meant for direct CDN hostname testing or hosts overrides, not for Cloudflare Tunnel visitor routing."
     )
     recommendations.append(
-        "If mainland-first low latency is mandatory, place a nearby reverse proxy or relay in Hong Kong, Japan, or Singapore, or use a mainland-compliant CDN/front door. Public Cloudflare Tunnel alone cannot guarantee stable low-latency access from mainland China."
+        "If low latency from the target network is mandatory, place a nearby reverse proxy or relay in a region close to the audience, or use a suitable CDN/front door. Public Cloudflare Tunnel alone cannot guarantee stable low-latency access from every network."
     )
     recommendations.append(
         "Enable DNSSEC for the zone at Cloudflare and publish the DS record at the registrar to reduce spoofed DNS responses on validating resolvers."

@@ -21,7 +21,7 @@ def test_parser_supports_config_target_and_service_commands():
             "--pool-name",
             "example-origin-pool",
             "--origin-name",
-            "home6",
+            "origin-alpha",
             "--save-config",
             "--project-root",
             project_root,

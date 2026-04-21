@@ -39,7 +39,7 @@ wdns target-upsert \
   --name example-origin-pool \
   --site-name example.com \
   --pool-name example-origin-pool \
-  --origin-name home6 \
+  --origin-name origin-alpha \
   --save-config
 ```
 
@@ -61,7 +61,7 @@ wdns target-upsert \
   --name example-origin-pool \
   --site-name example.com \
   --pool-name example-origin-pool \
-  --origin-name home6 \
+  --origin-name origin-alpha \
   --target-ipv6 2001:db8::10 \
   --binary-path /opt/ddns-go/bin/ddns-go \
   --save-config
@@ -74,7 +74,7 @@ wdns target-upsert \
   --name example-origin-pool \
   --site-name example.com \
   --pool-name example-origin-pool \
-  --origin-name home6 \
+  --origin-name origin-alpha \
   --disable \
   --save-config
 ```

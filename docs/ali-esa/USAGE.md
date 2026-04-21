@@ -93,7 +93,7 @@ aesa site-origin-pools --site-name example.com
 ```bash
 aesa site-origin-pools \
   --site-name example.com \
-  --name ddnsgo-v6-probe \
+  --name example-ddns-probe \
   --match-type exact
 ```
 
@@ -260,7 +260,7 @@ aesa exposure-apply \
   --local-url http://127.0.0.1:8930 \
   --zone-name example.com \
   --record-mode origin-pool \
-  --origin-pool-name home6-prod \
+  --origin-pool-name pool-alpha-prod \
   --biz-name web \
   --purge-conflicts \
   --save-config
@@ -394,8 +394,8 @@ aesa site-activate-ns \
 cd <webu-project-root>
 python debugs/ddns_go_aliesa_origin_pool_probe.py \
   --site-name example.com \
-  --pool-name ddnsgo-v6-probe \
-  --origin-name home6 \
+  --pool-name example-ddns-probe \
+  --origin-name origin-alpha \
   --seed-existing
 ```
 
@@ -404,7 +404,7 @@ python debugs/ddns_go_aliesa_origin_pool_probe.py \
 - 读取 `ali_esa.json` 和必要的 fallback 凭据
 - 创建或查找指定的 origin pool
 - 在需要时把 origin 重置为一个 seed IPv6，方便观察后续更新是否真的发生
-- 生成 ddns-go 配置文件 `debugs/ddns-go/ddnsgo-v6-probe.yaml`
+- 生成 ddns-go 配置文件 `debugs/ddns-go/example-ddns-probe.yaml`
 
 ### 7.2 用 Go 探针验证配置是否被 ddns-go 正确加载
 
@@ -419,7 +419,7 @@ go run . --show-template
 
 ```bash
 cd <webu-project-root>/debugs/ddns_go_run_once
-go run . ../ddns-go/ddnsgo-v6-probe.yaml
+go run . ../ddns-go/example-ddns-probe.yaml
 ```
 
 如果输出中看到 `dns_conf_count: 1`，说明配置已经被 ddns-go 正确加载。
@@ -433,10 +433,10 @@ go run . ../ddns-go/ddnsgo-v6-probe.yaml
 
 ```bash
 cd <webu-project-root>/debugs/ddns-go/bin
-timeout 15s ./ddns-go -noweb -c ../ddnsgo-v6-probe.yaml -f 300 -cacheTimes 1
+timeout 15s ./ddns-go -noweb -c ../example-ddns-probe.yaml -f 300 -cacheTimes 1
 ```
 
-在 2026-04-21 的实测中，这条命令已经成功把 `ddnsgo-v6-probe.origin-pool.example.com?Name=home6` 对应的 origin 地址从 `2001:db8::1` 更新为真实公网 IPv6。
+在 2026-04-21 的实测中，这条命令已经成功把 `example-ddns-probe.origin-pool.example.com?Name=origin-alpha` 对应的 origin 地址从 `2001:db8::1` 更新为真实公网 IPv6。
 
 ### 7.4 回读 ESA 控制面确认更新结果
 
@@ -444,7 +444,7 @@ timeout 15s ./ddns-go -noweb -c ../ddnsgo-v6-probe.yaml -f 300 -cacheTimes 1
 cd <webu-project-root>
 aesa site-origin-pools \
   --site-name example.com \
-  --name ddnsgo-v6-probe \
+  --name example-ddns-probe \
   --match-type exact
 ```
 

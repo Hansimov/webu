@@ -13,16 +13,27 @@ from webu.runtime_settings import (
 
 TEXT_SUFFIXES = {
     "",
+    ".cjs",
     ".cfg",
+    ".conf",
+    ".css",
     ".env",
+    ".html",
     ".gitignore",
     ".ini",
+    ".js",
+    ".jsx",
     ".json",
     ".md",
+    ".mjs",
     ".py",
     ".sh",
+    ".service",
+    ".ts",
+    ".tsx",
     ".toml",
     ".txt",
+    ".vue",
     ".yaml",
     ".yml",
 }
@@ -38,7 +49,13 @@ ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(api[_-]?key|token|secret|password)\s*[\"']?\s*[:=]\s*[\"']([^\"'\n]{8,})[\"']"
 )
 SENSITIVE_CONFIG_NAME_TOKENS = ("secret", "token", "credential", "password")
-SENSITIVE_RUNTIME_CONFIG_BASENAMES = {"ali_esa.json", "cf_tunnel.json", "ddns.json"}
+SENSITIVE_RUNTIME_CONFIG_BASENAMES = {
+    "ali_esa.json",
+    "cf_tunnel.json",
+    "ddns.json",
+    "ssh.json",
+    "frp.json",
+}
 SAFE_TEMPLATE_MARKERS = (".example", ".sample", ".template")
 SAFE_BINARY_EXTENSIONS = {".crt", ".example", ".md", ".sample", ".template"}
 
@@ -110,6 +127,8 @@ def is_placeholder_secret(value: str) -> bool:
     stripped = value.strip()
     lowered = stripped.lower()
     if not stripped:
+        return True
+    if re.fullmatch(r"\{[A-Za-z_][A-Za-z0-9_\.\-\[\]]*\}", stripped):
         return True
     if "*" in stripped:
         return True
@@ -213,7 +232,11 @@ def _local_sensitive_leak_violations(
 ) -> list[str]:
     relpath = display_path(path, root)
     if relpath.startswith("configs/"):
-        return []
+        file_name = path.name.lower()
+        if file_name in SENSITIVE_RUNTIME_CONFIG_BASENAMES or any(
+            token in file_name for token in SENSITIVE_CONFIG_NAME_TOKENS
+        ):
+            return []
     leaks = find_sensitive_text_leaks(text, sensitive_values=sensitive_values)
     if not leaks:
         return []

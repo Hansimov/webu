@@ -52,7 +52,7 @@ def test_parser_supports_exposure_apply_origin_pool_mode():
             "--record-mode",
             "origin-pool",
             "--origin-pool-name",
-            "home6-prod",
+            "pool-alpha-prod",
             "--biz-name",
             "web",
             "--purge-conflicts",
@@ -64,7 +64,7 @@ def test_parser_supports_exposure_apply_origin_pool_mode():
     assert args.local_url == "http://127.0.0.1:20002"
     assert args.zone_name == "example.com"
     assert args.record_mode == "origin-pool"
-    assert args.origin_pool_name == "home6-prod"
+    assert args.origin_pool_name == "pool-alpha-prod"
     assert args.biz_name == "web"
     assert args.purge_conflicts is True
 
