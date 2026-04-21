@@ -38,7 +38,7 @@ ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(api[_-]?key|token|secret|password)\s*[\"']?\s*[:=]\s*[\"']([^\"'\n]{8,})[\"']"
 )
 SENSITIVE_CONFIG_NAME_TOKENS = ("secret", "token", "credential", "password")
-SENSITIVE_RUNTIME_CONFIG_BASENAMES = {"ali_esa.json", "cf_tunnel.json"}
+SENSITIVE_RUNTIME_CONFIG_BASENAMES = {"ali_esa.json", "cf_tunnel.json", "ddns.json"}
 SAFE_TEMPLATE_MARKERS = (".example", ".sample", ".template")
 SAFE_BINARY_EXTENSIONS = {".crt", ".example", ".md", ".sample", ".template"}
 

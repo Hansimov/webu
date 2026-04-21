@@ -9,6 +9,8 @@ from webu.ali_esa.operations import (
     _resolve_exposure_record,
     _resolve_origin_address,
     apply_exposure,
+    site_load_balancer_origin_status,
+    site_load_balancers,
     site_origin_pools,
     site_records,
 )
@@ -293,3 +295,112 @@ def test_site_origin_pools_lists_filtered_pools(monkeypatch):
     assert result["site_name"] == "example.com"
     assert result["count"] == 1
     assert result["origin_pools"][0]["Name"] == "search-prod"
+
+
+def test_site_load_balancers_lists_filtered_items(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "pending"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return []
+
+        def list_load_balancers(
+            self, *, site_id, name=None, match_type=None, order_by=None, page_size=500
+        ):
+            observed["site_id"] = site_id
+            observed["name"] = name
+            observed["match_type"] = match_type
+            observed["order_by"] = order_by
+            observed["page_size"] = page_size
+            return [
+                {
+                    "Id": 21,
+                    "Name": "search-prod-lb",
+                    "DefaultPools": [101],
+                }
+            ]
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {"sites": [{"site_name": "example.com"}]},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    result = site_load_balancers(
+        site_name="example.com",
+        name="search",
+        match_type="fuzzy",
+    )
+
+    assert observed == {
+        "site_id": 123,
+        "name": "search",
+        "match_type": "fuzzy",
+        "order_by": None,
+        "page_size": 500,
+    }
+    assert result["site_name"] == "example.com"
+    assert result["count"] == 1
+    assert result["load_balancers"][0]["Name"] == "search-prod-lb"
+
+
+def test_site_load_balancer_origin_status_uses_explicit_ids(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "pending"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return []
+
+        def list_load_balancer_origin_status(
+            self, *, site_id, load_balancer_ids, pool_type=None
+        ):
+            observed["site_id"] = site_id
+            observed["load_balancer_ids"] = load_balancer_ids
+            observed["pool_type"] = pool_type
+            return [
+                {
+                    "LoadBalancerId": 21,
+                    "OriginId": 31,
+                    "PoolId": 101,
+                    "PoolType": "default_pool",
+                    "Status": "healthy",
+                }
+            ]
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {"sites": [{"site_name": "example.com"}]},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    result = site_load_balancer_origin_status(
+        site_name="example.com",
+        load_balancer_ids=[21, 22],
+        pool_type="default_pool",
+    )
+
+    assert observed == {
+        "site_id": 123,
+        "load_balancer_ids": [21, 22],
+        "pool_type": "default_pool",
+    }
+    assert result["site_name"] == "example.com"
+    assert result["load_balancer_ids"] == [21, 22]
+    assert result["count"] == 1
+    assert result["origin_status"][0]["Status"] == "healthy"

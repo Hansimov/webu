@@ -213,6 +213,70 @@ class AliyunEsaClient:
         items = payload.get("OriginPools")
         return items if isinstance(items, list) else []
 
+    def get_load_balancer(
+        self,
+        *,
+        site_id: int,
+        load_balancer_id: int,
+    ) -> dict[str, Any]:
+        payload = self._call(
+            self._client.get_load_balancer,
+            esa_models.GetLoadBalancerRequest(
+                site_id=int(site_id),
+                id=int(load_balancer_id),
+            ),
+        )
+        load_balancer = payload.get("LoadBalancer")
+        return load_balancer if isinstance(load_balancer, dict) else payload
+
+    def list_load_balancers(
+        self,
+        *,
+        site_id: int,
+        name: str | None = None,
+        match_type: str | None = None,
+        order_by: str | None = None,
+        page_size: int = 500,
+    ) -> list[dict[str, Any]]:
+        payload = self._call(
+            self._client.list_load_balancers,
+            esa_models.ListLoadBalancersRequest(
+                site_id=int(site_id),
+                name=str(name or "").strip() or None,
+                match_type=str(match_type or "").strip() or None,
+                order_by=str(order_by or "").strip() or None,
+                page_number=1,
+                page_size=max(1, min(500, int(page_size))),
+            ),
+        )
+        items = payload.get("LoadBalancers")
+        return items if isinstance(items, list) else []
+
+    def list_load_balancer_origin_status(
+        self,
+        *,
+        site_id: int,
+        load_balancer_ids: list[int],
+        pool_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_ids = [
+            str(int(item))
+            for item in load_balancer_ids
+            if isinstance(item, int) and item > 0
+        ]
+        if not normalized_ids:
+            return []
+        payload = self._call(
+            self._client.list_load_balancer_origin_status,
+            esa_models.ListLoadBalancerOriginStatusRequest(
+                site_id=int(site_id),
+                load_balancer_ids=",".join(normalized_ids),
+                pool_type=str(pool_type or "").strip() or None,
+            ),
+        )
+        items = payload.get("OriginStatus")
+        return items if isinstance(items, list) else []
+
     def create_origin_pool(
         self,
         *,

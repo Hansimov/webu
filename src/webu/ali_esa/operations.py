@@ -1212,6 +1212,98 @@ def site_origin_pools(
     }
 
 
+def site_load_balancers(
+    *,
+    site_name: str,
+    name: str = "",
+    match_type: str = "exact",
+) -> dict[str, Any]:
+    normalized_site_name = _require_text(site_name, "site_name")
+    config_payload = load_ali_esa_config(validate=False)
+    client = _build_esa_client(config_payload)
+    remote_site = client.get_site(site_name=normalized_site_name)
+    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
+    if not isinstance(site_id, int) or site_id <= 0:
+        raise ValueError(
+            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
+        )
+
+    current_ns: list[str] = []
+    try:
+        current_ns = client.get_site_current_ns(site_id=site_id)
+    except AliyunEsaApiError:
+        current_ns = []
+
+    normalized_match_type = str(match_type or "exact").strip().lower() or "exact"
+    if normalized_match_type not in {"exact", "fuzzy"}:
+        raise ValueError("match_type must be one of: exact, fuzzy")
+
+    load_balancers = client.list_load_balancers(
+        site_id=site_id,
+        name=str(name or "").strip() or None,
+        match_type=normalized_match_type,
+    )
+    return {
+        "site_name": normalized_site_name,
+        "remote_site": remote_site,
+        "current_ns": current_ns,
+        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "count": len(load_balancers),
+        "load_balancers": load_balancers,
+    }
+
+
+def site_load_balancer_origin_status(
+    *,
+    site_name: str,
+    load_balancer_ids: list[int] | None = None,
+    pool_type: str = "",
+) -> dict[str, Any]:
+    normalized_site_name = _require_text(site_name, "site_name")
+    config_payload = load_ali_esa_config(validate=False)
+    client = _build_esa_client(config_payload)
+    remote_site = client.get_site(site_name=normalized_site_name)
+    site_id = remote_site.get("SiteId") if isinstance(remote_site, dict) else None
+    if not isinstance(site_id, int) or site_id <= 0:
+        raise ValueError(
+            f"ESA site '{normalized_site_name}' does not exist or does not have a valid SiteId"
+        )
+
+    current_ns: list[str] = []
+    try:
+        current_ns = client.get_site_current_ns(site_id=site_id)
+    except AliyunEsaApiError:
+        current_ns = []
+
+    normalized_ids = [
+        int(item)
+        for item in (load_balancer_ids or [])
+        if isinstance(item, int) and int(item) > 0
+    ]
+    if not normalized_ids:
+        normalized_ids = [
+            int(item.get("Id"))
+            for item in client.list_load_balancers(site_id=site_id)
+            if isinstance(item, dict) and isinstance(item.get("Id"), int)
+        ]
+
+    origin_status = client.list_load_balancer_origin_status(
+        site_id=site_id,
+        load_balancer_ids=normalized_ids,
+        pool_type=str(pool_type or "").strip() or None,
+    )
+    return {
+        "site_name": normalized_site_name,
+        "remote_site": remote_site,
+        "current_ns": current_ns,
+        "config_site": _serialize_site(find_site(config_payload, normalized_site_name)),
+        "load_balancer_ids": normalized_ids,
+        "pool_type": str(pool_type or "").strip(),
+        "count": len(origin_status),
+        "origin_status": origin_status,
+    }
+
+
 def _cf_record_data(record: dict[str, Any]) -> tuple[str, str, dict[str, Any] | None]:
     record_type = str(record.get("type") or "").strip().upper()
     content = _normalize_record_value(record.get("content"))

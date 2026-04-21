@@ -17,6 +17,8 @@ from .operations import (
     ensure_site,
     list_plan_instances,
     site_check,
+    site_load_balancer_origin_status,
+    site_load_balancers,
     site_origin_pools,
     site_records,
     site_status,
@@ -103,6 +105,26 @@ def cmd_site_origin_pools(args):
             site_name=args.site_name,
             name=args.name,
             match_type=args.match_type,
+        )
+    )
+
+
+def cmd_site_load_balancers(args):
+    print_json(
+        site_load_balancers(
+            site_name=args.site_name,
+            name=args.name,
+            match_type=args.match_type,
+        )
+    )
+
+
+def cmd_site_load_balancer_origin_status(args):
+    print_json(
+        site_load_balancer_origin_status(
+            site_name=args.site_name,
+            load_balancer_ids=list(args.load_balancer_id or []),
+            pool_type=args.pool_type,
         )
     )
 
@@ -263,6 +285,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_runtime_path_options(site_origin_pools_parser)
     site_origin_pools_parser.set_defaults(func=cmd_site_origin_pools)
+
+    site_load_balancers_parser = subparsers.add_parser(
+        "site-load-balancers",
+        help="List ESA load balancers currently configured for a site.",
+    )
+    site_load_balancers_parser.add_argument("--site-name", required=True)
+    site_load_balancers_parser.add_argument(
+        "--name",
+        default="",
+        help="Optional load balancer name filter.",
+    )
+    site_load_balancers_parser.add_argument(
+        "--match-type",
+        default="exact",
+        choices=["exact", "fuzzy"],
+        help="How --name should be matched when filtering load balancers.",
+    )
+    _add_runtime_path_options(site_load_balancers_parser)
+    site_load_balancers_parser.set_defaults(func=cmd_site_load_balancers)
+
+    site_load_balancer_origin_status_parser = subparsers.add_parser(
+        "site-load-balancer-origin-status",
+        help="List ESA load balancer origin health status for one or more load balancers.",
+    )
+    site_load_balancer_origin_status_parser.add_argument("--site-name", required=True)
+    site_load_balancer_origin_status_parser.add_argument(
+        "--load-balancer-id",
+        action="append",
+        type=int,
+        default=[],
+        help="Specific load balancer ID to query. Repeat for multiple IDs. If omitted, all site load balancers are queried.",
+    )
+    site_load_balancer_origin_status_parser.add_argument(
+        "--pool-type",
+        default="",
+        help="Optional pool type filter such as default_pool.",
+    )
+    _add_runtime_path_options(site_load_balancer_origin_status_parser)
+    site_load_balancer_origin_status_parser.set_defaults(
+        func=cmd_site_load_balancer_origin_status
+    )
 
     site_sync_parser = subparsers.add_parser(
         "site-sync-cloudflare-dns",

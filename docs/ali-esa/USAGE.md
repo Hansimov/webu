@@ -106,6 +106,32 @@ aesa site-origin-pools \
   --match-type fuzzy
 ```
 
+列出 ESA load balancer：
+
+```bash
+aesa site-load-balancers --site-name example.com
+```
+
+按名称过滤 load balancer：
+
+```bash
+aesa site-load-balancers \
+  --site-name example.com \
+  --name search \
+  --match-type fuzzy
+```
+
+查看一个或多个 load balancer 下的 origin 健康状态：
+
+```bash
+aesa site-load-balancer-origin-status \
+  --site-name example.com \
+  --load-balancer-id 21 \
+  --pool-type default_pool
+```
+
+如果不传 `--load-balancer-id`，`aesa` 会先列出站点上的所有 load balancer，再批量查询这些对象的 origin status。
+
 ## 3. 从 Cloudflare 导入 DNS
 
 把当前 Cloudflare zone 记录导入 ESA：
@@ -277,6 +303,18 @@ aesa site-origin-pools \
 ```
 
 只要 `Origins[].Address` 已经变成目标公网 IPv6，就说明这条 ddns-go -> ESA origin pool 的更新链路已经成立。
+
+如果要继续确认这个 origin pool 是否已经被 ESA 公网对象引用，可以再执行：
+
+```bash
+aesa site-load-balancers --site-name example.com
+```
+
+以及：
+
+```bash
+aesa site-load-balancer-origin-status --site-name example.com
+```
 
 ## 8. 常见故障与解释
 

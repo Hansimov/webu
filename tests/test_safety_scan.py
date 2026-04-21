@@ -7,11 +7,17 @@ from webu.safety_scan import find_forbidden_tracked_paths, scan_text
 
 def test_find_forbidden_tracked_paths_flags_runtime_configs():
     violations = find_forbidden_tracked_paths(
-        {"configs/cf_tunnel.json", "configs/ali_esa.json", "README.md"}
+        {
+            "configs/cf_tunnel.json",
+            "configs/ali_esa.json",
+            "configs/ddns.json",
+            "README.md",
+        }
     )
 
     assert any("configs/cf_tunnel.json" in violation for violation in violations)
     assert any("configs/ali_esa.json" in violation for violation in violations)
+    assert any("configs/ddns.json" in violation for violation in violations)
 
 
 def test_scan_text_detects_local_sensitive_value_leaks(tmp_path):
