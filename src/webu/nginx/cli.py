@@ -55,6 +55,7 @@ def cmd_render_reverse_proxy(args):
                 listen_http=args.listen_http,
                 listen_https=args.listen_https,
                 redirect_https=args.redirect_https,
+                disable_access_by_lua=args.disable_access_by_lua,
                 ssl_certificate=args.ssl_certificate,
                 ssl_certificate_key=args.ssl_certificate_key,
                 acme_root=args.acme_root,
@@ -76,6 +77,7 @@ def cmd_remote_site_apply(args):
             listen_http=args.listen_http,
             listen_https=args.listen_https,
             redirect_https=args.redirect_https,
+            disable_access_by_lua=args.disable_access_by_lua,
             ssl_certificate=args.ssl_certificate,
             ssl_certificate_key=args.ssl_certificate_key,
             acme_root=args.acme_root,
@@ -122,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument("--listen-http", action="store_true", default=False)
     render_parser.add_argument("--listen-https", action="store_true", default=False)
     render_parser.add_argument("--redirect-https", action="store_true")
+    render_parser.add_argument("--disable-access-by-lua", action="store_true")
     render_parser.add_argument("--ssl-certificate", default="")
     render_parser.add_argument("--ssl-certificate-key", default="")
     render_parser.add_argument("--acme-root", default=DEFAULT_ACME_ROOT)
@@ -142,6 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--listen-http", action="store_true", default=False)
     apply_parser.add_argument("--listen-https", action="store_true", default=False)
     apply_parser.add_argument("--redirect-https", action="store_true")
+    apply_parser.add_argument("--disable-access-by-lua", action="store_true")
     apply_parser.add_argument("--ssl-certificate", default="")
     apply_parser.add_argument("--ssl-certificate-key", default="")
     apply_parser.add_argument("--acme-root", default=DEFAULT_ACME_ROOT)

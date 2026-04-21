@@ -77,6 +77,15 @@ def _render_proxy_location(upstream_url: str) -> list[str]:
     return lines
 
 
+def _render_access_by_lua_override(disable_access_by_lua: bool) -> list[str]:
+    if not disable_access_by_lua:
+        return []
+    return [
+        "    access_by_lua_block {",
+        "    }",
+    ]
+
+
 def render_reverse_proxy_site(
     *,
     server_names: list[str],
@@ -84,6 +93,7 @@ def render_reverse_proxy_site(
     listen_http: bool = True,
     listen_https: bool = False,
     redirect_https: bool = False,
+    disable_access_by_lua: bool = False,
     ssl_certificate: str = "",
     ssl_certificate_key: str = "",
     acme_root: str = DEFAULT_ACME_ROOT,
@@ -96,6 +106,7 @@ def render_reverse_proxy_site(
 
     blocks: list[str] = []
     server_name_line = f"    server_name {' '.join(normalized_names)};"
+    access_by_lua_override = _render_access_by_lua_override(disable_access_by_lua)
     acme_block = [
         "    location ^~ /.well-known/acme-challenge/ {",
         f"        root {acme_root};",
@@ -108,6 +119,7 @@ def render_reverse_proxy_site(
             "server {",
             "    listen 80;",
             server_name_line,
+            *access_by_lua_override,
             *acme_block,
         ]
         if redirect_https and listen_https:
@@ -128,6 +140,7 @@ def render_reverse_proxy_site(
             "server {",
             "    listen 443 ssl http2;",
             server_name_line,
+            *access_by_lua_override,
             f"    ssl_certificate {ssl_certificate};",
             f"    ssl_certificate_key {ssl_certificate_key};",
             "    ssl_protocols TLSv1.2 TLSv1.3;",
@@ -152,6 +165,7 @@ def remote_site_apply(
     listen_http: bool = True,
     listen_https: bool = False,
     redirect_https: bool = False,
+    disable_access_by_lua: bool = False,
     ssl_certificate: str = "",
     ssl_certificate_key: str = "",
     acme_root: str = DEFAULT_ACME_ROOT,
@@ -162,6 +176,7 @@ def remote_site_apply(
         listen_http=listen_http,
         listen_https=listen_https,
         redirect_https=redirect_https,
+        disable_access_by_lua=disable_access_by_lua,
         ssl_certificate=ssl_certificate,
         ssl_certificate_key=ssl_certificate_key,
         acme_root=acme_root,

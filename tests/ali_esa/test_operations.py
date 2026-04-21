@@ -5,6 +5,7 @@ import json
 from subprocess import CompletedProcess
 
 from webu.ali_esa.operations import (
+    _ensure_record,
     _list_global_ipv6_candidates,
     _normalize_load_balancer_name,
     _resolve_exposure_record,
@@ -12,6 +13,7 @@ from webu.ali_esa.operations import (
     apply_exposure,
     dns01_auth,
     dns01_cleanup,
+    ensure_site,
     site_load_balancer_create,
     site_load_balancer_delete,
     site_load_balancer_origin_status,
@@ -102,6 +104,127 @@ def test_resolve_origin_address_prefers_site_config_for_auto():
         "family": "ipv6",
         "source": "config",
     }
+
+
+def test_ensure_site_updates_existing_site_when_explicit_values_change(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.site = {
+                "SiteId": 123,
+                "SiteName": "example.com",
+                "Status": "active",
+                "Coverage": "overseas",
+                "AccessType": "NS",
+                "InstanceId": "instance-1",
+                "NameServerList": "ns1.example.com,ns2.example.com",
+                "VerifyCode": "verify-token",
+            }
+            self.coverage_updates: list[tuple[int, str]] = []
+            self.access_type_updates: list[tuple[int, str]] = []
+
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return dict(self.site)
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return ["ns1.example.com", "ns2.example.com"]
+
+        def update_site_coverage(self, *, site_id, coverage):
+            self.coverage_updates.append((site_id, coverage))
+            self.site["Coverage"] = coverage
+            return {"RequestId": "req-coverage"}
+
+        def update_site_access_type(self, *, site_id, access_type):
+            self.access_type_updates.append((site_id, access_type))
+            self.site["AccessType"] = access_type
+            return {"RequestId": "req-access"}
+
+    client = FakeClient()
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: client,
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._upsert_site_payload",
+        lambda *args, **kwargs: {
+            "site_name": kwargs["site_name"],
+            "coverage": kwargs["coverage"],
+            "access_type": kwargs["access_type"],
+            "instance_id": kwargs["instance_id"],
+            "site_id": kwargs["site_data"]["SiteId"],
+            "status": kwargs["site_data"]["Status"],
+            "name_server_list": kwargs["current_ns"],
+            "current_ns": kwargs["current_ns"],
+            "verify_code": kwargs["site_data"]["VerifyCode"],
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._persist_config_if_requested",
+        lambda *args, **kwargs: None,
+    )
+
+    result = ensure_site(
+        site_name="example.com",
+        coverage="global",
+        access_type="CNAME",
+        save_config=False,
+    )
+
+    assert result["created"] is False
+    assert result["updated"] is True
+    assert client.coverage_updates == [(123, "global")]
+    assert client.access_type_updates == [(123, "CNAME")]
+    assert result["site"]["coverage"] == "global"
+    assert result["site"]["access_type"] == "CNAME"
+
+
+def test_ensure_site_surfaces_icp_requirement_for_domestic_or_global_coverage(
+    monkeypatch,
+):
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {
+                "SiteId": 123,
+                "SiteName": "example.com",
+                "Status": "active",
+                "Coverage": "overseas",
+                "AccessType": "NS",
+                "InstanceId": "instance-1",
+                "NameServerList": "ns1.example.com,ns2.example.com",
+                "VerifyCode": "verify-token",
+            }
+
+        def update_site_coverage(self, *, site_id, coverage):
+            raise AliyunEsaApiError(
+                "InvalidSiteICP: code: 400, The specified website does not have an ICP filing or the filing information is invalid."
+            )
+
+        def get_site_current_ns(self, *, site_id):
+            raise AssertionError("unexpected get_site_current_ns call")
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    try:
+        ensure_site(site_name="example.com", coverage="global", save_config=False)
+    except ValueError as exc:
+        assert "cannot switch to coverage 'global'" in str(exc)
+        assert "ICP filing" in str(exc)
+    else:
+        raise AssertionError("expected a clearer ICP requirement error")
 
 
 def test_resolve_exposure_record_requires_ipv4_companion_for_ipv6():
@@ -277,6 +400,257 @@ def test_apply_exposure_uses_dual_stack_record_for_ipv6_origin(monkeypatch):
     assert recorded["data_value"] == "198.51.100.10,2001:db8:1::10"
     assert result["origin"]["public_address_family"] == "ipv6"
     assert result["origin"]["record_family"] == "dual-stack"
+
+
+def test_apply_exposure_respects_direct_record_purge_conflicts(monkeypatch):
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.ensure_site",
+        lambda **kwargs: {
+            "site": {
+                "site_name": "example.com",
+                "site_id": 123,
+                "coverage": "overseas",
+                "access_type": "NS",
+                "instance_id": "instance-1",
+                "name_server_list": [],
+                "current_ns": [],
+                "status": "pending",
+                "verify_code": "",
+                "public_origin_address": "",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client", lambda payload: object()
+    )
+
+    def fake_ensure_record(*args, **kwargs):
+        recorded["purge_conflicts"] = kwargs["purge_conflicts"]
+        return {
+            "record": {
+                "RecordType": "A/AAAA",
+                "Data": {"Value": "198.51.100.10"},
+            }
+        }
+
+    monkeypatch.setattr("webu.ali_esa.operations._ensure_record", fake_ensure_record)
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._ensure_origin_rule",
+        lambda *args, **kwargs: {"rule": {"RuleName": "rule-1"}},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._upsert_site_payload",
+        lambda *args, **kwargs: {"site_name": "example.com", "site_id": 123},
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._persist_config_if_requested",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._resolve_exposure_record",
+        lambda *args, **kwargs: {
+            "address": "198.51.100.10",
+            "family": "ipv4",
+            "source": "explicit-dual",
+            "record_type": "A/AAAA",
+            "record_value": "198.51.100.10",
+            "record_addresses": ["198.51.100.10"],
+            "record_family": "ipv4",
+        },
+    )
+
+    apply_exposure(
+        domain_name="dev.example.com",
+        local_url="https://127.0.0.1:443",
+        zone_name="example.com",
+        origin_address="198.51.100.10",
+        purge_conflicts=False,
+        save_config=False,
+    )
+
+    assert recorded["purge_conflicts"] is False
+
+
+def test_ensure_record_retries_site_service_busy_and_succeeds():
+    class FakeClient:
+        def __init__(self):
+            self.current_records = [
+                {
+                    "RecordId": 7,
+                    "RecordName": "dev.example.com",
+                    "RecordType": "CNAME",
+                    "Ttl": 30,
+                    "Proxied": True,
+                    "BizName": "web",
+                    "Data": {"Value": "pool-alpha.origin-pool.example.com"},
+                }
+            ]
+            self.create_attempts = 0
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            items = list(self.current_records)
+            if record_type:
+                normalized_type = record_type.strip().upper()
+                items = [
+                    item
+                    for item in items
+                    if str(item.get("RecordType") or "").strip().upper()
+                    == normalized_type
+                ]
+            return items
+
+        def delete_record(self, *, record_id):
+            self.current_records = [
+                item
+                for item in self.current_records
+                if item.get("RecordId") != record_id
+            ]
+            return {"RecordId": record_id}
+
+        def create_record(self, **kwargs):
+            self.create_attempts += 1
+            if kwargs["record_type"] == "A/AAAA" and self.create_attempts == 1:
+                raise AliyunEsaApiError("Site.ServiceBusy: request throttled")
+            created = {
+                "RecordId": 8,
+                "RecordName": kwargs["record_name"],
+                "RecordType": kwargs["record_type"],
+                "Ttl": kwargs["ttl"],
+                "Proxied": kwargs.get("proxied"),
+                "BizName": kwargs.get("biz_name"),
+                "Data": {"Value": kwargs["data_value"]},
+            }
+            self.current_records = [created]
+            return created
+
+        def update_record(self, **kwargs):
+            raise AssertionError("unexpected update_record call")
+
+    client = FakeClient()
+
+    result = _ensure_record(
+        client,
+        site_id=123,
+        record_name="dev.example.com",
+        record_type="A/AAAA",
+        data_value="104.21.57.71,172.67.160.241",
+        ttl=1,
+        proxied=True,
+        biz_name="web",
+        purge_conflicts=True,
+        retry_attempts=2,
+        retry_delay_seconds=0,
+    )
+
+    assert result["created"] is True
+    assert result["updated"] is False
+    assert result["deleted_conflicts"] == [
+        {
+            "record_id": 7,
+            "record_name": "dev.example.com",
+            "record_type": "CNAME",
+        }
+    ]
+    assert client.current_records[0]["RecordType"] == "A/AAAA"
+    assert client.create_attempts == 2
+
+
+def test_ensure_record_restores_previous_public_records_after_final_failure():
+    class FakeClient:
+        def __init__(self):
+            self.current_records = [
+                {
+                    "RecordId": 7,
+                    "RecordName": "dev.example.com",
+                    "RecordType": "CNAME",
+                    "Ttl": 30,
+                    "Proxied": True,
+                    "BizName": "web",
+                    "Data": {"Value": "pool-alpha.origin-pool.example.com"},
+                }
+            ]
+            self.next_record_id = 20
+            self.desired_attempts = 0
+
+        def list_records(
+            self, *, site_id, record_name=None, record_type=None, page_size=500
+        ):
+            items = list(self.current_records)
+            if record_type:
+                normalized_type = record_type.strip().upper()
+                items = [
+                    item
+                    for item in items
+                    if str(item.get("RecordType") or "").strip().upper()
+                    == normalized_type
+                ]
+            return items
+
+        def delete_record(self, *, record_id):
+            self.current_records = [
+                item
+                for item in self.current_records
+                if item.get("RecordId") != record_id
+            ]
+            return {"RecordId": record_id}
+
+        def create_record(self, **kwargs):
+            if kwargs["record_type"] == "A/AAAA":
+                self.desired_attempts += 1
+                raise AliyunEsaApiError("Site.ServiceBusy: request throttled")
+            restored = {
+                "RecordId": self.next_record_id,
+                "RecordName": kwargs["record_name"],
+                "RecordType": kwargs["record_type"],
+                "Ttl": kwargs["ttl"],
+                "Proxied": kwargs.get("proxied"),
+                "BizName": kwargs.get("biz_name"),
+                "Data": {"Value": kwargs["data_value"]},
+            }
+            self.next_record_id += 1
+            self.current_records = [restored]
+            return restored
+
+        def update_record(self, **kwargs):
+            raise AssertionError("unexpected update_record call")
+
+    client = FakeClient()
+
+    try:
+        _ensure_record(
+            client,
+            site_id=123,
+            record_name="dev.example.com",
+            record_type="A/AAAA",
+            data_value="104.21.57.71,172.67.160.241",
+            ttl=1,
+            proxied=True,
+            biz_name="web",
+            purge_conflicts=True,
+            retry_attempts=2,
+            retry_delay_seconds=0,
+            restore_on_failure=True,
+        )
+    except AliyunEsaApiError as exc:
+        assert "original public records restored" in str(exc)
+    else:
+        raise AssertionError("expected final Site.ServiceBusy failure")
+
+    assert client.desired_attempts == 2
+    assert len(client.current_records) == 1
+    assert client.current_records[0]["RecordType"] == "CNAME"
+    assert (
+        client.current_records[0]["Data"]["Value"]
+        == "pool-alpha.origin-pool.example.com"
+    )
 
 
 def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):

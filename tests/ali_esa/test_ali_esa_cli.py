@@ -86,6 +86,10 @@ def test_parser_supports_exposure_apply_cloudflare_bridge_mode():
             "--origin-address",
             "cloudflare",
             "--purge-conflicts",
+            "--retry-attempts",
+            "5",
+            "--retry-delay-seconds",
+            "0.5",
         ]
     )
 
@@ -96,6 +100,9 @@ def test_parser_supports_exposure_apply_cloudflare_bridge_mode():
     assert args.record_mode == "direct"
     assert args.origin_address == "cloudflare"
     assert args.purge_conflicts is True
+    assert args.retry_attempts == 5
+    assert args.retry_delay_seconds == 0.5
+    assert args.restore_on_failure is True
 
 
 def test_parser_supports_dns01_auth_and_cleanup_commands():

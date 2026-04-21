@@ -138,6 +138,26 @@ class AliyunEsaClient:
             ),
         )
 
+    def update_site_coverage(self, *, site_id: int, coverage: str) -> dict[str, Any]:
+        return self._call(
+            self._client.update_site_coverage,
+            esa_models.UpdateSiteCoverageRequest(
+                site_id=int(site_id),
+                coverage=str(coverage).strip(),
+            ),
+        )
+
+    def update_site_access_type(
+        self, *, site_id: int, access_type: str
+    ) -> dict[str, Any]:
+        return self._call(
+            self._client.update_site_access_type,
+            esa_models.UpdateSiteAccessTypeRequest(
+                site_id=int(site_id),
+                access_type=str(access_type).strip(),
+            ),
+        )
+
     def verify_site(self, *, site_id: int) -> dict[str, Any]:
         return self._call(
             self._client.verify_site,

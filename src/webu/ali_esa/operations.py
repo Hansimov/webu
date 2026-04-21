@@ -50,6 +50,8 @@ DEFAULT_PUBLIC_IP_DETECTION_URL = "https://ifconfig.me/ip"
 DEFAULT_SITE_VERIFY_ATTEMPTS = 10
 DEFAULT_SITE_VERIFY_INTERVAL_SECONDS = 15
 DEFAULT_EXPOSURE_RECORD_MODE = "direct"
+DEFAULT_EXPOSURE_RETRY_ATTEMPTS = 3
+DEFAULT_EXPOSURE_RETRY_DELAY_SECONDS = 1.0
 SUPPORTED_CLOUDFLARE_IMPORT_RECORD_TYPES = {
     "A",
     "AAAA",
@@ -864,6 +866,113 @@ def _record_matches(
     return True
 
 
+def _is_retryable_service_busy_error(exc: Exception) -> bool:
+    detail = str(exc or "").strip().lower()
+    return "site.servicebusy" in detail or "servicebusy" in detail
+
+
+def _is_invalid_site_icp_error(exc: Exception) -> bool:
+    detail = str(exc or "").strip().lower()
+    return "invalidsiteicp" in detail
+
+
+def _restorable_public_record_snapshot(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    snapshot: list[dict[str, Any]] = []
+    for item in records:
+        normalized_type = _normalize_esa_record_type(str(item.get("RecordType") or ""))
+        if normalized_type not in {_ESA_ADDRESS_RECORD_TYPE, "CNAME"}:
+            continue
+
+        data_value = _record_data_value(item)
+        if not data_value:
+            continue
+
+        data_payload = item.get("Data") if isinstance(item.get("Data"), dict) else {}
+        snapshot.append(
+            {
+                "record_name": str(item.get("RecordName") or "").strip(),
+                "record_type": normalized_type,
+                "ttl": max(1, int(item.get("Ttl") or 1)),
+                "data_value": data_value,
+                "proxied": (
+                    bool(item.get("Proxied"))
+                    if item.get("Proxied") is not None
+                    else None
+                ),
+                "biz_name": str(item.get("BizName") or "").strip() or None,
+                "source_type": (
+                    str(item.get("RecordSourceType") or "").strip() or None
+                ),
+                "comment": str(item.get("Comment") or "").strip() or None,
+                "host_policy": str(item.get("HostPolicy") or "").strip() or None,
+                "data_extra": {
+                    str(key): value
+                    for key, value in data_payload.items()
+                    if str(key) != "Value"
+                }
+                or None,
+            }
+        )
+    return snapshot
+
+
+def _restore_public_record_snapshot(
+    client: AliyunEsaClient,
+    *,
+    site_id: int,
+    record_name: str,
+    snapshot: list[dict[str, Any]],
+) -> dict[str, Any]:
+    current_records = client.list_records(site_id=site_id, record_name=record_name)
+    deleted_current: list[dict[str, Any]] = []
+    for item in current_records:
+        normalized_type = _normalize_esa_record_type(str(item.get("RecordType") or ""))
+        if normalized_type not in {_ESA_ADDRESS_RECORD_TYPE, "CNAME"}:
+            continue
+        record_id = item.get("RecordId")
+        if not isinstance(record_id, int) or record_id <= 0:
+            continue
+        client.delete_record(record_id=record_id)
+        deleted_current.append(
+            {
+                "record_id": record_id,
+                "record_name": item.get("RecordName"),
+                "record_type": normalized_type,
+            }
+        )
+
+    recreated: list[dict[str, Any]] = []
+    for item in snapshot:
+        created = client.create_record(
+            site_id=site_id,
+            record_name=str(item["record_name"]),
+            record_type=str(item["record_type"]),
+            ttl=int(item["ttl"]),
+            data_value=str(item["data_value"]),
+            proxied=item.get("proxied"),
+            biz_name=item.get("biz_name"),
+            source_type=item.get("source_type"),
+            comment=item.get("comment"),
+            host_policy=item.get("host_policy"),
+            data_extra=item.get("data_extra"),
+        )
+        recreated.append(
+            {
+                "record_name": item["record_name"],
+                "record_type": item["record_type"],
+                "created": created,
+            }
+        )
+
+    return {
+        "deleted_current": deleted_current,
+        "recreated": recreated,
+        "records": client.list_records(site_id=site_id, record_name=record_name),
+    }
+
+
 def _ensure_record(
     client: AliyunEsaClient,
     *,
@@ -879,119 +988,151 @@ def _ensure_record(
     host_policy: str | None = None,
     data_extra: dict[str, Any] | None = None,
     purge_conflicts: bool = False,
+    retry_attempts: int = DEFAULT_EXPOSURE_RETRY_ATTEMPTS,
+    retry_delay_seconds: float = DEFAULT_EXPOSURE_RETRY_DELAY_SECONDS,
+    restore_on_failure: bool = True,
 ) -> dict[str, Any]:
-    existing_records = client.list_records(
-        site_id=site_id,
-        record_name=record_name,
-    )
-    deleted_conflicts: list[dict[str, Any]] = []
     normalized_record_type = _normalize_esa_record_type(record_type)
     normalized_data_value = _normalize_esa_record_data_value(record_type, data_value)
-    if purge_conflicts:
-        for item in existing_records:
-            existing_type = _normalize_esa_record_type(
-                str(item.get("RecordType") or "")
-            )
-            if existing_type == normalized_record_type:
-                continue
-            if existing_type not in {_ESA_ADDRESS_RECORD_TYPE, "CNAME"}:
-                continue
-            record_id = item.get("RecordId")
-            if not isinstance(record_id, int):
-                continue
-            client.delete_record(record_id=record_id)
-            deleted_conflicts.append(
-                {
-                    "record_id": record_id,
-                    "record_name": item.get("RecordName"),
-                    "record_type": existing_type,
-                }
-            )
-        if deleted_conflicts:
+    attempts = max(1, int(retry_attempts or 1))
+    delay_seconds = max(0.0, float(retry_delay_seconds or 0.0))
+    initial_snapshot: list[dict[str, Any]] | None = None
+    deleted_conflicts_by_id: dict[int, dict[str, Any]] = {}
+
+    for attempt in range(1, attempts + 1):
+        try:
             existing_records = client.list_records(
-                site_id=site_id, record_name=record_name
+                site_id=site_id,
+                record_name=record_name,
             )
+            if initial_snapshot is None and restore_on_failure:
+                initial_snapshot = _restorable_public_record_snapshot(existing_records)
 
-    matching_type_records = [
-        item
-        for item in existing_records
-        if _normalize_esa_record_type(str(item.get("RecordType") or ""))
-        == normalized_record_type
-    ]
+            if purge_conflicts:
+                for item in existing_records:
+                    existing_type = _normalize_esa_record_type(
+                        str(item.get("RecordType") or "")
+                    )
+                    if existing_type == normalized_record_type:
+                        continue
+                    if existing_type not in {_ESA_ADDRESS_RECORD_TYPE, "CNAME"}:
+                        continue
+                    record_id = item.get("RecordId")
+                    if not isinstance(record_id, int) or record_id <= 0:
+                        continue
+                    client.delete_record(record_id=record_id)
+                    deleted_conflicts_by_id[record_id] = {
+                        "record_id": record_id,
+                        "record_name": item.get("RecordName"),
+                        "record_type": existing_type,
+                    }
+                if deleted_conflicts_by_id:
+                    existing_records = client.list_records(
+                        site_id=site_id, record_name=record_name
+                    )
 
-    for item in matching_type_records:
-        if _record_matches(
-            item,
-            record_type=record_type,
-            data_value=normalized_data_value,
-            ttl=ttl,
-            proxied=proxied,
-            biz_name=biz_name,
-            source_type=source_type,
-            host_policy=host_policy,
-            data_extra=data_extra,
-        ):
+            matching_type_records = [
+                item
+                for item in existing_records
+                if _normalize_esa_record_type(str(item.get("RecordType") or ""))
+                == normalized_record_type
+            ]
+
+            for item in matching_type_records:
+                if _record_matches(
+                    item,
+                    record_type=record_type,
+                    data_value=normalized_data_value,
+                    ttl=ttl,
+                    proxied=proxied,
+                    biz_name=biz_name,
+                    source_type=source_type,
+                    host_policy=host_policy,
+                    data_extra=data_extra,
+                ):
+                    return {
+                        "record": item,
+                        "created": False,
+                        "updated": False,
+                        "deleted_conflicts": list(deleted_conflicts_by_id.values()),
+                    }
+
+            if matching_type_records:
+                record_id = matching_type_records[0].get("RecordId")
+                if not isinstance(record_id, int):
+                    raise ValueError(
+                        f"ESA record '{record_name}' exists but does not include a numeric RecordId"
+                    )
+                updated = client.update_record(
+                    record_id=record_id,
+                    record_type=normalized_record_type,
+                    ttl=ttl,
+                    data_value=normalized_data_value,
+                    proxied=proxied,
+                    biz_name=biz_name,
+                    source_type=source_type,
+                    comment=comment,
+                    host_policy=host_policy,
+                    data_extra=data_extra,
+                )
+                refreshed = client.list_records(
+                    site_id=site_id,
+                    record_name=record_name,
+                    record_type=normalized_record_type,
+                )
+                return {
+                    "record": refreshed[0] if refreshed else updated,
+                    "created": False,
+                    "updated": True,
+                    "deleted_conflicts": list(deleted_conflicts_by_id.values()),
+                }
+
+            created = client.create_record(
+                site_id=site_id,
+                record_name=record_name,
+                record_type=normalized_record_type,
+                ttl=ttl,
+                data_value=normalized_data_value,
+                proxied=proxied,
+                biz_name=biz_name,
+                source_type=source_type,
+                comment=comment,
+                host_policy=host_policy,
+                data_extra=data_extra,
+            )
+            refreshed = client.list_records(
+                site_id=site_id,
+                record_name=record_name,
+                record_type=normalized_record_type,
+            )
             return {
-                "record": item,
-                "created": False,
+                "record": refreshed[0] if refreshed else created,
+                "created": True,
                 "updated": False,
-                "deleted_conflicts": deleted_conflicts,
+                "deleted_conflicts": list(deleted_conflicts_by_id.values()),
             }
+        except AliyunEsaApiError as exc:
+            if _is_retryable_service_busy_error(exc) and attempt < attempts:
+                if delay_seconds > 0:
+                    time.sleep(delay_seconds)
+                continue
 
-    if matching_type_records:
-        record_id = matching_type_records[0].get("RecordId")
-        if not isinstance(record_id, int):
-            raise ValueError(
-                f"ESA record '{record_name}' exists but does not include a numeric RecordId"
-            )
-        updated = client.update_record(
-            record_id=record_id,
-            record_type=normalized_record_type,
-            ttl=ttl,
-            data_value=normalized_data_value,
-            proxied=proxied,
-            biz_name=biz_name,
-            source_type=source_type,
-            comment=comment,
-            host_policy=host_policy,
-            data_extra=data_extra,
-        )
-        refreshed = client.list_records(
-            site_id=site_id,
-            record_name=record_name,
-            record_type=normalized_record_type,
-        )
-        return {
-            "record": refreshed[0] if refreshed else updated,
-            "created": False,
-            "updated": True,
-            "deleted_conflicts": deleted_conflicts,
-        }
-
-    created = client.create_record(
-        site_id=site_id,
-        record_name=record_name,
-        record_type=normalized_record_type,
-        ttl=ttl,
-        data_value=normalized_data_value,
-        proxied=proxied,
-        biz_name=biz_name,
-        source_type=source_type,
-        comment=comment,
-        host_policy=host_policy,
-        data_extra=data_extra,
-    )
-    refreshed = client.list_records(
-        site_id=site_id,
-        record_name=record_name,
-        record_type=normalized_record_type,
-    )
-    return {
-        "record": refreshed[0] if refreshed else created,
-        "created": True,
-        "updated": False,
-        "deleted_conflicts": deleted_conflicts,
-    }
+            if restore_on_failure and initial_snapshot is not None:
+                try:
+                    _restore_public_record_snapshot(
+                        client,
+                        site_id=site_id,
+                        record_name=record_name,
+                        snapshot=initial_snapshot,
+                    )
+                except AliyunEsaApiError as restore_exc:
+                    raise AliyunEsaApiError(
+                        f"{exc}; restore_failed: {restore_exc}"
+                    ) from exc
+                raise AliyunEsaApiError(
+                    f"{exc}; original public records restored"
+                ) from exc
+            raise
 
 
 def _origin_rule_name(hostname: str) -> str:
@@ -1233,6 +1374,7 @@ def ensure_site(
     existing_remote_site = client.get_site(site_name=normalized_site_name)
     selected_instance: dict[str, Any] | None = None
     created = False
+    updated = False
 
     if existing_remote_site is None:
         plan_items = client.list_user_rate_plan_instances()
@@ -1262,6 +1404,49 @@ def ensure_site(
             "Status": "pending",
         }
         created = True
+
+    site_id = (
+        existing_remote_site.get("SiteId")
+        if isinstance(existing_remote_site, dict)
+        else None
+    )
+    if isinstance(site_id, int) and site_id > 0:
+        current_coverage = normalize_coverage(
+            (existing_remote_site or {}).get("Coverage") or normalized_coverage
+        )
+        current_access_type = normalize_access_type(
+            (existing_remote_site or {}).get("AccessType") or normalized_access_type
+        )
+
+        if str(coverage or "").strip() and current_coverage != normalized_coverage:
+            try:
+                client.update_site_coverage(
+                    site_id=site_id,
+                    coverage=normalized_coverage,
+                )
+            except AliyunEsaApiError as exc:
+                if _is_invalid_site_icp_error(exc):
+                    raise ValueError(
+                        f"ESA site '{normalized_site_name}' cannot switch to coverage '{normalized_coverage}' without a valid ICP filing"
+                    ) from exc
+                raise
+            updated = True
+        if (
+            str(access_type or "").strip()
+            and current_access_type != normalized_access_type
+        ):
+            client.update_site_access_type(
+                site_id=site_id,
+                access_type=normalized_access_type,
+            )
+            updated = True
+
+        if updated:
+            existing_remote_site = client.get_site(site_name=normalized_site_name) or {
+                **(existing_remote_site or {}),
+                "Coverage": normalized_coverage,
+                "AccessType": normalized_access_type,
+            }
 
     resolved_current_ns: list[str] = []
     site_id = (
@@ -1303,6 +1488,7 @@ def ensure_site(
     return {
         "site_name": normalized_site_name,
         "created": created,
+        "updated": updated,
         "selected_instance": selected_instance,
         "site": _serialize_site(persisted_site),
         "config_saved": saved_config_path,
@@ -1601,6 +1787,116 @@ def site_origin_pools(
         "config_site": context["config_site"],
         "count": len(origin_pools),
         "origin_pools": origin_pools,
+    }
+
+
+def site_origin_pool_upsert(
+    *,
+    site_name: str,
+    pool_name: str,
+    origin_name: str,
+    origin_address: str,
+    weight: int = 100,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    context = _resolve_site_context(site_name, require_site_id=True)
+    client = context["client"]
+    site_id = int(context["site_id"])
+    normalized_pool_name = _require_text(pool_name, "pool_name")
+    normalized_origin_name = _require_text(origin_name, "origin_name")
+    normalized_origin_address = _require_text(origin_address, "origin_address")
+    normalized_weight = max(1, int(weight or 100))
+
+    existing_pool = None
+    for item in client.list_origin_pools(
+        site_id=site_id,
+        name=normalized_pool_name,
+        match_type="exact",
+    ):
+        if str(item.get("Name") or "").strip().lower() != normalized_pool_name.lower():
+            continue
+        pool_id = item.get("Id")
+        if isinstance(pool_id, int) and pool_id > 0:
+            existing_pool = client.get_origin_pool(
+                site_id=site_id, origin_pool_id=pool_id
+            )
+            break
+
+    def _build_origin(existing: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = dict(existing or {})
+        payload["Name"] = normalized_origin_name
+        payload["Address"] = normalized_origin_address
+        payload["Type"] = str(payload.get("Type") or "ip_domain").strip() or "ip_domain"
+        payload["Enabled"] = bool(payload.get("Enabled", True))
+        payload["Weight"] = normalized_weight
+        return payload
+
+    if existing_pool is None:
+        created = client.create_origin_pool(
+            site_id=site_id,
+            name=normalized_pool_name,
+            enabled=enabled,
+            origins=[_build_origin()],
+        )
+        created_id = created.get("Id") if isinstance(created, dict) else None
+        refreshed = (
+            client.get_origin_pool(site_id=site_id, origin_pool_id=created_id)
+            if isinstance(created_id, int) and created_id > 0
+            else None
+        )
+        return {
+            "site_name": context["site_name"],
+            "remote_site": context["remote_site"],
+            "current_ns": context["current_ns"],
+            "config_site": context["config_site"],
+            "action": "created",
+            "origin_pool": refreshed or created,
+        }
+
+    pool_id = existing_pool.get("Id")
+    if not isinstance(pool_id, int) or pool_id <= 0:
+        raise ValueError(
+            f"ESA origin pool '{normalized_pool_name}' does not have a valid Id"
+        )
+
+    changed = False
+    origins: list[dict[str, Any]] = []
+    matched = False
+    for item in existing_pool.get("Origins") or []:
+        origin = dict(item) if isinstance(item, dict) else {}
+        if str(origin.get("Name") or "").strip() != normalized_origin_name:
+            origins.append(origin)
+            continue
+        matched = True
+        updated_origin = _build_origin(origin)
+        if updated_origin != origin:
+            changed = True
+        origins.append(updated_origin)
+
+    if not matched:
+        changed = True
+        origins.append(_build_origin())
+
+    current_enabled = bool(existing_pool.get("Enabled", True))
+    if current_enabled != bool(enabled):
+        changed = True
+
+    if changed:
+        client.update_origin_pool(
+            site_id=site_id,
+            origin_pool_id=pool_id,
+            enabled=enabled,
+            origins=origins,
+        )
+
+    refreshed = client.get_origin_pool(site_id=site_id, origin_pool_id=pool_id)
+    return {
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
+        "action": "updated" if changed else "unchanged",
+        "origin_pool": refreshed,
     }
 
 
@@ -1960,6 +2256,9 @@ def site_origin_pool_cname_apply(
     ttl: int = 30,
     comment: str = "",
     purge_conflicts: bool = False,
+    retry_attempts: int = DEFAULT_EXPOSURE_RETRY_ATTEMPTS,
+    retry_delay_seconds: float = DEFAULT_EXPOSURE_RETRY_DELAY_SECONDS,
+    restore_on_failure: bool = True,
 ) -> dict[str, Any]:
     context = _resolve_site_context(site_name, require_site_id=True)
     site_id = int(context["site_id"])
@@ -2008,6 +2307,9 @@ def site_origin_pool_cname_apply(
         comment=str(comment or "").strip() or None,
         host_policy=normalized_host_policy or None,
         purge_conflicts=purge_conflicts,
+        retry_attempts=retry_attempts,
+        retry_delay_seconds=retry_delay_seconds,
+        restore_on_failure=restore_on_failure,
     )
     after_pool = client.get_origin_pool(
         site_id=site_id, origin_pool_id=resolved_pool_id
@@ -2442,6 +2744,9 @@ def apply_exposure(
     purge_conflicts: bool = False,
     save_config: bool = False,
     verify_site_after_apply: bool = False,
+    retry_attempts: int = DEFAULT_EXPOSURE_RETRY_ATTEMPTS,
+    retry_delay_seconds: float = DEFAULT_EXPOSURE_RETRY_DELAY_SECONDS,
+    restore_on_failure: bool = True,
 ) -> dict[str, Any]:
     hostname = _require_text(domain_name, "domain_name")
     normalized_site_name = str(zone_name or infer_site_name(hostname)).strip()
@@ -2477,6 +2782,9 @@ def apply_exposure(
             ttl=ttl,
             comment=comment,
             purge_conflicts=purge_conflicts,
+            retry_attempts=retry_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+            restore_on_failure=restore_on_failure,
         )
         origin_pool_payload = origin_pool_result.get("origin_pool") or {}
         origins = origin_pool_payload.get("Origins") or []
@@ -2522,7 +2830,10 @@ def apply_exposure(
             ttl=1,
             proxied=True,
             biz_name="web",
-            purge_conflicts=True,
+            purge_conflicts=purge_conflicts,
+            retry_attempts=retry_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+            restore_on_failure=restore_on_failure,
         )
 
     resolved_origin_address = str(exposure_record["address"])

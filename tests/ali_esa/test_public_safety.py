@@ -4,6 +4,7 @@ import json
 
 from pathlib import Path
 
+from webu.safety_scan import should_scan
 from webu.runtime_settings import (
     collect_sensitive_local_values,
     find_sensitive_text_leaks,
@@ -138,27 +139,12 @@ def test_public_ali_esa_and_cf_tunnel_sources_do_not_leak_local_sensitive_values
     project_root = Path(__file__).resolve().parents[2]
     sensitive_values = collect_sensitive_local_values(project_root / "configs")
 
-    target_paths = [
-        project_root / "docs" / "ssh" / "SETUP.md",
-        project_root / "docs" / "ssh" / "USAGE.md",
-        project_root / "docs" / "frp" / "SETUP.md",
-        project_root / "docs" / "frp" / "USAGE.md",
-        project_root / "docs" / "nginx" / "SETUP.md",
-        project_root / "docs" / "nginx" / "USAGE.md",
-        project_root / "src" / "webu" / "ali_esa" / "schema.py",
-        project_root / "src" / "webu" / "ali_esa" / "operations.py",
-        project_root / "src" / "webu" / "ali_esa" / "cli.py",
-        project_root / "src" / "webu" / "frp" / "schema.py",
-        project_root / "tests" / "cf_tunnel" / "test_cli.py",
-        project_root / "tests" / "cf_tunnel" / "test_guard.py",
-        project_root / "tests" / "cf_tunnel" / "test_snapshot.py",
-        project_root / "tests" / "ssh" / "test_ssh_cli.py",
-        project_root / "tests" / "ssh" / "test_ssh_operations.py",
-        project_root / "tests" / "frp" / "test_frp_cli.py",
-        project_root / "tests" / "frp" / "test_frp_operations.py",
-        project_root / "tests" / "nginx" / "test_nginx_cli.py",
-        project_root / "tests" / "nginx" / "test_nginx_operations.py",
-    ]
+    target_paths = sorted(
+        path
+        for base_name in ["docs", "src", "tests"]
+        for path in (project_root / base_name).rglob("*")
+        if path.is_file() and should_scan(path)
+    )
 
     leaked = {}
     for path in target_paths:

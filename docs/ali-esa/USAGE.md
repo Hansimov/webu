@@ -52,6 +52,16 @@ aesa site-ensure \
   --save-config
 ```
 
+如果站点已经存在，`site-ensure` 现在也会在你显式传入 `--coverage` 或 `--access-type` 时同步更新远端站点配置。这意味着站点级 canary 可以直接用同一条命令推进，例如：
+
+```bash
+aesa site-ensure \
+  --site-name example.com \
+  --coverage global
+```
+
+如果你尝试把站点切到 `global` 或 `domestic` 时收到 `InvalidSiteICP`，那不是 CLI 自身的问题，而是 ESA 控制面要求该站点具备有效 ICP 备案后才能启用对应覆盖范围。此时站点会继续停留在原有 coverage，不会被半切换到中间状态。
+
 查看站点状态、分配的 NS 和当前公网 NS：
 
 ```bash
@@ -87,6 +97,26 @@ aesa site-records \
 ```bash
 aesa site-origin-pools --site-name example.com
 ```
+
+创建或更新一个 origin pool，并确保指定 origin 指向目标地址：
+
+```bash
+aesa site-origin-pool-upsert \
+  --site-name example.com \
+  --pool-name relay-origin-canary \
+  --origin-name hk4 \
+  --origin-address ***.***.**.***
+```
+
+这个命令适合把 HK relay 之类的 IPv4 回源地址正式纳入 ESA origin pool 管理，而不需要借助 `wdns` 的 IPv6-only 流程。
+
+在更新公开 helptext、文档或测试示例前，建议先跑一次：
+
+```bash
+conda run -n ai python -m webu.safety_scan --root .
+```
+
+它会扫描当前仓库的 tracked `docs/`、`src/`、`tests/` 等文本文件，检查是否误带入了本地运行时配置中的真实站点名、NS、IP、token 或其他敏感值。
 
 精确匹配某一个 pool：
 
@@ -241,6 +271,19 @@ aesa exposure-apply \
   --origin-address auto \
   --save-config
 ```
+
+`exposure-apply` 现在默认会对 `Site.ServiceBusy` 之类的 ESA 控制面抖动做有限重试，并在记录已经被改动但最终 apply 失败时尝试恢复先前的公网记录。需要调节时可以显式传：
+
+```bash
+aesa exposure-apply \
+  --domain-name search.example.com \
+  --local-url http://127.0.0.1:8930 \
+  --origin-address auto \
+  --retry-attempts 5 \
+  --retry-delay-seconds 0.5
+```
+
+如需关闭失败回滚保护，可以额外传 `--no-restore-on-failure`，但这只适合你明确接受失败窗口的场景。
 
 如果希望优先走公网 IPv6：
 

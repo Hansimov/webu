@@ -25,6 +25,7 @@ from .operations import (
     site_load_balancers,
     site_origin_pool_cname_apply,
     site_origin_pool_cname_delete,
+    site_origin_pool_upsert,
     site_origin_pools,
     site_records,
     site_status,
@@ -138,6 +139,19 @@ def cmd_site_origin_pools(args):
     )
 
 
+def cmd_site_origin_pool_upsert(args):
+    print_json(
+        site_origin_pool_upsert(
+            site_name=args.site_name,
+            pool_name=args.pool_name,
+            origin_name=args.origin_name,
+            origin_address=args.origin_address,
+            weight=args.weight,
+            enabled=(not args.disable),
+        )
+    )
+
+
 def cmd_site_load_balancers(args):
     print_json(
         site_load_balancers(
@@ -206,6 +220,9 @@ def cmd_site_origin_pool_cname_apply(args):
             ttl=args.ttl,
             comment=args.comment,
             purge_conflicts=args.purge_conflicts,
+            retry_attempts=args.retry_attempts,
+            retry_delay_seconds=args.retry_delay_seconds,
+            restore_on_failure=args.restore_on_failure,
         )
     )
 
@@ -263,6 +280,9 @@ def cmd_exposure_apply(args):
             purge_conflicts=args.purge_conflicts,
             save_config=args.save_config,
             verify_site_after_apply=args.verify_site,
+            retry_attempts=args.retry_attempts,
+            retry_delay_seconds=args.retry_delay_seconds,
+            restore_on_failure=args.restore_on_failure,
         )
     )
 
@@ -444,6 +464,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_runtime_path_options(site_origin_pools_parser)
     site_origin_pools_parser.set_defaults(func=cmd_site_origin_pools)
+
+    site_origin_pool_upsert_parser = subparsers.add_parser(
+        "site-origin-pool-upsert",
+        help="Create or update an ESA origin pool and ensure a named origin entry points at the requested address.",
+    )
+    site_origin_pool_upsert_parser.add_argument("--site-name", required=True)
+    site_origin_pool_upsert_parser.add_argument("--pool-name", required=True)
+    site_origin_pool_upsert_parser.add_argument("--origin-name", required=True)
+    site_origin_pool_upsert_parser.add_argument("--origin-address", required=True)
+    site_origin_pool_upsert_parser.add_argument(
+        "--weight",
+        type=int,
+        default=100,
+        help="Origin weight used when the pool contains multiple origins.",
+    )
+    site_origin_pool_upsert_parser.add_argument(
+        "--disable",
+        action="store_true",
+        help="Persist the pool in disabled state.",
+    )
+    _add_runtime_path_options(site_origin_pool_upsert_parser)
+    site_origin_pool_upsert_parser.set_defaults(func=cmd_site_origin_pool_upsert)
 
     site_load_balancers_parser = subparsers.add_parser(
         "site-load-balancers",
@@ -627,6 +669,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete conflicting CNAME or A/AAAA records with the same name before applying the OP-backed CNAME.",
     )
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=3,
+        help="Retry attempts for transient ESA control-plane errors such as Site.ServiceBusy.",
+    )
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--retry-delay-seconds",
+        type=float,
+        default=1.0,
+        help="Delay between retry attempts for transient ESA control-plane errors.",
+    )
+    site_origin_pool_cname_apply_parser.add_argument(
+        "--no-restore-on-failure",
+        dest="restore_on_failure",
+        action="store_false",
+        help="Do not attempt to restore the previous public record set if the apply fails after mutating records.",
+    )
+    site_origin_pool_cname_apply_parser.set_defaults(restore_on_failure=True)
     _add_runtime_path_options(site_origin_pool_cname_apply_parser)
     site_origin_pool_cname_apply_parser.set_defaults(
         func=cmd_site_origin_pool_cname_apply
@@ -749,6 +810,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete conflicting A/AAAA or CNAME records with the same name before applying the desired public record.",
     )
+    exposure_apply_parser.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=3,
+        help="Retry attempts for transient ESA control-plane errors such as Site.ServiceBusy.",
+    )
+    exposure_apply_parser.add_argument(
+        "--retry-delay-seconds",
+        type=float,
+        default=1.0,
+        help="Delay between retry attempts for transient ESA control-plane errors.",
+    )
+    exposure_apply_parser.add_argument(
+        "--no-restore-on-failure",
+        dest="restore_on_failure",
+        action="store_false",
+        help="Do not attempt to restore the previous public record set if the apply fails after mutating records.",
+    )
+    exposure_apply_parser.set_defaults(restore_on_failure=True)
     exposure_apply_parser.add_argument("--verify-site", action="store_true")
     exposure_apply_parser.add_argument("--save-config", action="store_true")
     _add_runtime_path_options(exposure_apply_parser)
