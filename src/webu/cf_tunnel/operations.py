@@ -2125,6 +2125,16 @@ def client_override_plan(
     max_candidates: int,
 ) -> dict[str, Any]:
     trace = edge_trace(tunnel_name=tunnel_name, hostname=hostname)
+    return _build_client_override_plan_from_trace(
+        trace,
+        prefer_family=prefer_family,
+        max_candidates=max_candidates,
+    )
+
+
+def _build_client_override_plan_from_trace(
+    trace: dict[str, Any], *, prefer_family: str, max_candidates: int
+) -> dict[str, Any]:
     resolved_hostname = trace["hostname"]
     resolved_tunnel_name = trace["tunnel_name"]
     family_assessment = _family_assessment(trace)
@@ -2264,8 +2274,13 @@ def client_canary_bundle(
         prefer_family=prefer_family,
         max_candidates=max_candidates,
     )
+    return _build_client_canary_bundle_from_plan(plan)
+
+
+def _build_client_canary_bundle_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
     hostname_value = plan["hostname"]
     tunnel_name_value = plan["tunnel_name"]
+    prefer_family = str(plan.get("prefer_family", "any")).strip() or "any"
     candidates = plan["candidates"]
     family_assessment = plan.get("family_assessment")
     recommended_prefer_family = plan.get("recommended_prefer_family", "any")

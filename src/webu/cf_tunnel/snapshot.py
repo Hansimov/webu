@@ -10,7 +10,11 @@ from urllib.parse import quote
 
 from webu.schema import find_project_root, get_config_path
 
-from .operations import client_canary_bundle, client_override_plan, edge_trace
+from .operations import (
+    _build_client_canary_bundle_from_plan,
+    _build_client_override_plan_from_trace,
+    edge_trace,
+)
 from .paths import DEFAULT_SNAPSHOT_OUTPUT_DIR, resolve_snapshot_output_dir
 from .schema import CF_TUNNEL_CONFIG
 
@@ -396,17 +400,13 @@ def capture_canary_snapshot(
         item_root.mkdir(parents=True, exist_ok=True)
 
         edge_trace_payload = edge_trace(tunnel_name=name, hostname=None)
-        override_plan_payload = client_override_plan(
-            tunnel_name=name,
-            hostname=None,
+        override_plan_payload = _build_client_override_plan_from_trace(
+            edge_trace_payload,
             prefer_family=prefer_family,
             max_candidates=max_candidates,
         )
-        canary_bundle_payload = client_canary_bundle(
-            tunnel_name=name,
-            hostname=None,
-            prefer_family=prefer_family,
-            max_candidates=max_candidates,
+        canary_bundle_payload = _build_client_canary_bundle_from_plan(
+            override_plan_payload,
         )
 
         _write_json(item_root / "edge-trace.json", edge_trace_payload)

@@ -250,7 +250,35 @@ def _tunnel_exec_parts(
     return _wrap_with_sshpass(host, parts, for_tunnel_unit=for_tunnel_unit)
 
 
+def _remote_tunnel_cleanup_command(tunnel: SshTunnelConfig) -> str:
+    port = max(1, int(tunnel.remote_port))
+    return (
+        f"port={port}; "
+        "if command -v ss >/dev/null 2>&1; then "
+        'pids=$(ss -lntpH "( sport = :$port )" 2>/dev/null '
+        "| sed -n 's/.*users:((\\\"sshd\\\",pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); "
+        'if [ -n "$pids" ]; then kill $pids || true; fi; '
+        "fi"
+    )
+
+
+def _tunnel_cleanup_exec_parts(
+    tunnel: SshTunnelConfig, host: SshHostConfig, *, for_tunnel_unit: bool = False
+) -> list[str]:
+    if tunnel.mode != "remote":
+        return []
+    ssh_parts = _ssh_base_parts(host, allocate_tty=False)
+    return _wrap_with_sshpass(
+        host,
+        [*ssh_parts, _remote_tunnel_cleanup_command(tunnel)],
+        for_tunnel_unit=for_tunnel_unit,
+    )
+
+
 def _render_tunnel_service_unit(tunnel: SshTunnelConfig, host: SshHostConfig) -> str:
+    exec_start_pre_parts = _tunnel_cleanup_exec_parts(
+        tunnel, host, for_tunnel_unit=True
+    )
     exec_start = shlex.join(_tunnel_exec_parts(tunnel, host, for_tunnel_unit=True))
     lines = [
         "[Unit]",
@@ -267,6 +295,11 @@ def _render_tunnel_service_unit(tunnel: SshTunnelConfig, host: SshHostConfig) ->
             "",
             "[Service]",
             "Type=simple",
+            *(
+                [f"ExecStartPre={shlex.join(exec_start_pre_parts)}"]
+                if exec_start_pre_parts
+                else []
+            ),
             f"ExecStart={exec_start}",
             "Restart=always",
             "RestartSec=3s",
@@ -282,6 +315,9 @@ def _render_tunnel_service_unit(tunnel: SshTunnelConfig, host: SshHostConfig) ->
 def _render_user_tunnel_service_unit(
     tunnel: SshTunnelConfig, host: SshHostConfig
 ) -> str:
+    exec_start_pre_parts = _tunnel_cleanup_exec_parts(
+        tunnel, host, for_tunnel_unit=True
+    )
     exec_start = shlex.join(_tunnel_exec_parts(tunnel, host, for_tunnel_unit=True))
     return "\n".join(
         [
@@ -290,6 +326,11 @@ def _render_user_tunnel_service_unit(
             "",
             "[Service]",
             "Type=simple",
+            *(
+                [f"ExecStartPre={shlex.join(exec_start_pre_parts)}"]
+                if exec_start_pre_parts
+                else []
+            ),
             f"ExecStart={exec_start}",
             "Restart=always",
             "RestartSec=3s",

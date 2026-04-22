@@ -150,6 +150,9 @@ def test_tunnel_service_install_supports_user_systemd(monkeypatch, tmp_path):
         and not use_sudo
         for command, use_sudo in commands
     )
+    assert "ExecStartPre=" in installed_unit["text"]
+    assert "port=32002;" in installed_unit["text"]
+    assert "kill $pids || true" in installed_unit["text"]
     assert "WantedBy=default.target" in installed_unit["text"]
     assert "network-online.target" not in installed_unit["text"]
 

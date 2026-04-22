@@ -61,10 +61,10 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
         },
     )
     monkeypatch.setattr(
-        "webu.cf_tunnel.snapshot.client_override_plan",
-        lambda tunnel_name=None, hostname=None, prefer_family="any", max_candidates=2: {
+        "webu.cf_tunnel.snapshot._build_client_override_plan_from_trace",
+        lambda trace, prefer_family="any", max_candidates=2: {
             "hostname": "dev.example.com",
-            "tunnel_name": tunnel_name,
+            "tunnel_name": trace.get("tunnel_name"),
             "recommended_prefer_family": "ipv4",
             "family_assessment": {
                 "summary": "Resolver drift makes IPv4 the safer first canary.",
@@ -85,10 +85,10 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
         },
     )
     monkeypatch.setattr(
-        "webu.cf_tunnel.snapshot.client_canary_bundle",
-        lambda tunnel_name=None, hostname=None, prefer_family="any", max_candidates=2: {
-            "hostname": "dev.example.com",
-            "recommended_prefer_family": "ipv4",
+        "webu.cf_tunnel.snapshot._build_client_canary_bundle_from_plan",
+        lambda plan: {
+            "hostname": plan["hostname"],
+            "recommended_prefer_family": plan["recommended_prefer_family"],
             "recommendations": ["Current probes recommend ipv4-first canaries."],
         },
     )
@@ -122,6 +122,81 @@ def test_capture_canary_snapshot_writes_summary_and_snapshot_files(
     assert "operator_shortcuts" in summary_text
     assert "Chinaz Domestic Speed" in summary_text
     assert "CloudflareST repo" in summary_text
+
+
+def test_capture_canary_snapshot_reuses_edge_trace_per_name(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='webu'\n", encoding="utf-8"
+    )
+    (config_dir / "cf_tunnel.json").write_text(
+        json.dumps(
+            {
+                "cf_account_id": "account-1",
+                "cf_api_token": "existing-token",
+                "domains": [{"domain_name": "dev.example.com"}],
+                "cf_tunnels": [
+                    {
+                        "tunnel_name": "dev.example.com",
+                        "domain_name": "dev.example.com",
+                        "local_url": "http://127.0.0.1:21012",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+
+    edge_trace_calls = {"count": 0}
+
+    def fake_edge_trace(tunnel_name=None, hostname=None):
+        edge_trace_calls["count"] += 1
+        return {
+            "hostname": "dev.example.com",
+            "tunnel_name": tunnel_name,
+            "unique_edge_results": [
+                {
+                    "ip": DOC_EDGE_IPV4_PRIMARY,
+                    "success": True,
+                    "colo": "HKG",
+                    "cf_ray": "abc-HKG",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("webu.cf_tunnel.snapshot.edge_trace", fake_edge_trace)
+    monkeypatch.setattr(
+        "webu.cf_tunnel.snapshot._build_client_override_plan_from_trace",
+        lambda trace, prefer_family="any", max_candidates=2: {
+            "hostname": trace["hostname"],
+            "tunnel_name": trace["tunnel_name"],
+            "recommended_prefer_family": "ipv4",
+            "family_assessment": {"summary": "ipv4 first", "reason_codes": []},
+            "candidates": [
+                {"ip": DOC_EDGE_IPV4_PRIMARY, "family": "ipv4", "colo": "HKG"}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "webu.cf_tunnel.snapshot._build_client_canary_bundle_from_plan",
+        lambda plan: {
+            "hostname": plan["hostname"],
+            "recommended_prefer_family": plan["recommended_prefer_family"],
+        },
+    )
+
+    capture_canary_snapshot(
+        names=["dev.example.com"],
+        prefer_family="any",
+        max_candidates=2,
+        output_dir=Path("debugs/cf-tunnel-snapshots"),
+        stamp="20260422T083500Z",
+    )
+
+    assert edge_trace_calls["count"] == 1
 
 
 def test_default_snapshot_output_dir_prefers_sibling_blbl_dash_repo(
