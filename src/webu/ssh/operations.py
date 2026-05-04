@@ -41,6 +41,7 @@ from .schema import (
 
 DEFAULT_SSH_EXEC_TIMEOUT_SECONDS = 60
 SSH_TUNNEL_SERVICE_PREFIX = "webu-ssh-tunnel"
+SSH_TUNNEL_ENV_DIR_NAME = "webu/ssh-tunnels"
 
 
 def _require_text(value: object, label: str) -> str:
@@ -159,13 +160,7 @@ def _wrap_with_sshpass(
             "sshpass is required when configs/ssh.json uses password authentication"
         )
     if for_tunnel_unit:
-        return [
-            "/usr/bin/env",
-            f"SSHPASS={host.password}",
-            sshpass_bin,
-            "-e",
-            *command_parts,
-        ]
+        return [sshpass_bin, "-e", *command_parts]
     return [sshpass_bin, "-p", host.password, *command_parts]
 
 
@@ -207,6 +202,28 @@ def _tunnel_service_path(
         _user_systemd_unit_dir() if use_user_systemd else Path("/etc/systemd/system")
     )
     return base_dir / _tunnel_service_name(tunnel)
+
+
+def _tunnel_service_env_path(
+    tunnel: SshTunnelConfig, *, use_user_systemd: bool = False
+) -> Path:
+    service_file = _safe_systemd_token(_tunnel_service_name(tunnel))
+    if use_user_systemd:
+        return Path.home() / ".config" / SSH_TUNNEL_ENV_DIR_NAME / f"{service_file}.env"
+    return Path("/etc") / SSH_TUNNEL_ENV_DIR_NAME / f"{service_file}.env"
+
+
+def _systemd_env_quote(value: str) -> str:
+    return shlex.quote(value)
+
+
+def _tunnel_service_environment_lines(
+    tunnel: SshTunnelConfig, host: SshHostConfig, *, use_user_systemd: bool = False
+) -> list[str]:
+    if host.identity_file or not host.password:
+        return []
+    env_path = _tunnel_service_env_path(tunnel, use_user_systemd=use_user_systemd)
+    return [f"EnvironmentFile={env_path}"]
 
 
 def _systemctl_parts(*args: str, use_user_systemd: bool = False) -> list[str]:
@@ -256,7 +273,7 @@ def _remote_tunnel_cleanup_command(tunnel: SshTunnelConfig) -> str:
         f"port={port}; "
         "if command -v ss >/dev/null 2>&1; then "
         'pids=$(ss -lntpH "( sport = :$port )" 2>/dev/null '
-        "| sed -n 's/.*users:((\\\"sshd\\\",pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); "
+        """| awk -F 'pid=' '/sshd/ {split($2, a, ","); print a[1]}' | sort -u); """
         'if [ -n "$pids" ]; then kill $pids || true; fi; '
         "fi"
     )
@@ -295,6 +312,9 @@ def _render_tunnel_service_unit(tunnel: SshTunnelConfig, host: SshHostConfig) ->
             "",
             "[Service]",
             "Type=simple",
+            *_tunnel_service_environment_lines(
+                tunnel, host, use_user_systemd=False
+            ),
             *(
                 [f"ExecStartPre={shlex.join(exec_start_pre_parts)}"]
                 if exec_start_pre_parts
@@ -326,6 +346,9 @@ def _render_user_tunnel_service_unit(
             "",
             "[Service]",
             "Type=simple",
+            *_tunnel_service_environment_lines(
+                tunnel, host, use_user_systemd=True
+            ),
             *(
                 [f"ExecStartPre={shlex.join(exec_start_pre_parts)}"]
                 if exec_start_pre_parts
@@ -649,6 +672,7 @@ def tunnel_service_install(
     tunnel, host = _resolve_tunnel(payload, name)
     service_name = _tunnel_service_name(tunnel)
     service_path = _tunnel_service_path(tunnel, use_user_systemd=use_user_systemd)
+    env_path = _tunnel_service_env_path(tunnel, use_user_systemd=use_user_systemd)
     unit_text = (
         _render_user_tunnel_service_unit(tunnel, host)
         if use_user_systemd
@@ -677,6 +701,43 @@ def tunnel_service_install(
             ),
             label=f"install systemd unit {service_name}",
         )
+        env_result: dict[str, Any] | None = None
+        if host.password and not host.identity_file:
+            env_tmp_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", delete=False
+                ) as env_tmp_file:
+                    env_tmp_file.write(
+                        f"SSHPASS={_systemd_env_quote(host.password)}\n"
+                    )
+                    env_tmp_path = Path(env_tmp_file.name)
+                env_mkdir_result = _ensure_success(
+                    sudo_run(
+                        ["mkdir", "-p", str(env_path.parent)],
+                        use_sudo=not use_user_systemd,
+                        check=False,
+                        capture_output=True,
+                    ),
+                    label=f"mkdir -p {env_path.parent}",
+                )
+                env_install_result = _ensure_success(
+                    sudo_run(
+                        ["install", "-m", "0600", str(env_tmp_path), str(env_path)],
+                        use_sudo=not use_user_systemd,
+                        check=False,
+                        capture_output=True,
+                    ),
+                    label=f"install systemd env file {env_path}",
+                )
+                env_result = {
+                    "path": str(env_path),
+                    "mkdir": env_mkdir_result,
+                    "install": env_install_result,
+                }
+            finally:
+                if env_tmp_path is not None:
+                    env_tmp_path.unlink(missing_ok=True)
         daemon_reload = _ensure_success(
             sudo_run(
                 _systemctl_parts("daemon-reload", use_user_systemd=use_user_systemd),
@@ -731,8 +792,10 @@ def tunnel_service_install(
         "service_name": service_name,
         "systemd_scope": "user" if use_user_systemd else "system",
         "service_path": str(service_path),
+        "env_file": str(env_path) if env_result else "",
         "mkdir": mkdir_result,
         "install": install_result,
+        "env": env_result,
         "daemon_reload": daemon_reload,
         "enable": enable_result,
         "restart": restart_result,

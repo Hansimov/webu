@@ -56,7 +56,8 @@ def test_tunnel_command_uses_sshpass_for_password_hosts(monkeypatch):
 
     assert result["forward_spec"] == "127.0.0.1:32002:127.0.0.1:20002"
     assert "sshpass" in result["command"]
-    assert "SSHPASS=secret" in result["command"]
+    assert "sshpass -e" in result["command"]
+    assert "SSHPASS=secret" not in result["command"]
 
 
 def test_host_list_redacts_password_field(monkeypatch):
@@ -108,6 +109,7 @@ def test_tunnel_service_install_supports_user_systemd(monkeypatch, tmp_path):
     }
     commands: list[tuple[list[str], bool]] = []
     installed_unit = {"text": ""}
+    installed_env = {"text": ""}
 
     def fake_sudo_run(
         command, *, use_sudo=True, check=False, capture_output=True, **kwargs
@@ -115,6 +117,8 @@ def test_tunnel_service_install_supports_user_systemd(monkeypatch, tmp_path):
         commands.append((list(command), use_sudo))
         if command[:3] == ["install", "-m", "0644"]:
             installed_unit["text"] = Path(command[3]).read_text(encoding="utf-8")
+        if command[:3] == ["install", "-m", "0600"]:
+            installed_env["text"] = Path(command[3]).read_text(encoding="utf-8")
         return subprocess.CompletedProcess(list(command), 0, b"", b"")
 
     monkeypatch.setattr(
@@ -129,6 +133,10 @@ def test_tunnel_service_install_supports_user_systemd(monkeypatch, tmp_path):
     assert result["service_path"] == str(
         tmp_path / ".config/systemd/user/webu-ssh-tunnel-relay-prod.service"
     )
+    assert result["env_file"] == str(
+        tmp_path
+        / ".config/webu/ssh-tunnels/webu-ssh-tunnel-relay-prod-service.env"
+    )
     assert any(
         command == ["mkdir", "-p", str(tmp_path / ".config/systemd/user")]
         and not use_sudo
@@ -137,6 +145,16 @@ def test_tunnel_service_install_supports_user_systemd(monkeypatch, tmp_path):
     assert any(
         command == ["systemctl", "--user", "daemon-reload"] and not use_sudo
         for command, use_sudo in commands
+    )
+    env_install_commands = [
+        command
+        for command, use_sudo in commands
+        if command[:3] == ["install", "-m", "0600"] and not use_sudo
+    ]
+    assert len(env_install_commands) == 1
+    assert env_install_commands[0][-1] == str(
+        tmp_path
+        / ".config/webu/ssh-tunnels/webu-ssh-tunnel-relay-prod-service.env"
     )
     assert any(
         command
@@ -151,10 +169,16 @@ def test_tunnel_service_install_supports_user_systemd(monkeypatch, tmp_path):
         for command, use_sudo in commands
     )
     assert "ExecStartPre=" in installed_unit["text"]
+    assert "EnvironmentFile=" in installed_unit["text"]
+    assert "SSHPASS=secret" not in installed_unit["text"]
+    assert "sshpass -e" in installed_unit["text"]
     assert "port=32002;" in installed_unit["text"]
+    assert "awk -F" in installed_unit["text"]
+    assert "sed -n" not in installed_unit["text"]
     assert "kill $pids || true" in installed_unit["text"]
     assert "WantedBy=default.target" in installed_unit["text"]
     assert "network-online.target" not in installed_unit["text"]
+    assert installed_env["text"] == "SSHPASS=secret\n"
 
 
 def test_tunnel_service_status_uses_user_systemd(monkeypatch):
