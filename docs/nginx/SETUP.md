@@ -100,6 +100,18 @@ wngx remote-site-apply \
   --ssl-certificate-key /etc/letsencrypt/live/public.docs.invalid/privkey.pem
 ```
 
+如果证书由本地 certbot DNS-01 签发，而远端 openresty 容器只能读取挂载目录，先同步证书，再应用 HTTPS 站点：
+
+```bash
+wngx remote-cert-install \
+  --host-name edge-relay-01 \
+  --local-fullchain /tmp/certbot/config/live/public.docs.invalid/fullchain.pem \
+  --local-privkey /tmp/certbot/config/live/public.docs.invalid/privkey.pem \
+  --remote-cert-dir /usr/local/openresty/nginx/conf/conf.d/.webu-certs/public.docs.invalid \
+  --test-command "docker exec openresty nginx -t" \
+  --reload-command "docker exec openresty nginx -s reload"
+```
+
 ## `--project-root` 与 `--config-dir`
 
 所有 `wngx` 子命令都支持：

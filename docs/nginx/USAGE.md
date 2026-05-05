@@ -54,6 +54,20 @@ wngx remote-site-apply \
   --reload-command "docker exec openresty nginx -s reload"
 ```
 
+把本地 DNS-01 签出的 HTTPS 证书同步到远端 nginx/openresty 可读目录：
+
+```bash
+wngx remote-cert-install \
+  --host-name edge-relay-01 \
+  --local-fullchain /tmp/certbot/config/live/public.docs.invalid/fullchain.pem \
+  --local-privkey /tmp/certbot/config/live/public.docs.invalid/privkey.pem \
+  --remote-cert-dir /usr/local/openresty/nginx/conf/conf.d/.webu-certs/public.docs.invalid \
+  --test-command "docker exec openresty nginx -t" \
+  --reload-command "docker exec openresty nginx -s reload"
+```
+
+这个命令只上传证书文件并设置远端权限，不负责签发证书。证书签发仍建议用 `aesa dns-01-auth` / `aesa dns-01-cleanup` 配合 certbot DNS-01 hook 完成。
+
 如果站点前端资源使用带 hash 的 `/assets/` 文件名，可以在中继上开启静态资源缓存，降低 origin 和回程隧道的重复传输：
 
 ```bash

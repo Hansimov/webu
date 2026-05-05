@@ -376,6 +376,84 @@ def remote_site_apply(
         tmp_path.unlink(missing_ok=True)
 
 
+def remote_cert_install(
+    *,
+    host_name: str,
+    local_fullchain: str,
+    local_privkey: str,
+    remote_cert_dir: str,
+    fullchain_name: str = "fullchain.pem",
+    privkey_name: str = "privkey.pem",
+    test_command: str = "",
+    reload_command: str = "",
+) -> dict[str, Any]:
+    resolved_fullchain = Path(_require_text(local_fullchain, "local_fullchain"))
+    resolved_privkey = Path(_require_text(local_privkey, "local_privkey"))
+    if not resolved_fullchain.exists() or not resolved_fullchain.is_file():
+        raise ValueError(f"local_fullchain is not a readable file: {resolved_fullchain}")
+    if not resolved_privkey.exists() or not resolved_privkey.is_file():
+        raise ValueError(f"local_privkey is not a readable file: {resolved_privkey}")
+
+    safe_fullchain_name = _safe_file_token(fullchain_name or "fullchain.pem")
+    safe_privkey_name = _safe_file_token(privkey_name or "privkey.pem")
+    remote_dir = _require_text(remote_cert_dir, "remote_cert_dir").rstrip("/")
+    remote_fullchain = f"{remote_dir}/{safe_fullchain_name}"
+    remote_privkey = f"{remote_dir}/{safe_privkey_name}"
+    remote_fullchain_tmp = f"/tmp/{safe_fullchain_name}.webu-cert.tmp"
+    remote_privkey_tmp = f"/tmp/{safe_privkey_name}.webu-cert.tmp"
+
+    fullchain_upload = ssh_copy_to(
+        name=host_name,
+        local_path=str(resolved_fullchain),
+        remote_path=remote_fullchain_tmp,
+    )
+    privkey_upload = ssh_copy_to(
+        name=host_name,
+        local_path=str(resolved_privkey),
+        remote_path=remote_privkey_tmp,
+    )
+
+    script_lines = [
+        "set -e",
+        f"remote_dir={shlex.quote(remote_dir)}",
+        f"fullchain_tmp={shlex.quote(remote_fullchain_tmp)}",
+        f"privkey_tmp={shlex.quote(remote_privkey_tmp)}",
+        f"fullchain={shlex.quote(remote_fullchain)}",
+        f"privkey={shlex.quote(remote_privkey)}",
+        'mkdir -p "$remote_dir"',
+        'mv "$fullchain_tmp" "$fullchain"',
+        'mv "$privkey_tmp" "$privkey"',
+        'chmod 0644 "$fullchain"',
+        'chmod 0600 "$privkey"',
+    ]
+    if str(test_command or "").strip():
+        script_lines.append(str(test_command).strip())
+    if str(reload_command or "").strip():
+        script_lines.append(str(reload_command).strip())
+
+    install_result = ssh_exec_host(
+        name=host_name,
+        command="\n".join(script_lines),
+        timeout_seconds=120,
+    )
+    if install_result["returncode"] != 0:
+        raise RuntimeError(
+            install_result["stderr"]
+            or install_result["stdout"]
+            or "remote certificate install failed"
+        )
+
+    return {
+        "host_name": host_name,
+        "remote_cert_dir": remote_dir,
+        "remote_fullchain": remote_fullchain,
+        "remote_privkey": remote_privkey,
+        "fullchain_upload": fullchain_upload,
+        "privkey_upload": privkey_upload,
+        "install": install_result,
+    }
+
+
 def remote_site_show(
     *,
     host_name: str,

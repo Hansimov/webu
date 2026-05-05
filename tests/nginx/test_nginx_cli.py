@@ -64,6 +64,23 @@ def test_parser_supports_render_and_remote_site_commands():
             config_dir,
         ]
     )
+    cert_args = parser.parse_args(
+        [
+            "remote-cert-install",
+            "--host-name",
+            "relay-vps",
+            "--local-fullchain",
+            "/tmp/certs/fullchain.pem",
+            "--local-privkey",
+            "/tmp/certs/privkey.pem",
+            "--remote-cert-dir",
+            "/etc/openresty/certs/public.example.com",
+            "--test-command",
+            "nginx -t",
+            "--reload-command",
+            "nginx -s reload",
+        ]
+    )
     show_args = parser.parse_args(
         [
             "remote-site-show",
@@ -96,6 +113,8 @@ def test_parser_supports_render_and_remote_site_commands():
     assert apply_args.enable_static_cache is True
     assert apply_args.project_root == project_root
     assert apply_args.config_dir == config_dir
+    assert cert_args.command == "remote-cert-install"
+    assert cert_args.remote_cert_dir == "/etc/openresty/certs/public.example.com"
     assert show_args.site_name == "public-example"
     assert disable_args.site_name == "public-example"
 

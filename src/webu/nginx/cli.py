@@ -16,6 +16,7 @@ from .operations import (
     DEFAULT_NGINX_RELOAD_COMMAND,
     DEFAULT_NGINX_TEST_COMMAND,
     DEFAULT_REMOTE_CONF_DIR,
+    remote_cert_install,
     remote_site_apply,
     remote_site_disable,
     remote_site_show,
@@ -97,6 +98,21 @@ def cmd_remote_site_apply(args):
             static_cache_max_size=args.static_cache_max_size,
             static_cache_inactive=args.static_cache_inactive,
             static_cache_browser_max_age=args.static_cache_browser_max_age,
+        )
+    )
+
+
+def cmd_remote_cert_install(args):
+    print_json(
+        remote_cert_install(
+            host_name=args.host_name,
+            local_fullchain=args.local_fullchain,
+            local_privkey=args.local_privkey,
+            remote_cert_dir=args.remote_cert_dir,
+            fullchain_name=args.fullchain_name,
+            privkey_name=args.privkey_name,
+            test_command=args.test_command,
+            reload_command=args.reload_command,
         )
     )
 
@@ -191,6 +207,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_runtime_path_options(apply_parser)
     apply_parser.set_defaults(func=cmd_remote_site_apply)
+
+    cert_parser = subparsers.add_parser(
+        "remote-cert-install",
+        help="Copy a local TLS certificate pair to a remote nginx/openresty cert directory.",
+    )
+    cert_parser.add_argument("--host-name", required=True)
+    cert_parser.add_argument("--local-fullchain", required=True)
+    cert_parser.add_argument("--local-privkey", required=True)
+    cert_parser.add_argument("--remote-cert-dir", required=True)
+    cert_parser.add_argument("--fullchain-name", default="fullchain.pem")
+    cert_parser.add_argument("--privkey-name", default="privkey.pem")
+    cert_parser.add_argument("--test-command", default="")
+    cert_parser.add_argument("--reload-command", default="")
+    _add_runtime_path_options(cert_parser)
+    cert_parser.set_defaults(func=cmd_remote_cert_install)
 
     show_parser = subparsers.add_parser(
         "remote-site-show",

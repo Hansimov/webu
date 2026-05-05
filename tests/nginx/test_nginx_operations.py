@@ -1,4 +1,4 @@
-from webu.nginx.operations import render_reverse_proxy_site
+from webu.nginx.operations import remote_cert_install, render_reverse_proxy_site
 
 
 def test_render_reverse_proxy_site_supports_http_and_https():
@@ -80,3 +80,40 @@ def test_render_reverse_proxy_site_rejects_https_without_cert_paths():
         assert "ssl_certificate" in str(exc)
     else:
         raise AssertionError("listen_https without certificate paths should fail")
+
+
+def test_remote_cert_install_uploads_cert_pair_and_reloads(monkeypatch, tmp_path):
+    fullchain = tmp_path / "fullchain.pem"
+    privkey = tmp_path / "privkey.pem"
+    fullchain.write_text("CERT\n", encoding="utf-8")
+    privkey.write_text("KEY\n", encoding="utf-8")
+    uploads = []
+    commands = []
+
+    def fake_copy_to(*, name, local_path, remote_path):
+        uploads.append((name, local_path, remote_path))
+        return {"returncode": 0, "remote_path": remote_path}
+
+    def fake_exec_host(*, name, command, timeout_seconds):
+        commands.append((name, command, timeout_seconds))
+        return {"returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("webu.nginx.operations.ssh_copy_to", fake_copy_to)
+    monkeypatch.setattr("webu.nginx.operations.ssh_exec_host", fake_exec_host)
+
+    result = remote_cert_install(
+        host_name="relay-vps",
+        local_fullchain=str(fullchain),
+        local_privkey=str(privkey),
+        remote_cert_dir="/etc/openresty/certs/public.example.com",
+        test_command="nginx -t",
+        reload_command="nginx -s reload",
+    )
+
+    assert result["remote_fullchain"].endswith("/fullchain.pem")
+    assert result["remote_privkey"].endswith("/privkey.pem")
+    assert uploads[0][2] == "/tmp/fullchain.pem.webu-cert.tmp"
+    assert uploads[1][2] == "/tmp/privkey.pem.webu-cert.tmp"
+    assert 'chmod 0600 "$privkey"' in commands[0][1]
+    assert "nginx -t" in commands[0][1]
+    assert "nginx -s reload" in commands[0][1]
