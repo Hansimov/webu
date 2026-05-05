@@ -1560,6 +1560,64 @@ def site_records(
     }
 
 
+def site_record_apply(
+    *,
+    site_name: str,
+    record_name: str,
+    record_type: str,
+    data_value: str,
+    ttl: int = 60,
+    proxied: bool | None = False,
+    biz_name: str = "",
+    comment: str = "",
+    purge_conflicts: bool = False,
+    retry_attempts: int = DEFAULT_EXPOSURE_RETRY_ATTEMPTS,
+    retry_delay_seconds: float = DEFAULT_EXPOSURE_RETRY_DELAY_SECONDS,
+    restore_on_failure: bool = True,
+) -> dict[str, Any]:
+    context = _resolve_site_context(site_name, require_site_id=True)
+    normalized_record_name = _normalize_subdomain_under_site(
+        record_name,
+        site_name=context["site_name"],
+        label="record_name",
+        allow_apex=True,
+    )
+    normalized_record_type = _normalize_esa_record_type(
+        _require_text(record_type, "record_type")
+    )
+    normalized_data_value = _normalize_esa_record_data_value(
+        normalized_record_type,
+        _require_text(data_value, "data_value"),
+    )
+    record_result = _ensure_record(
+        context["client"],
+        site_id=int(context["site_id"]),
+        record_name=normalized_record_name,
+        record_type=normalized_record_type,
+        data_value=normalized_data_value,
+        ttl=max(1, int(ttl or 60)),
+        proxied=proxied,
+        biz_name=str(biz_name or "").strip() or None,
+        comment=str(comment or "").strip() or None,
+        purge_conflicts=purge_conflicts,
+        retry_attempts=retry_attempts,
+        retry_delay_seconds=retry_delay_seconds,
+        restore_on_failure=restore_on_failure,
+    )
+    return {
+        "site_name": context["site_name"],
+        "remote_site": context["remote_site"],
+        "current_ns": context["current_ns"],
+        "config_site": context["config_site"],
+        "record_name": normalized_record_name,
+        "record_type": normalized_record_type,
+        "data_value": normalized_data_value,
+        "ttl": max(1, int(ttl or 60)),
+        "proxied": proxied,
+        "record": _serialize_record_result(record_result),
+    }
+
+
 def _dns01_domain(domain: str) -> str:
     normalized = _require_text(domain, "domain").strip().lower()
     if normalized.startswith("*."):

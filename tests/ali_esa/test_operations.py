@@ -21,6 +21,7 @@ from webu.ali_esa.operations import (
     site_origin_pool_cname_apply,
     site_origin_pool_cname_delete,
     site_origin_pools,
+    site_record_apply,
     site_records,
 )
 from webu.ali_esa.clients import AliyunEsaApiError
@@ -749,6 +750,9 @@ def test_apply_exposure_can_use_origin_pool_mode(monkeypatch):
         "ttl": 30,
         "comment": "",
         "purge_conflicts": True,
+        "retry_attempts": 3,
+        "retry_delay_seconds": 1.0,
+        "restore_on_failure": True,
     }
     assert result["origin"]["record_mode"] == "origin-pool"
     assert result["origin"]["record_type"] == "CNAME"
@@ -913,6 +917,76 @@ def test_site_records_lists_filtered_records(monkeypatch):
     assert result["current_ns"] == ["ns1.example.com", "ns2.example.com"]
     assert result["records"][0]["RecordName"] == "dev.example.com"
     assert result["config_site"]["site_name"] == "example.com"
+
+
+def test_site_record_apply_can_write_dns_only_address_record(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def get_site(self, *, site_name):
+            assert site_name == "example.com"
+            return {"SiteId": 123, "SiteName": site_name, "Status": "active"}
+
+        def get_site_current_ns(self, *, site_id):
+            assert site_id == 123
+            return ["ns1.example.com"]
+
+        def list_records(
+            self,
+            *,
+            site_id,
+            record_name=None,
+            record_type=None,
+            page_size=500,
+        ):
+            assert site_id == 123
+            assert record_name == "dev.example.com"
+            return []
+
+        def create_record(self, **kwargs):
+            observed.update(kwargs)
+            return {
+                "RecordId": 99,
+                "RecordName": kwargs["record_name"],
+                "RecordType": kwargs["record_type"],
+                "Data": {"Value": kwargs["data_value"]},
+                "Proxied": kwargs["proxied"],
+            }
+
+    monkeypatch.setattr(
+        "webu.ali_esa.operations.load_ali_esa_config",
+        lambda validate=False: {
+            "sites": [
+                {
+                    "site_name": "example.com",
+                    "coverage": "overseas",
+                    "access_type": "NS",
+                    "instance_id": "instance-1",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "webu.ali_esa.operations._build_esa_client",
+        lambda payload: FakeClient(),
+    )
+
+    result = site_record_apply(
+        site_name="example.com",
+        record_name="dev.example.com",
+        record_type="A",
+        data_value="198.51.100.10",
+        ttl=60,
+        proxied=False,
+        purge_conflicts=True,
+    )
+
+    assert observed["record_name"] == "dev.example.com"
+    assert observed["record_type"] == "A/AAAA"
+    assert observed["data_value"] == "198.51.100.10"
+    assert observed["proxied"] is False
+    assert result["record"]["created"] is True
+    assert result["proxied"] is False
 
 
 def test_site_origin_pools_lists_filtered_pools(monkeypatch):

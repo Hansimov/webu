@@ -92,6 +92,21 @@ aesa site-records \
   --record-type A/AAAA
 ```
 
+创建或更新一条普通 ESA DNS 记录：
+
+```bash
+aesa site-record-apply \
+  --site-name example.com \
+  --record-name search.example.com \
+  --record-type A \
+  --data-value ***.***.**.*** \
+  --ttl 60 \
+  --proxied false \
+  --purge-conflicts
+```
+
+`site-record-apply` 适合做 DNS-only canary 或维护不需要 ESA edge 代理的记录。`A` / `AAAA` 会按 ESA 控制面要求归一成 `A/AAAA`，`--proxied false` 会写入 DNS-only address record；如果同名 `CNAME` 或代理记录已经存在，使用 `--purge-conflicts` 可以先清理冲突记录再写入目标状态。
+
 列出 origin pool：
 
 ```bash

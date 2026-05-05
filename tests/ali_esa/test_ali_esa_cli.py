@@ -145,3 +145,35 @@ def test_parser_supports_dns01_auth_and_cleanup_commands():
     assert cleanup_args.site_name == "example.com"
     assert cleanup_args.domain == "example.com"
     assert cleanup_args.validation == "token-value"
+
+
+def test_parser_supports_site_record_apply_command():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "site-record-apply",
+            "--site-name",
+            "example.com",
+            "--record-name",
+            "dev.example.com",
+            "--record-type",
+            "A",
+            "--data-value",
+            "198.51.100.10",
+            "--ttl",
+            "60",
+            "--proxied",
+            "false",
+            "--purge-conflicts",
+        ]
+    )
+
+    assert args.command == "site-record-apply"
+    assert args.site_name == "example.com"
+    assert args.record_name == "dev.example.com"
+    assert args.record_type == "A"
+    assert args.data_value == "198.51.100.10"
+    assert args.ttl == 60
+    assert args.proxied is False
+    assert args.purge_conflicts is True

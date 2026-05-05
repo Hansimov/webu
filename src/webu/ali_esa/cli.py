@@ -27,6 +27,7 @@ from .operations import (
     site_origin_pool_cname_delete,
     site_origin_pool_upsert,
     site_origin_pools,
+    site_record_apply,
     site_records,
     site_status,
     snapshot,
@@ -102,6 +103,36 @@ def cmd_site_records(args):
             site_name=args.site_name,
             record_name=args.record_name,
             record_type=args.record_type,
+        )
+    )
+
+
+def _parse_bool_choice(value: str) -> bool | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    if normalized in {"", "none", "auto"}:
+        return None
+    raise argparse.ArgumentTypeError("expected true, false, or none")
+
+
+def cmd_site_record_apply(args):
+    print_json(
+        site_record_apply(
+            site_name=args.site_name,
+            record_name=args.record_name,
+            record_type=args.record_type,
+            data_value=args.data_value,
+            ttl=args.ttl,
+            proxied=args.proxied,
+            biz_name=args.biz_name,
+            comment=args.comment,
+            purge_conflicts=args.purge_conflicts,
+            retry_attempts=args.retry_attempts,
+            retry_delay_seconds=args.retry_delay_seconds,
+            restore_on_failure=args.restore_on_failure,
         )
     )
 
@@ -384,6 +415,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_runtime_path_options(site_records_parser)
     site_records_parser.set_defaults(func=cmd_site_records)
+
+    site_record_apply_parser = subparsers.add_parser(
+        "site-record-apply",
+        help="Create or update a single ESA DNS record, including DNS-only records.",
+    )
+    site_record_apply_parser.add_argument("--site-name", required=True)
+    site_record_apply_parser.add_argument(
+        "--record-name",
+        required=True,
+        help="Fully qualified record name, or apex/site name for the root record.",
+    )
+    site_record_apply_parser.add_argument(
+        "--record-type",
+        required=True,
+        help="Record type such as A, AAAA, A/AAAA, CNAME, or TXT.",
+    )
+    site_record_apply_parser.add_argument(
+        "--data-value",
+        "--value",
+        dest="data_value",
+        required=True,
+        help="Record value. A/AAAA accepts a comma-separated address list.",
+    )
+    site_record_apply_parser.add_argument("--ttl", type=int, default=60)
+    site_record_apply_parser.add_argument(
+        "--proxied",
+        type=_parse_bool_choice,
+        default=False,
+        help="Whether ESA should proxy this record. Use false for DNS-only.",
+    )
+    site_record_apply_parser.add_argument("--biz-name", default="")
+    site_record_apply_parser.add_argument("--comment", default="")
+    site_record_apply_parser.add_argument("--purge-conflicts", action="store_true")
+    site_record_apply_parser.add_argument("--retry-attempts", type=int, default=3)
+    site_record_apply_parser.add_argument(
+        "--retry-delay-seconds",
+        type=float,
+        default=1.0,
+    )
+    site_record_apply_parser.add_argument(
+        "--no-restore-on-failure",
+        dest="restore_on_failure",
+        action="store_false",
+    )
+    site_record_apply_parser.set_defaults(restore_on_failure=True)
+    _add_runtime_path_options(site_record_apply_parser)
+    site_record_apply_parser.set_defaults(func=cmd_site_record_apply)
 
     dns01_auth_parser = subparsers.add_parser(
         "dns-01-auth",
