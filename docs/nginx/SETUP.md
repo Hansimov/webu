@@ -47,6 +47,11 @@ python -m webu.nginx.cli
 - `--redirect-https`：当同时开启 HTTP + HTTPS 时，让 HTTP block 只做 `301` 跳转。
 - `--ssl-certificate` / `--ssl-certificate-key`：HTTPS 证书路径。
 - `--acme-root`：`/.well-known/acme-challenge/` 的根目录。
+- `--enable-static-cache`：为 `/assets/` 和 `/icons/` 生成远端 `proxy_cache` 规则。
+- `--static-cache-zone`：缓存 zone 名称，默认从站点名派生。
+- `--static-cache-path`：远端缓存目录，默认 `/tmp/webu-nginx-cache`。
+- `--static-cache-max-size` / `--static-cache-inactive`：远端缓存容量和 inactive 过期时间。
+- `--static-cache-browser-max-age`：客户端 `Cache-Control max-age` 秒数，默认 `31536000`。
 
 ## 推荐配置流程
 
@@ -66,6 +71,18 @@ wngx render-reverse-proxy \
   --server-name public.docs.invalid \
   --upstream-url http://127.0.0.1:32002 \
   --listen-http
+```
+
+渲染一个带静态资源缓存的 HTTP 反代站点：
+
+```bash
+wngx render-reverse-proxy \
+  --server-name public.docs.invalid \
+  --upstream-url http://127.0.0.1:32002 \
+  --listen-http \
+  --enable-static-cache \
+  --static-cache-zone public_docs_assets \
+  --static-cache-path /tmp/webu-nginx-cache-public-docs
 ```
 
 渲染并上传一个 HTTPS 站点：

@@ -9,6 +9,10 @@ from webu.clis import print_json
 
 from .operations import (
     DEFAULT_ACME_ROOT,
+    DEFAULT_STATIC_BROWSER_CACHE,
+    DEFAULT_STATIC_CACHE_INACTIVE,
+    DEFAULT_STATIC_CACHE_MAX_SIZE,
+    DEFAULT_STATIC_CACHE_PATH,
     DEFAULT_NGINX_RELOAD_COMMAND,
     DEFAULT_NGINX_TEST_COMMAND,
     DEFAULT_REMOTE_CONF_DIR,
@@ -59,6 +63,12 @@ def cmd_render_reverse_proxy(args):
                 ssl_certificate=args.ssl_certificate,
                 ssl_certificate_key=args.ssl_certificate_key,
                 acme_root=args.acme_root,
+                enable_static_cache=args.enable_static_cache,
+                static_cache_zone=args.static_cache_zone,
+                static_cache_path=args.static_cache_path,
+                static_cache_max_size=args.static_cache_max_size,
+                static_cache_inactive=args.static_cache_inactive,
+                static_cache_browser_max_age=args.static_cache_browser_max_age,
             )
         }
     )
@@ -81,6 +91,12 @@ def cmd_remote_site_apply(args):
             ssl_certificate=args.ssl_certificate,
             ssl_certificate_key=args.ssl_certificate_key,
             acme_root=args.acme_root,
+            enable_static_cache=args.enable_static_cache,
+            static_cache_zone=args.static_cache_zone,
+            static_cache_path=args.static_cache_path,
+            static_cache_max_size=args.static_cache_max_size,
+            static_cache_inactive=args.static_cache_inactive,
+            static_cache_browser_max_age=args.static_cache_browser_max_age,
         )
     )
 
@@ -128,6 +144,18 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument("--ssl-certificate", default="")
     render_parser.add_argument("--ssl-certificate-key", default="")
     render_parser.add_argument("--acme-root", default=DEFAULT_ACME_ROOT)
+    render_parser.add_argument("--enable-static-cache", action="store_true")
+    render_parser.add_argument("--static-cache-zone", default="")
+    render_parser.add_argument("--static-cache-path", default=DEFAULT_STATIC_CACHE_PATH)
+    render_parser.add_argument(
+        "--static-cache-max-size", default=DEFAULT_STATIC_CACHE_MAX_SIZE
+    )
+    render_parser.add_argument(
+        "--static-cache-inactive", default=DEFAULT_STATIC_CACHE_INACTIVE
+    )
+    render_parser.add_argument(
+        "--static-cache-browser-max-age", default=DEFAULT_STATIC_BROWSER_CACHE
+    )
     _add_runtime_path_options(render_parser)
     render_parser.set_defaults(func=cmd_render_reverse_proxy)
 
@@ -149,6 +177,18 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--ssl-certificate", default="")
     apply_parser.add_argument("--ssl-certificate-key", default="")
     apply_parser.add_argument("--acme-root", default=DEFAULT_ACME_ROOT)
+    apply_parser.add_argument("--enable-static-cache", action="store_true")
+    apply_parser.add_argument("--static-cache-zone", default="")
+    apply_parser.add_argument("--static-cache-path", default=DEFAULT_STATIC_CACHE_PATH)
+    apply_parser.add_argument(
+        "--static-cache-max-size", default=DEFAULT_STATIC_CACHE_MAX_SIZE
+    )
+    apply_parser.add_argument(
+        "--static-cache-inactive", default=DEFAULT_STATIC_CACHE_INACTIVE
+    )
+    apply_parser.add_argument(
+        "--static-cache-browser-max-age", default=DEFAULT_STATIC_BROWSER_CACHE
+    )
     _add_runtime_path_options(apply_parser)
     apply_parser.set_defaults(func=cmd_remote_site_apply)
 

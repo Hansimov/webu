@@ -54,6 +54,22 @@ wngx remote-site-apply \
   --reload-command "docker exec openresty nginx -s reload"
 ```
 
+如果站点前端资源使用带 hash 的 `/assets/` 文件名，可以在中继上开启静态资源缓存，降低 origin 和回程隧道的重复传输：
+
+```bash
+wngx remote-site-apply \
+  --host-name edge-relay-01 \
+  --site-name public-docs \
+  --server-name public.docs.invalid \
+  --upstream-url http://127.0.0.1:32002 \
+  --listen-http \
+  --enable-static-cache \
+  --static-cache-zone public_docs_assets \
+  --static-cache-path /tmp/webu-nginx-cache-public-docs
+```
+
+开启后，`/assets/` 和 `/icons/` 会在远端 nginx/openresty 上使用 `proxy_cache`，并向客户端返回长期 `Cache-Control`。只应对指纹化或可接受长缓存的静态资源启用该选项。
+
 ## 3. 查看远端配置
 
 ```bash

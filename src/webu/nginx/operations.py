@@ -15,6 +15,11 @@ DEFAULT_REMOTE_CONF_DIR = "/etc/nginx/conf.d"
 DEFAULT_NGINX_TEST_COMMAND = "nginx -t"
 DEFAULT_NGINX_RELOAD_COMMAND = "nginx -s reload"
 DEFAULT_ACME_ROOT = "/usr/share/nginx/html"
+DEFAULT_STATIC_CACHE_PATH = "/tmp/webu-nginx-cache"
+DEFAULT_STATIC_CACHE_MAX_SIZE = "512m"
+DEFAULT_STATIC_CACHE_INACTIVE = "7d"
+DEFAULT_STATIC_CACHE_VALID = "30d"
+DEFAULT_STATIC_BROWSER_CACHE = "31536000"
 
 
 def _require_text(value: object, label: str) -> str:
@@ -46,12 +51,39 @@ def _normalize_server_names(server_names: list[str]) -> list[str]:
     return items
 
 
-def _render_proxy_location(upstream_url: str) -> list[str]:
+def _safe_nginx_token(value: str) -> str:
+    cleaned = "".join(
+        ch if ch.isalnum() or ch == "_" else "_"
+        for ch in str(value or "").strip().lower()
+    )
+    cleaned = cleaned.strip("_")
+    if not cleaned:
+        return "default"
+    if cleaned[0].isdigit():
+        return f"z_{cleaned}"
+    return cleaned
+
+
+def _require_nginx_simple_value(value: object, label: str) -> str:
+    normalized = _require_text(value, label)
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./:-")
+    if any(ch not in allowed for ch in normalized):
+        raise ValueError(f"{label} contains unsupported nginx directive characters")
+    return normalized
+
+
+def _require_browser_max_age(value: object) -> str:
+    normalized = _require_text(value, "static_cache_browser_max_age")
+    if not normalized.isdigit():
+        raise ValueError("static_cache_browser_max_age must be an integer second value")
+    return normalized
+
+
+def _render_proxy_common(upstream_url: str) -> list[str]:
     parsed = urlparse(_require_text(upstream_url, "upstream_url"))
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("upstream_url must start with http:// or https://")
     lines = [
-        "    location / {",
         f"        proxy_pass {upstream_url};",
         "        proxy_http_version 1.1;",
         "        proxy_set_header Host $host;",
@@ -71,10 +103,81 @@ def _render_proxy_location(upstream_url: str) -> list[str]:
         [
             "        proxy_read_timeout 60s;",
             "        proxy_send_timeout 60s;",
-            "    }",
         ]
     )
     return lines
+
+
+def _render_proxy_location(upstream_url: str) -> list[str]:
+    return [
+        "    location / {",
+        *_render_proxy_common(upstream_url),
+        "    }",
+    ]
+
+
+def _render_static_cache_locations(
+    upstream_url: str,
+    *,
+    cache_zone: str,
+    browser_max_age_seconds: str,
+) -> list[str]:
+    safe_zone = _safe_nginx_token(cache_zone)
+    max_age = _require_browser_max_age(
+        browser_max_age_seconds or DEFAULT_STATIC_BROWSER_CACHE
+    )
+    return [
+        "    location ^~ /assets/ {",
+        f"        proxy_cache {safe_zone};",
+        "        proxy_cache_lock on;",
+        f"        proxy_cache_valid 200 301 302 {DEFAULT_STATIC_CACHE_VALID};",
+        "        proxy_cache_valid 404 1m;",
+        "        proxy_ignore_headers Set-Cookie;",
+        "        proxy_hide_header Set-Cookie;",
+        f'        add_header Cache-Control "public, max-age={max_age}, immutable" always;',
+        '        add_header X-WebU-Relay-Cache "$upstream_cache_status" always;',
+        *_render_proxy_common(upstream_url),
+        "    }",
+        "",
+        "    location ^~ /icons/ {",
+        f"        proxy_cache {safe_zone};",
+        "        proxy_cache_lock on;",
+        f"        proxy_cache_valid 200 301 302 {DEFAULT_STATIC_CACHE_VALID};",
+        "        proxy_cache_valid 404 1m;",
+        "        proxy_ignore_headers Set-Cookie;",
+        "        proxy_hide_header Set-Cookie;",
+        f'        add_header Cache-Control "public, max-age={max_age}, immutable" always;',
+        '        add_header X-WebU-Relay-Cache "$upstream_cache_status" always;',
+        *_render_proxy_common(upstream_url),
+        "    }",
+    ]
+
+
+def _render_static_cache_path(
+    *,
+    enabled: bool,
+    cache_zone: str,
+    cache_path: str,
+    max_size: str,
+    inactive: str,
+) -> list[str]:
+    if not enabled:
+        return []
+    safe_zone = _safe_nginx_token(cache_zone)
+    safe_path = _require_nginx_simple_value(cache_path, "static_cache_path")
+    safe_max_size = _require_nginx_simple_value(
+        max_size or DEFAULT_STATIC_CACHE_MAX_SIZE,
+        "static_cache_max_size",
+    )
+    safe_inactive = _require_nginx_simple_value(
+        inactive or DEFAULT_STATIC_CACHE_INACTIVE,
+        "static_cache_inactive",
+    )
+    return [
+        f"proxy_cache_path {safe_path} levels=1:2 keys_zone={safe_zone}:20m "
+        f"max_size={safe_max_size} inactive={safe_inactive} use_temp_path=off;",
+        "",
+    ]
 
 
 def _render_access_by_lua_override(disable_access_by_lua: bool) -> list[str]:
@@ -97,6 +200,12 @@ def render_reverse_proxy_site(
     ssl_certificate: str = "",
     ssl_certificate_key: str = "",
     acme_root: str = DEFAULT_ACME_ROOT,
+    enable_static_cache: bool = False,
+    static_cache_zone: str = "",
+    static_cache_path: str = DEFAULT_STATIC_CACHE_PATH,
+    static_cache_max_size: str = DEFAULT_STATIC_CACHE_MAX_SIZE,
+    static_cache_inactive: str = DEFAULT_STATIC_CACHE_INACTIVE,
+    static_cache_browser_max_age: str = DEFAULT_STATIC_BROWSER_CACHE,
 ) -> str:
     normalized_names = _normalize_server_names(server_names)
     if listen_https and (not ssl_certificate or not ssl_certificate_key):
@@ -104,7 +213,23 @@ def render_reverse_proxy_site(
             "ssl_certificate and ssl_certificate_key are required when listen_https=true"
         )
 
-    blocks: list[str] = []
+    cache_zone = static_cache_zone or normalized_names[0]
+    static_cache_locations = (
+        _render_static_cache_locations(
+            upstream_url,
+            cache_zone=cache_zone,
+            browser_max_age_seconds=static_cache_browser_max_age,
+        )
+        if enable_static_cache
+        else []
+    )
+    blocks: list[str] = _render_static_cache_path(
+        enabled=enable_static_cache,
+        cache_zone=cache_zone,
+        cache_path=static_cache_path,
+        max_size=static_cache_max_size,
+        inactive=static_cache_inactive,
+    )
     server_name_line = f"    server_name {' '.join(normalized_names)};"
     access_by_lua_override = _render_access_by_lua_override(disable_access_by_lua)
     acme_block = [
@@ -131,6 +256,7 @@ def render_reverse_proxy_site(
                 ]
             )
         else:
+            http_lines.extend(static_cache_locations)
             http_lines.extend(_render_proxy_location(upstream_url))
         http_lines.append("}")
         blocks.append("\n".join(http_lines))
@@ -145,6 +271,7 @@ def render_reverse_proxy_site(
             f"    ssl_certificate_key {ssl_certificate_key};",
             "    ssl_protocols TLSv1.2 TLSv1.3;",
             *acme_block,
+            *static_cache_locations,
             *_render_proxy_location(upstream_url),
             "}",
         ]
@@ -169,6 +296,12 @@ def remote_site_apply(
     ssl_certificate: str = "",
     ssl_certificate_key: str = "",
     acme_root: str = DEFAULT_ACME_ROOT,
+    enable_static_cache: bool = False,
+    static_cache_zone: str = "",
+    static_cache_path: str = DEFAULT_STATIC_CACHE_PATH,
+    static_cache_max_size: str = DEFAULT_STATIC_CACHE_MAX_SIZE,
+    static_cache_inactive: str = DEFAULT_STATIC_CACHE_INACTIVE,
+    static_cache_browser_max_age: str = DEFAULT_STATIC_BROWSER_CACHE,
 ) -> dict[str, Any]:
     rendered = render_reverse_proxy_site(
         server_names=server_names,
@@ -180,6 +313,12 @@ def remote_site_apply(
         ssl_certificate=ssl_certificate,
         ssl_certificate_key=ssl_certificate_key,
         acme_root=acme_root,
+        enable_static_cache=enable_static_cache,
+        static_cache_zone=static_cache_zone or site_name,
+        static_cache_path=static_cache_path,
+        static_cache_max_size=static_cache_max_size,
+        static_cache_inactive=static_cache_inactive,
+        static_cache_browser_max_age=static_cache_browser_max_age,
     )
     file_name = f"{_safe_file_token(site_name)}.conf"
     remote_conf_path = f"{remote_conf_dir.rstrip('/')}/{file_name}"
