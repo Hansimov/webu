@@ -35,7 +35,17 @@ gghb benchmark --query "OpenAI news" --requests 24 --concurrency 6
 
 ```bash
 ggdk hf-create-space --space owner/space2 --exist-ok
-ggdk hf-sync-all --restart
+ggdk hf-release
+```
+
+如果想手动拆分执行，推荐顺序是：
+
+```bash
+ggdk hf-sync-all --restart --factory
+ggdk hf-status --space owner/space1
+ggdk hf-status --space owner/space2
+gghb audit --target all --format both --output data/debug/google_hub_all_audit_manual.json
+ggdk hf-super-squash-all
 ```
 
 如果想拿到更完整的诊断信息，用：
@@ -44,6 +54,13 @@ ggdk hf-sync-all --restart
 ggdk hf-doctor --space owner/space1 --check-auth
 ggdk hf-doctor --space owner/space2 --check-auth
 ```
+
+注意：
+
+1. 单纯 `--restart` 不一定会立刻反映新的浏览器模式或环境变量；涉及这类变化时，应优先 `--factory`。
+2. 验证通过后再做 `hf-super-squash-all`，不要在排障中途先压缩历史。
+3. 审计报告建议固定输出到 `data/debug/`，方便回溯每次发布状态。
+4. 如果 `hf-sync` 或 `hf-release` 在 HF mirror 上遇到 SSL EOF，可临时用 `HF_ENDPOINT=https://huggingface.co WEBU_HF_CONTROL_ENDPOINT=https://huggingface.co` 切回官方端点。
 
 ## 4. 常见临时覆盖
 

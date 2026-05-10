@@ -18,6 +18,15 @@ HINTS_DOC_PATH = (
 
 OVERVIEW_SECTIONS = [
     (
+        "当前稳定路径",
+        [
+            "Google 搜索稳定方案以真实 Chrome、headless=false、Xvfb 兜底显示为默认前提。",
+            "本地代理正常但自动化浏览器触发 captcha 时，优先排查浏览器指纹和运行模式，不要先怀疑代理本身。",
+            "当远端运行时变量、浏览器模式或 bootstrap 资料发生变化时，HF 同步后优先执行 factory restart，再等待所有 Space 回到 RUNNING。",
+            "如果 HF mirror 在上传或建仓阶段出现 SSL EOF，发布和压缩历史应临时切回官方 huggingface.co 端点。",
+        ],
+    ),
+    (
         "默认行为",
         [
             "默认 Space：取 configs/hf_spaces.json 中的第一个 space。",
@@ -34,7 +43,7 @@ OVERVIEW_SECTIONS = [
             "ggdk hub-docker-up --mount-configs --replace",
             "gghb check",
             'gghb benchmark --query "OpenAI news" --requests 24 --concurrency 6',
-            "ggdk hf-sync-all --restart",
+            "ggdk hf-release",
         ],
     ),
 ]
@@ -125,8 +134,17 @@ COMMAND_HELP = {
         "summary": "并行把当前代码同步到所有启用的 HF Spaces。",
         "examples": [
             "ggdk hf-sync-all",
-            "ggdk hf-sync-all --restart",
+            "ggdk hf-sync-all --restart --factory",
             "ggdk hf-sync-all --max-workers 4",
+        ],
+    },
+    "hf-release": {
+        "summary": "一键执行 HF 同步、等待 RUNNING、真实审计，并可选批量压缩历史。",
+        "examples": [
+            "ggdk hf-release",
+            "ggdk hf-release --format both --output data/debug/google_hub_all_audit_release.json",
+            "ggdk hf-release --squash",
+            "HF_ENDPOINT=https://huggingface.co WEBU_HF_CONTROL_ENDPOINT=https://huggingface.co ggdk hf-release",
         ],
     },
     "hf-status": {
@@ -181,6 +199,13 @@ COMMAND_HELP = {
         "summary": "压缩远端提交历史。",
         "examples": ["ggdk hf-super-squash"],
     },
+    "hf-super-squash-all": {
+        "summary": "并行压缩所有启用 HF Spaces 的提交历史。",
+        "examples": [
+            "ggdk hf-super-squash-all",
+            "ggdk hf-super-squash-all --max-workers 4",
+        ],
+    },
     "docs-sync": {
         "summary": "用共享说明源重写 docs/google-docker 下的主要文档。",
         "examples": ["ggdk docs-sync"],
@@ -215,6 +240,7 @@ COMMAND_ORDER = [
     "hf-url",
     "hf-sync",
     "hf-sync-all",
+    "hf-release",
     "hf-status",
     "hf-health",
     "hf-home",
@@ -227,6 +253,7 @@ COMMAND_ORDER = [
     "hf-commit-count",
     "hf-restart",
     "hf-super-squash",
+    "hf-super-squash-all",
     "config-check",
     "config-init",
     "config-schema",
@@ -253,7 +280,7 @@ def root_epilog() -> str:
     lines.append("  ggdk api-docker-up --mount-configs --replace")
     lines.append("  ggdk hub-docker-up --mount-configs --replace")
     lines.append("  gghb check")
-    lines.append("  ggdk hf-sync-all --restart")
+    lines.append("  ggdk hf-release")
     return assert_public_text_safe("\n".join(lines))
 
 
@@ -313,8 +340,10 @@ def render_usage_markdown() -> str:
         "5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。"
     )
     lines.append("6. 本地 hub 的检查、查询和 benchmark 统一改用 `gghb`。")
-    lines.append("7. 配置有疑问时，先运行 `ggdk config-check`。")
-    lines.append("8. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。")
+    lines.append("7. HF 远端发布优先用 `ggdk hf-release`，不要再手工拼 sync、restart、audit。")
+    lines.append("8. 如果改了 headless、Chrome 通道、bootstrap 或运行时环境变量，优先保留 `--factory`。")
+    lines.append("9. 配置有疑问时，先运行 `ggdk config-check`。")
+    lines.append("10. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。")
     lines.append("")
     return "\n".join(lines)
 
@@ -358,7 +387,17 @@ def render_setup_markdown() -> str:
         "",
         "```bash",
         "ggdk hf-create-space --space owner/space2 --exist-ok",
-        "ggdk hf-sync-all --restart",
+        "ggdk hf-release",
+        "```",
+        "",
+        "如果想手动拆分执行，推荐顺序是：",
+        "",
+        "```bash",
+        "ggdk hf-sync-all --restart --factory",
+        "ggdk hf-status --space owner/space1",
+        "ggdk hf-status --space owner/space2",
+        "gghb audit --target all --format both --output data/debug/google_hub_all_audit_manual.json",
+        "ggdk hf-super-squash-all",
         "```",
         "",
         "如果想拿到更完整的诊断信息，用：",
@@ -367,6 +406,13 @@ def render_setup_markdown() -> str:
         "ggdk hf-doctor --space owner/space1 --check-auth",
         "ggdk hf-doctor --space owner/space2 --check-auth",
         "```",
+        "",
+        "注意：",
+        "",
+        "1. 单纯 `--restart` 不一定会立刻反映新的浏览器模式或环境变量；涉及这类变化时，应优先 `--factory`。",
+        "2. 验证通过后再做 `hf-super-squash-all`，不要在排障中途先压缩历史。",
+        "3. 审计报告建议固定输出到 `data/debug/`，方便回溯每次发布状态。",
+        "4. 如果 `hf-sync` 或 `hf-release` 在 HF mirror 上遇到 SSL EOF，可临时用 `HF_ENDPOINT=https://huggingface.co WEBU_HF_CONTROL_ENDPOINT=https://huggingface.co` 切回官方端点。",
         "",
         "## 4. 常见临时覆盖",
         "",
@@ -400,6 +446,7 @@ def render_hints_markdown() -> str:
         "```bash",
         "gghb check",
         "gghb backends",
+        "ggdk hf-release --format both",
         'gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4',
         "ggdk hf-logs --space owner/space1 --lines 80",
         "ggdk hf-files --space owner/space2 --prefix bootstrap/",
@@ -410,8 +457,17 @@ def render_hints_markdown() -> str:
         "1. `ggdk config-init --name google_hub` 或 `ggdk config-check`",
         "2. `gghb check`",
         '3. `gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4`',
-        "4. `ggdk hf-doctor --space owner/space1 --check-auth`",
-        "5. `ggdk hf-doctor --space owner/space2 --check-auth`",
+        "4. `ggdk hf-release --format both --output data/debug/google_hub_all_audit_latest.json`",
+        "5. `ggdk hf-doctor --space owner/space1 --check-auth`",
+        "6. `ggdk hf-doctor --space owner/space2 --check-auth`",
+        "",
+        "## 最新经验",
+        "",
+        "1. 对 Google 来说，真实 Chrome + headed + 虚拟显示比继续伪造 UA 更关键；后者不足以解决 captcha。",
+        "2. HF Space 更新浏览器相关环境变量后，需要把验证重点放在 `/admin/runtime` 和真实搜索审计，而不是只看构建成功。",
+        "3. 普通 restart 适合代码热更新；factory restart 更适合运行时变量、浏览器模式、bootstrap 资料发生变化后的验收。",
+        "4. 批量 super squash 放到验收通过之后做，既能保留排障期间的提交证据，也能在稳定后收敛历史。",
+        "5. HF mirror 适合日常访问，但一旦 `/api/repos/create` 或上传阶段出现 SSL EOF，发布链路应直接切回官方 `huggingface.co`。",
         "",
         "## 文档维护原则",
         "",

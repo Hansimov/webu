@@ -37,7 +37,9 @@ from webu.google_docker.cli import (
     cmd_hf_search,
     cmd_hf_check,
     cmd_hf_doctor,
+    cmd_hf_release,
     cmd_hf_super_squash,
+    cmd_hf_super_squash_all,
     cmd_hf_sync,
     prepare_local_docker_build_context,
     prepare_space_bundle,
@@ -247,6 +249,10 @@ def test_sync_space_runtime_config_sets_aligned_ports(monkeypatch):
         lambda: SimpleNamespace(endpoint="", model="", api_format="", api_key=""),
     )
     monkeypatch.setattr(
+        "webu.google_docker.cli.resolve_google_api_settings",
+        lambda runtime_env=None: SimpleNamespace(headless=False),
+    )
+    monkeypatch.setattr(
         "webu.google_docker.cli.resolve_google_api_service_profile",
         lambda runtime_env=None, service_type=None, host=None, port=None: {
             "url": "https://example.invalid",
@@ -268,6 +274,7 @@ def test_sync_space_runtime_config_sets_aligned_ports(monkeypatch):
     assert api.variables[("owner/demo", "WEBU_HF_SPACE_NAME")] == "owner/demo"
     assert api.variables[("owner/demo", "WEBU_DOCKER_PORT")] == "18200"
     assert api.variables[("owner/demo", "WEBU_DOCKER_APP_PORT")] == "18200"
+    assert api.variables[("owner/demo", "WEBU_GOOGLE_HEADLESS")] == "false"
     assert (
         api.variables[("owner/demo", "WEBU_GOOGLE_SERVICE_URL")]
         == "https://owner-demo.hf.space"
@@ -479,12 +486,18 @@ def test_cli_parser_supports_hub_docker_and_multi_space_commands():
     sync_all_args = parser.parse_args(
         ["hf-sync-all", "--restart", "--max-workers", "4"]
     )
+    release_args = parser.parse_args(["hf-release", "--squash", "--max-workers", "4"])
     assert hub_docker_args.mount_configs is True
     assert hub_docker_args.replace is True
     assert hub_logs_args.lines == 50
     assert create_space_args.space == "owner/space2"
     assert sync_all_args.restart is True
     assert sync_all_args.max_workers == 4
+    assert release_args.squash is True
+    assert release_args.max_workers == 4
+    assert release_args.restart is True
+    assert release_args.factory is True
+    assert release_args.wait is True
 
 
 def test_root_help_contains_quick_start_examples():
@@ -523,6 +536,12 @@ def test_cli_parser_supports_hf_super_squash():
     assert args.branch == "main"
 
 
+def test_cli_parser_supports_hf_super_squash_all():
+    parser = build_parser()
+    args = parser.parse_args(["hf-super-squash-all", "--branch", "main"])
+    assert args.branch == "main"
+
+
 def test_cmd_hf_super_squash_uses_space_repo_type(monkeypatch):
     recorded = {}
 
@@ -544,6 +563,116 @@ def test_cmd_hf_super_squash_uses_space_repo_type(monkeypatch):
         "repo_type": "space",
         "branch": "main",
     }
+
+
+def test_cmd_hf_super_squash_all_renders_batch_results(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "webu.google_docker.cli._super_squash_all_spaces",
+        lambda branch, max_workers: [
+            {"space": "owner/space1", "squashed": True, "branch": branch},
+            {"space": "owner/space2", "squashed": True, "branch": branch},
+        ],
+    )
+
+    result = cmd_hf_super_squash_all(SimpleNamespace(branch="main", max_workers=4))
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert '"squashed": true' in output
+
+
+def test_cmd_hf_release_runs_sync_wait_audit_and_squash(monkeypatch, tmp_path, capsys):
+    recorded = {}
+
+    def _fake_sync_all_spaces(**kwargs):
+        recorded["sync_kwargs"] = kwargs
+        return [
+            {"space": "owner/space1", "synced": True},
+            {"space": "owner/space2", "synced": True},
+        ]
+
+    def _fake_wait_for_spaces_running(
+        space_names, timeout_sec, interval_sec, max_workers
+    ):
+        recorded["wait_kwargs"] = {
+            "space_names": space_names,
+            "timeout_sec": timeout_sec,
+            "interval_sec": interval_sec,
+            "max_workers": max_workers,
+        }
+        return [
+            {"space": "owner/space1", "ready": True, "stage": "RUNNING"},
+            {"space": "owner/space2", "ready": True, "stage": "RUNNING"},
+        ]
+
+    def _fake_run_audit(target, hub_url, output_path):
+        recorded["audit_kwargs"] = {
+            "target": target,
+            "hub_url": hub_url,
+            "output_path": output_path,
+        }
+        return {"spaces": [], "hub": {}, "failures": []}
+
+    def _fake_super_squash_all_spaces(branch, max_workers):
+        recorded["squash_kwargs"] = {
+            "branch": branch,
+            "max_workers": max_workers,
+        }
+        return [{"space": "owner/space1", "squashed": True, "branch": branch}]
+
+    monkeypatch.setattr(
+        "webu.google_docker.cli._sync_all_spaces",
+        _fake_sync_all_spaces,
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli._wait_for_spaces_running",
+        _fake_wait_for_spaces_running,
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.run_audit",
+        _fake_run_audit,
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.format_audit_summary",
+        lambda payload: "audit ok",
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli.audit_has_failures",
+        lambda payload: False,
+    )
+    monkeypatch.setattr(
+        "webu.google_docker.cli._super_squash_all_spaces",
+        _fake_super_squash_all_spaces,
+    )
+
+    output_path = tmp_path / "release-audit.json"
+    result = cmd_hf_release(
+        SimpleNamespace(
+            port=18200,
+            message="release",
+            restart=True,
+            factory=True,
+            admin_token="admin",
+            max_workers=4,
+            wait=True,
+            wait_timeout=900,
+            wait_interval=5,
+            target="all",
+            hub_url="",
+            output=str(output_path),
+            format="summary",
+            branch="main",
+            squash=True,
+        )
+    )
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert recorded["sync_kwargs"]["factory"] is True
+    assert recorded["wait_kwargs"]["space_names"] == ["owner/space1", "owner/space2"]
+    assert recorded["audit_kwargs"]["output_path"] == str(output_path)
+    assert recorded["squash_kwargs"] == {"branch": "main", "max_workers": 4}
+    assert "audit ok" in output
 
 
 def test_cmd_hf_sync_deletes_stale_remote_files(monkeypatch, tmp_path):

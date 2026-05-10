@@ -16,6 +16,7 @@
 ```bash
 gghb check
 gghb backends
+ggdk hf-release --format both
 gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4
 ggdk hf-logs --space owner/space1 --lines 80
 ggdk hf-files --space owner/space2 --prefix bootstrap/
@@ -26,8 +27,17 @@ ggdk hf-files --space owner/space2 --prefix bootstrap/
 1. `ggdk config-init --name google_hub` 或 `ggdk config-check`
 2. `gghb check`
 3. `gghb benchmark --query "OpenAI news" --requests 12 --concurrency 4`
-4. `ggdk hf-doctor --space owner/space1 --check-auth`
-5. `ggdk hf-doctor --space owner/space2 --check-auth`
+4. `ggdk hf-release --format both --output data/debug/google_hub_all_audit_latest.json`
+5. `ggdk hf-doctor --space owner/space1 --check-auth`
+6. `ggdk hf-doctor --space owner/space2 --check-auth`
+
+## 最新经验
+
+1. 对 Google 来说，真实 Chrome + headed + 虚拟显示比继续伪造 UA 更关键；后者不足以解决 captcha。
+2. HF Space 更新浏览器相关环境变量后，需要把验证重点放在 `/admin/runtime` 和真实搜索审计，而不是只看构建成功。
+3. 普通 restart 适合代码热更新；factory restart 更适合运行时变量、浏览器模式、bootstrap 资料发生变化后的验收。
+4. 批量 super squash 放到验收通过之后做，既能保留排障期间的提交证据，也能在稳定后收敛历史。
+5. HF mirror 适合日常访问，但一旦 `/api/repos/create` 或上传阶段出现 SSL EOF，发布链路应直接切回官方 `huggingface.co`。
 
 ## 文档维护原则
 

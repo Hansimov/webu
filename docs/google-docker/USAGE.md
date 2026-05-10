@@ -2,6 +2,13 @@
 
 > 本文档由 `ggdk docs-sync` 从共享帮助源自动生成。
 
+## 当前稳定路径
+
+1. Google 搜索稳定方案以真实 Chrome、headless=false、Xvfb 兜底显示为默认前提。
+2. 本地代理正常但自动化浏览器触发 captcha 时，优先排查浏览器指纹和运行模式，不要先怀疑代理本身。
+3. 当远端运行时变量、浏览器模式或 bootstrap 资料发生变化时，HF 同步后优先执行 factory restart，再等待所有 Space 回到 RUNNING。
+4. 如果 HF mirror 在上传或建仓阶段出现 SSL EOF，发布和压缩历史应临时切回官方 huggingface.co 端点。
+
 ## 默认行为
 
 1. 默认 Space：取 configs/hf_spaces.json 中的第一个 space。
@@ -21,7 +28,7 @@ ggdk hub-docker-up --mount-configs --replace
 3. gghb check
 4. gghb benchmark --query "OpenAI news" --requests 24 --concurrency 6
 ```bash
-ggdk hf-sync-all --restart
+ggdk hf-release
 ```
 
 ## 命令速查
@@ -146,8 +153,19 @@ ggdk hf-sync --space owner/other-space
 
 ```bash
 ggdk hf-sync-all
-ggdk hf-sync-all --restart
+ggdk hf-sync-all --restart --factory
 ggdk hf-sync-all --max-workers 4
+```
+
+### `hf-release`
+
+一键执行 HF 同步、等待 RUNNING、真实审计，并可选批量压缩历史。
+
+```bash
+ggdk hf-release
+ggdk hf-release --format both --output data/debug/google_hub_all_audit_release.json
+ggdk hf-release --squash
+HF_ENDPOINT=https://huggingface.co WEBU_HF_CONTROL_ENDPOINT=https://huggingface.co ggdk hf-release
 ```
 
 ### `hf-status`
@@ -253,6 +271,15 @@ ggdk hf-restart --factory
 ggdk hf-super-squash
 ```
 
+### `hf-super-squash-all`
+
+并行压缩所有启用 HF Spaces 的提交历史。
+
+```bash
+ggdk hf-super-squash-all
+ggdk hf-super-squash-all --max-workers 4
+```
+
 ### `config-check`
 
 按共享 schema 校验本地 configs/*.json。
@@ -296,5 +323,7 @@ ggdk docs-sync
 4. 验证匿名行为：对 `hf-search` 使用 `--no-auth`。
 5. 初始化多实例 hub 配置：先运行 `ggdk config-init --name google_hub`。
 6. 本地 hub 的检查、查询和 benchmark 统一改用 `gghb`。
-7. 配置有疑问时，先运行 `ggdk config-check`。
-8. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。
+7. HF 远端发布优先用 `ggdk hf-release`，不要再手工拼 sync、restart、audit。
+8. 如果改了 headless、Chrome 通道、bootstrap 或运行时环境变量，优先保留 `--factory`。
+9. 配置有疑问时，先运行 `ggdk config-check`。
+10. 修改帮助源或 schema 后，运行 `ggdk docs-sync` 更新文档。

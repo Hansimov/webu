@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 
 from pathlib import Path
@@ -19,6 +20,7 @@ import requests
 from huggingface_hub import HfApi
 from tclogger import dict_to_str, logger
 
+from webu.google_api.audit import audit_has_failures, format_audit_summary, run_audit
 from webu.runtime_settings.schema import (
     CONFIGS_DOC_PATH,
     available_config_names,
@@ -675,8 +677,195 @@ def _resolve_hf_api(space_name: str) -> tuple[HfApi, object]:
     return HfApi(token=settings.hf_token), settings
 
 
+def _resolve_enabled_space_names() -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for entry in resolve_hf_space_entries():
+        space_name = str(entry.get("space", "")).strip()
+        if (
+            not space_name
+            or not bool(entry.get("enabled", True))
+            or space_name in seen
+        ):
+            continue
+        seen.add(space_name)
+        names.append(space_name)
+    return names
+
+
 def _super_squash_space_history(api: HfApi, repo_id: str, branch: str = "main"):
     api.super_squash_history(repo_id=repo_id, repo_type="space", branch=branch)
+
+
+def _sync_all_spaces(
+    *,
+    port: int,
+    message: str,
+    restart: bool,
+    factory: bool,
+    admin_token: str,
+    max_workers: int,
+) -> list[dict[str, object]]:
+    space_names = _resolve_enabled_space_names()
+    if not space_names:
+        raise ValueError("No enabled HF Spaces found in configs/hf_spaces.json")
+
+    worker_count = max(1, min(max_workers or len(space_names), len(space_names)))
+
+    def _sync_job(space_name: str):
+        try:
+            cmd_hf_sync(
+                argparse.Namespace(
+                    space=space_name,
+                    repo_id="",
+                    port=port,
+                    message=message,
+                    restart=restart,
+                    factory=factory,
+                    admin_token=admin_token,
+                    _skip_profile_asset_refresh=True,
+                )
+            )
+            return {"space": space_name, "synced": True}
+        except Exception as exc:
+            return {"space": space_name, "synced": False, "error": str(exc)}
+
+    results_by_space: dict[str, dict[str, object]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(_sync_job, space_name): space_name
+            for space_name in space_names
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            space_name = future_map[future]
+            results_by_space[space_name] = future.result()
+
+    results = [results_by_space[space_name] for space_name in space_names]
+
+    try:
+        synced_spaces = [item["space"] for item in results if item.get("synced")]
+        if synced_spaces:
+            _refresh_tracked_profile_asset(preferred_spaces=synced_spaces)
+    except Exception as exc:
+        logger.warn(f"> Profile asset refresh skipped after sync-all: {exc}")
+
+    return results
+
+
+def _wait_for_space_running(
+    space_name: str,
+    *,
+    timeout_sec: int,
+    interval_sec: int,
+) -> dict[str, object]:
+    api, hf_settings = _resolve_hf_api(space_name)
+    started_ts = time.time()
+    last_stage = ""
+
+    while True:
+        runtime = api.get_space_runtime(repo_id=space_name)
+        last_stage = str(runtime.stage)
+        waited_sec = int(max(0, time.time() - started_ts))
+        result = {
+            "space": space_name,
+            "stage": last_stage,
+            "waited_sec": waited_sec,
+            "space_host": hf_settings.space_host,
+        }
+        if last_stage == "RUNNING":
+            result["ready"] = True
+            return result
+        if "ERROR" in last_stage:
+            result["ready"] = False
+            result["error"] = f"space entered error stage: {last_stage}"
+            return result
+        if waited_sec >= timeout_sec:
+            result["ready"] = False
+            result["error"] = f"timeout waiting for RUNNING; last stage={last_stage}"
+            return result
+        time.sleep(max(1, interval_sec))
+
+
+def _wait_for_spaces_running(
+    space_names: list[str],
+    *,
+    timeout_sec: int,
+    interval_sec: int,
+    max_workers: int,
+) -> list[dict[str, object]]:
+    if not space_names:
+        return []
+    worker_count = max(1, min(max_workers or len(space_names), len(space_names)))
+    results_by_space: dict[str, dict[str, object]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(
+                _wait_for_space_running,
+                space_name,
+                timeout_sec=timeout_sec,
+                interval_sec=interval_sec,
+            ): space_name
+            for space_name in space_names
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            space_name = future_map[future]
+            try:
+                results_by_space[space_name] = future.result()
+            except Exception as exc:
+                results_by_space[space_name] = {
+                    "space": space_name,
+                    "ready": False,
+                    "stage": "",
+                    "waited_sec": 0,
+                    "error": str(exc),
+                }
+    return [results_by_space[space_name] for space_name in space_names]
+
+
+def _super_squash_all_spaces(
+    *,
+    branch: str,
+    max_workers: int,
+) -> list[dict[str, object]]:
+    space_names = _resolve_enabled_space_names()
+    if not space_names:
+        raise ValueError("No enabled HF Spaces found in configs/hf_spaces.json")
+
+    worker_count = max(1, min(max_workers or len(space_names), len(space_names)))
+
+    def _squash_job(space_name: str):
+        try:
+            api, _ = _resolve_hf_api(space_name)
+            _super_squash_space_history(api, space_name, branch=branch)
+            return {"space": space_name, "squashed": True, "branch": branch}
+        except Exception as exc:
+            return {
+                "space": space_name,
+                "squashed": False,
+                "branch": branch,
+                "error": str(exc),
+            }
+
+    results_by_space: dict[str, dict[str, object]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(_squash_job, space_name): space_name
+            for space_name in space_names
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            space_name = future_map[future]
+            results_by_space[space_name] = future.result()
+
+    return [results_by_space[space_name] for space_name in space_names]
+
+
+def _default_hf_release_output_path() -> Path:
+    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    return (
+        get_workspace_paths().data_dir
+        / "debug"
+        / f"google_hub_all_audit_after_hf_release_{timestamp}.json"
+    )
 
 
 def _restart_space_request(
@@ -738,6 +927,7 @@ def _sync_space_runtime_config(
     app_port: int,
 ):
     captcha = resolve_captcha_vlm_settings()
+    google_settings = resolve_google_api_settings(runtime_env="hf-space")
     google_service = resolve_google_api_service_profile(
         runtime_env="hf-space", service_type="hf-space"
     )
@@ -756,7 +946,7 @@ def _sync_space_runtime_config(
         "WEBU_DOCKER_PORT": str(app_port),
         "WEBU_DOCKER_APP_PORT": str(app_port),
         "WEBU_GOOGLE_PROXY_MODE": os.getenv("WEBU_GOOGLE_PROXY_MODE", "disabled"),
-        "WEBU_GOOGLE_HEADLESS": "true",
+        "WEBU_GOOGLE_HEADLESS": "true" if google_settings.headless else "false",
         "WEBU_SERVICE_LOG": "/tmp/webu-google-docker.log",
         "WEBU_GOOGLE_SERVICE_TYPE": google_service["type"],
         "WEBU_GOOGLE_SERVICE_URL": space_host,
@@ -907,6 +1097,7 @@ def cmd_docker_build(args):
 def cmd_docker_run(args):
     paths = get_workspace_paths()
     docker_settings = resolve_google_docker_settings()
+    google_settings = resolve_google_api_settings(runtime_env="docker")
     image_name = args.image or docker_settings.image_name
     container_name = args.name or docker_settings.container_name
     admin_token = args.admin_token or docker_settings.admin_token
@@ -919,7 +1110,7 @@ def cmd_docker_run(args):
         "WEBU_DOCKER_HOST": "0.0.0.0",
         "WEBU_DOCKER_PORT": str(args.port),
         "WEBU_GOOGLE_PORT": str(args.port),
-        "WEBU_GOOGLE_HEADLESS": "true",
+        "WEBU_GOOGLE_HEADLESS": "true" if google_settings.headless else "false",
     }
     if admin_token:
         env_map["WEBU_ADMIN_TOKEN"] = admin_token
@@ -1304,54 +1495,16 @@ def cmd_hf_create_space(args):
 
 
 def cmd_hf_sync_all(args):
-    space_names = []
-    for entry in resolve_hf_space_entries():
-        space_name = str(entry.get("space", "")).strip()
-        if space_name and bool(entry.get("enabled", True)):
-            space_names.append(space_name)
-
-    max_workers = max(
-        1, min(args.max_workers or len(space_names) or 1, len(space_names) or 1)
+    results = _sync_all_spaces(
+        port=args.port,
+        message=args.message,
+        restart=args.restart,
+        factory=args.factory,
+        admin_token=args.admin_token,
+        max_workers=args.max_workers,
     )
-
-    def _sync_job(space_name: str):
-        try:
-            cmd_hf_sync(
-                argparse.Namespace(
-                    space=space_name,
-                    repo_id="",
-                    port=args.port,
-                    message=args.message,
-                    restart=args.restart,
-                    factory=args.factory,
-                    admin_token=args.admin_token,
-                    _skip_profile_asset_refresh=True,
-                )
-            )
-            return {"space": space_name, "synced": True}
-        except Exception as exc:
-            return {"space": space_name, "synced": False, "error": str(exc)}
-
-    results_by_space: dict[str, dict[str, object]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {
-            executor.submit(_sync_job, space_name): space_name
-            for space_name in space_names
-        }
-        for future in concurrent.futures.as_completed(future_map):
-            space_name = future_map[future]
-            results_by_space[space_name] = future.result()
-
-    results = [results_by_space[space_name] for space_name in space_names]
-
-    try:
-        synced_spaces = [item["space"] for item in results if item.get("synced")]
-        if synced_spaces:
-            _refresh_tracked_profile_asset(preferred_spaces=synced_spaces)
-    except Exception as exc:
-        logger.warn(f"> Profile asset refresh skipped after sync-all: {exc}")
-
     print(json.dumps({"spaces": results}, indent=2, ensure_ascii=False))
+    return 1 if any(not item.get("synced") for item in results) else 0
 
 
 def cmd_hf_restart(args):
@@ -1368,6 +1521,78 @@ def cmd_hf_super_squash(args):
     api, _ = _resolve_hf_api(space_name)
     _super_squash_space_history(api, space_name, branch=args.branch)
     logger.okay(f"  ✓ Super-squashed Space history for: {space_name} ({args.branch})")
+
+
+def cmd_hf_super_squash_all(args):
+    results = _super_squash_all_spaces(
+        branch=args.branch,
+        max_workers=args.max_workers,
+    )
+    print(json.dumps({"spaces": results}, indent=2, ensure_ascii=False))
+    return 1 if any(not item.get("squashed") for item in results) else 0
+
+
+def cmd_hf_release(args):
+    sync_results = _sync_all_spaces(
+        port=args.port,
+        message=args.message,
+        restart=args.restart,
+        factory=args.factory,
+        admin_token=args.admin_token,
+        max_workers=args.max_workers,
+    )
+    print(json.dumps({"sync": sync_results}, indent=2, ensure_ascii=False))
+    if any(not item.get("synced") for item in sync_results):
+        logger.warn("> Abort hf-release because at least one space failed to sync")
+        return 1
+
+    space_names = [str(item["space"]) for item in sync_results if item.get("synced")]
+    wait_results: list[dict[str, object]] = []
+    if args.wait:
+        wait_results = _wait_for_spaces_running(
+            space_names,
+            timeout_sec=args.wait_timeout,
+            interval_sec=args.wait_interval,
+            max_workers=args.max_workers,
+        )
+        print(json.dumps({"wait": wait_results}, indent=2, ensure_ascii=False))
+        if any(not item.get("ready") for item in wait_results):
+            logger.warn("> Abort hf-release because at least one space did not become RUNNING")
+            return 1
+
+    output_path = Path(args.output).expanduser() if args.output else _default_hf_release_output_path()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_payload = run_audit(
+        target=args.target,
+        hub_url=args.hub_url,
+        output_path=str(output_path),
+    )
+    output_format = str(args.format or "summary").strip().lower()
+    if output_format == "json":
+        print(json.dumps(audit_payload, indent=2, ensure_ascii=False))
+    elif output_format == "both":
+        print(format_audit_summary(audit_payload))
+        print()
+        print(json.dumps(audit_payload, indent=2, ensure_ascii=False))
+    else:
+        print(format_audit_summary(audit_payload))
+
+    logger.note(f"> Audit report written to: {output_path}")
+    if audit_has_failures(audit_payload):
+        logger.warn("> hf-release audit reported failures")
+        return 1
+
+    if args.squash:
+        squash_results = _super_squash_all_spaces(
+            branch=args.branch,
+            max_workers=args.max_workers,
+        )
+        print(json.dumps({"squash": squash_results}, indent=2, ensure_ascii=False))
+        if any(not item.get("squashed") for item in squash_results):
+            logger.warn("> hf-release finished but hf-super-squash-all reported failures")
+            return 1
+
+    return 0
 
 
 def cmd_hf_logs(args):
@@ -1827,6 +2052,49 @@ def build_parser() -> argparse.ArgumentParser:
     hf_super_squash.add_argument("--space", default="")
     hf_super_squash.add_argument("--branch", default="main")
     hf_super_squash.set_defaults(func=cmd_hf_super_squash)
+
+    hf_super_squash_all = _add_command_parser(
+        subparsers,
+        "hf-super-squash-all",
+        "Super-squash commit history for all enabled HF Spaces",
+    )
+    hf_super_squash_all.add_argument("--branch", default="main")
+    hf_super_squash_all.add_argument("--max-workers", type=int, default=0)
+    hf_super_squash_all.set_defaults(func=cmd_hf_super_squash_all)
+
+    hf_release = _add_command_parser(
+        subparsers,
+        "hf-release",
+        "Sync all enabled HF Spaces, wait for RUNNING, then audit the live fleet",
+    )
+    hf_release.add_argument("--port", type=int, default=DEFAULT_GOOGLE_API_PORT)
+    hf_release.add_argument("--message", default="")
+    hf_release.add_argument("--admin-token", default="")
+    hf_release.add_argument("--max-workers", type=int, default=0)
+    hf_release.add_argument(
+        "--target",
+        choices=["spaces", "hub", "all"],
+        default="all",
+    )
+    hf_release.add_argument("--hub-url", default="")
+    hf_release.add_argument("--output", default="")
+    hf_release.add_argument(
+        "--format",
+        choices=["summary", "json", "both"],
+        default="summary",
+    )
+    hf_release.add_argument("--wait-timeout", type=int, default=1800)
+    hf_release.add_argument("--wait-interval", type=int, default=20)
+    hf_release.add_argument("--branch", default="main")
+    hf_release.add_argument("--squash", action="store_true")
+    hf_release.set_defaults(restart=True, factory=True, wait=True)
+    hf_release.add_argument("--restart", dest="restart", action="store_true")
+    hf_release.add_argument("--no-restart", dest="restart", action="store_false")
+    hf_release.add_argument("--factory", dest="factory", action="store_true")
+    hf_release.add_argument("--no-factory", dest="factory", action="store_false")
+    hf_release.add_argument("--wait", dest="wait", action="store_true")
+    hf_release.add_argument("--no-wait", dest="wait", action="store_false")
+    hf_release.set_defaults(func=cmd_hf_release)
 
     hf_logs = _add_command_parser(
         subparsers, "hf-logs", "Read remote service logs from HF Space"
