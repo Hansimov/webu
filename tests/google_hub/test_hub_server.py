@@ -345,7 +345,67 @@ def test_hub_search_skips_recently_timed_out_backend(monkeypatch, tmp_path):
         assert backends["space1"]["search_cooldown_until_ts"] > 0
 
     search_timeouts = [timeout for url, timeout in calls if url.endswith("/search")]
-    assert 18 in search_timeouts
+    assert search_timeouts == [30.0, 30.0]
+
+
+def test_hub_auto_search_still_caps_non_hf_backend_timeout(monkeypatch):
+    settings = GoogleHubSettings(
+        host="0.0.0.0",
+        port=18180,
+        admin_token="",
+        strategy="adaptive",
+        request_timeout_sec=60,
+        health_timeout_sec=5,
+        health_interval_sec=30,
+        excluded_nodes=[],
+        backends=[
+            GoogleHubBackend(
+                name="api1",
+                kind="google-api",
+                base_url="http://api1",
+                enabled=True,
+                weight=1,
+            ),
+            GoogleHubBackend(
+                name="api2",
+                kind="google-api",
+                base_url="http://api2",
+                enabled=True,
+                weight=1,
+            ),
+        ],
+        project_root="/tmp",
+        config_dir="/tmp/configs",
+    )
+    calls = []
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        calls.append((url, timeout))
+        if url == "http://api1/search":
+            raise RuntimeError("Read timed out")
+        return _Response(
+            200,
+            {
+                "success": True,
+                "query": params["q"],
+                "results": [{"title": "B", "url": "https://example.com/b"}],
+                "result_count": 1,
+                "total_results_text": "1 result",
+                "has_captcha": False,
+                "error": "",
+            },
+        )
+
+    monkeypatch.setattr("webu.google_hub.manager.requests.get", _fake_get)
+
+    manager = GoogleHubManager(settings)
+    for state in manager.states.values():
+        state.healthy = True
+
+    payload = asyncio.run(manager.search(query="python", num=3, lang="en"))
+
+    assert payload["backend"] == "api2"
+    assert [timeout for _, timeout in calls] == [18.0, 18.0]
 
 
 def test_hub_search_returns_summarized_auto_failure(monkeypatch, tmp_path):

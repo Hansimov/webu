@@ -1064,6 +1064,20 @@ class GoogleHubManager:
             return []
         return sorted(candidates, key=self._state_rank)
 
+    def _search_attempt_timeout_sec(
+        self,
+        state: BackendRuntimeState,
+        *,
+        requested_name: str,
+        ordered_count: int,
+    ) -> float:
+        configured_timeout = float(self.settings.request_timeout_sec)
+        if requested_name or ordered_count <= 1:
+            return configured_timeout
+        if state.backend.kind == "hf-space":
+            return configured_timeout
+        return min(configured_timeout, float(self._AUTO_SEARCH_ATTEMPT_TIMEOUT_SEC))
+
     async def search(
         self,
         *,
@@ -1082,13 +1096,12 @@ class GoogleHubManager:
         last_error = None
         last_backend_name = ""
         failures: list[tuple[str, str]] = []
-        attempt_timeout_sec = float(self.settings.request_timeout_sec)
-        if not requested_name and len(ordered) > 1:
-            attempt_timeout_sec = min(
-                attempt_timeout_sec,
-                float(self._AUTO_SEARCH_ATTEMPT_TIMEOUT_SEC),
-            )
         for state in ordered:
+            attempt_timeout_sec = self._search_attempt_timeout_sec(
+                state,
+                requested_name=requested_name,
+                ordered_count=len(ordered),
+            )
             state.last_selected_ts = time.time()
             last_backend_name = state.backend.name
             state.inflight += 1

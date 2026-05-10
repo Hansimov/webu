@@ -67,6 +67,14 @@ def test_prepare_space_bundle_excludes_configs(tmp_path):
     (source_root / "src" / "webu" / "__init__.py").write_text(
         "from .gemini import x\n", encoding="utf-8"
     )
+    (source_root / "src" / "webu" / "_lazy_exports.py").write_text(
+        "def exported_names(exports): return tuple(exports)\n"
+        "def resolve_export(name, package, exports): return None\n",
+        encoding="utf-8",
+    )
+    (source_root / "src" / "webu" / "cli_support.py").write_text(
+        "def demo(): return None\n", encoding="utf-8"
+    )
     (source_root / "src" / "webu" / "google_api" / "__init__.py").write_text(
         "", encoding="utf-8"
     )
@@ -113,6 +121,8 @@ def test_prepare_space_bundle_excludes_configs(tmp_path):
     assert not (bundle_root / "src" / "webu" / "ipv6").exists()
     assert not (bundle_root / "src" / "webu" / "captcha" / "imgs").exists()
     assert (bundle_root / "src" / "webu" / "google_api").exists()
+    assert (bundle_root / "src" / "webu" / "_lazy_exports.py").exists()
+    assert (bundle_root / "src" / "webu" / "cli_support.py").exists()
     assert (bundle_root / "src" / "webu" / "__init__.py").read_text(
         encoding="utf-8"
     ) == "__all__ = []\n"
@@ -164,6 +174,51 @@ ggdk = \"webu.google_docker.cli:main\"
     assert 'ggdk = "webu.google_docker.cli:main"' in pyproject_text
     assert "authors" not in pyproject_text
     assert "project.urls" not in pyproject_text
+
+
+def test_prepare_space_bundle_includes_runtime_optional_dependencies(tmp_path):
+    source_root = tmp_path / "repo"
+    (source_root / "src" / "webu" / "google_api").mkdir(parents=True)
+    for package_name in ["google_docker", "captcha", "fastapis", "runtime_settings"]:
+        (source_root / "src" / "webu" / package_name).mkdir(parents=True)
+        (source_root / "src" / "webu" / package_name / "__init__.py").write_text(
+            "", encoding="utf-8"
+        )
+    (source_root / "src" / "webu" / "google_api" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    (source_root / "pyproject.toml").write_text(
+        """
+[project]
+name = "webu"
+dependencies = ["requests"]
+
+[project.optional-dependencies]
+google-api = ["playwright", "fastapi"]
+google-api-panel = ["dash"]
+google-docker = ["huggingface_hub", "fastapi"]
+google-docker-panel = ["a2wsgi"]
+captcha = ["httpx", "opencv-python-headless", "playwright"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    bundle_root = prepare_space_bundle(
+        source_root, tmp_path / "out", 18200, "owner/demo"
+    )
+    requirements = (bundle_root / "requirements.txt").read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+    assert requirements.count("playwright") == 1
+    assert "requests" in requirements
+    assert "fastapi" in requirements
+    assert "huggingface_hub" in requirements
+    assert "dash" in requirements
+    assert "a2wsgi" in requirements
+    assert "httpx" in requirements
+    assert "opencv-python-headless" in requirements
 
 
 def test_space_readme_sets_startup_timeout(monkeypatch):

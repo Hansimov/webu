@@ -339,6 +339,7 @@ class GoogleScraper:
         # 确定首次使用的代理（保留原始值用于无 ProxyManager 时的重试）
         original_proxy = proxy_url or self._fixed_proxy
         requested_proxy = original_proxy
+        can_retry_same_route = bool(original_proxy and original_proxy != "direct")
 
         for attempt in range(retry_count + 1):
             # 获取当前代理
@@ -387,24 +388,33 @@ class GoogleScraper:
                 # CAPTCHA — 报告代理失败，切换代理重试
                 if current_proxy and self.proxy_manager:
                     self.proxy_manager.report_failure(current_proxy)
-                if self.proxy_manager:
+                if self.proxy_manager and current_proxy:
                     # ProxyManager 会提供下一个代理
                     requested_proxy = None
                     logger.warn(
                         f"  × CAPTCHA (attempt {attempt + 1}), " f"switching proxy ..."
                     )
-                else:
+                elif self.proxy_manager:
+                    return result
+                elif can_retry_same_route and attempt < retry_count:
                     # 无 ProxyManager：保持使用原始代理重试
                     logger.warn(
                         f"  × CAPTCHA (attempt {attempt + 1}), "
                         f"retrying with same proxy ..."
                     )
+                else:
+                    # 直连且没有可切换出口时，重复同一路径只会放大延迟。
+                    return result
                 continue
 
             if not result.results and attempt < retry_count:
                 # Google 明确表示无结果 → 不必重试
                 if result.error and "did not match" in result.error:
                     logger.mesg(f"  ℹ Google returned no results for this query")
+                    break
+                if (self.proxy_manager and not current_proxy) or (
+                    not self.proxy_manager and not can_retry_same_route
+                ):
                     break
 
                 # 无结果（超时等） — 报告代理失败，切换代理重试

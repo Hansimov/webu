@@ -84,7 +84,18 @@ SPACE_PACKAGE_DIRS = [
     "google_docker",
     "runtime_settings",
 ]
+SPACE_ROOT_MODULES = [
+    "_lazy_exports.py",
+    "cli_support.py",
+]
 SPACE_BOOTSTRAP_ARCHIVE = f"bootstrap/{DEFAULT_BOOTSTRAP_ARCHIVE_NAME}"
+GOOGLE_DOCKER_RUNTIME_EXTRAS = [
+    "captcha",
+    "google-api",
+    "google-api-panel",
+    "google-docker",
+    "google-docker-panel",
+]
 
 
 def _space_package_ignore(package_name: str):
@@ -164,13 +175,28 @@ def _read_project_data(source_root: Path) -> dict:
     return tomllib.loads(source_path.read_text(encoding="utf-8")).get("project", {})
 
 
-def _write_dependency_requirements(source_root: Path, bundle_root: Path):
+def _append_unique_dependency(dependencies: list[str], value: object):
+    dependency = str(value).strip()
+    if dependency and dependency not in dependencies:
+        dependencies.append(dependency)
+
+
+def _write_dependency_requirements(
+    source_root: Path,
+    bundle_root: Path,
+    *,
+    extra_groups: list[str] | None = None,
+):
     project_data = _read_project_data(source_root)
-    dependencies = [
-        str(value).strip()
-        for value in project_data.get("dependencies", [])
-        if str(value).strip()
-    ]
+    dependencies: list[str] = []
+    for value in project_data.get("dependencies", []):
+        _append_unique_dependency(dependencies, value)
+
+    optional_dependencies = project_data.get("optional-dependencies", {})
+    for group_name in extra_groups or []:
+        for value in optional_dependencies.get(group_name, []):
+            _append_unique_dependency(dependencies, value)
+
     content = "\n".join(dependencies) + ("\n" if dependencies else "")
     (bundle_root / "requirements.txt").write_text(content, encoding="utf-8")
 
@@ -277,7 +303,11 @@ def prepare_local_docker_build_context(source_root: Path, output_root: Path) -> 
     pyproject_path = source_root / "pyproject.toml"
     if pyproject_path.exists():
         shutil.copy2(pyproject_path, bundle_root / "pyproject.toml")
-    _write_dependency_requirements(source_root, bundle_root)
+    _write_dependency_requirements(
+        source_root,
+        bundle_root,
+        extra_groups=GOOGLE_DOCKER_RUNTIME_EXTRAS,
+    )
 
     license_path = source_root / "LICENSE"
     if license_path.exists():
@@ -463,7 +493,11 @@ def prepare_space_bundle(
     bundle_root.mkdir(parents=True, exist_ok=True)
 
     _write_sanitized_pyproject(source_root, bundle_root)
-    _write_dependency_requirements(source_root, bundle_root)
+    _write_dependency_requirements(
+        source_root,
+        bundle_root,
+        extra_groups=GOOGLE_DOCKER_RUNTIME_EXTRAS,
+    )
 
     license_path = source_root / "LICENSE"
     if license_path.exists():
@@ -481,6 +515,10 @@ def prepare_space_bundle(
     bundle_webu_root = bundle_src_root / "webu"
     bundle_webu_root.mkdir(parents=True, exist_ok=True)
     _write_minimal_webu_init(bundle_webu_root)
+    for module_name in SPACE_ROOT_MODULES:
+        src_module = src_root / "webu" / module_name
+        if src_module.exists():
+            shutil.copy2(src_module, bundle_webu_root / module_name)
 
     for package_name in SPACE_PACKAGE_DIRS:
         src_package = src_root / "webu" / package_name

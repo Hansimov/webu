@@ -63,6 +63,80 @@ class TestGoogleScraper:
         """测试未启动时停止不报错。"""
         await self.scraper.stop()  # 不应抛出异常
 
+    @pytest.mark.asyncio
+    async def test_direct_captcha_does_not_retry_without_proxy_route(self):
+        scraper = GoogleScraper(headless=True, verbose=False)
+        scraper._ensure_browser = AsyncMock()
+        calls = []
+
+        async def _fake_do_search(**kwargs):
+            calls.append(kwargs.get("proxy_url"))
+            return GoogleSearchResponse(
+                query=kwargs["query"],
+                has_captcha=True,
+                error="captcha bypass limit reached",
+            )
+
+        scraper._do_search = _fake_do_search
+
+        result = await scraper.search("OpenAI news", retry_count=2)
+
+        assert result.has_captcha is True
+        assert calls == [None]
+
+    @pytest.mark.asyncio
+    async def test_proxy_manager_with_no_proxy_does_not_retry_direct_captcha(self):
+        manager = MagicMock(spec=ProxyManager)
+        manager.get_proxy.return_value = None
+        scraper = GoogleScraper(proxy_manager=manager, headless=True, verbose=False)
+        scraper._ensure_browser = AsyncMock()
+        calls = []
+
+        async def _fake_do_search(**kwargs):
+            calls.append(kwargs.get("proxy_url"))
+            return GoogleSearchResponse(
+                query=kwargs["query"],
+                has_captcha=True,
+                error="captcha bypass limit reached",
+            )
+
+        scraper._do_search = _fake_do_search
+
+        result = await scraper.search("OpenAI news", retry_count=2)
+
+        assert result.has_captcha is True
+        assert calls == [None]
+        manager.report_failure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fixed_proxy_captcha_keeps_retrying_same_route(self):
+        scraper = GoogleScraper(
+            headless=True,
+            verbose=False,
+            proxy_url="http://127.0.0.1:11119",
+        )
+        scraper._ensure_browser = AsyncMock()
+        calls = []
+
+        async def _fake_do_search(**kwargs):
+            calls.append(kwargs.get("proxy_url"))
+            return GoogleSearchResponse(
+                query=kwargs["query"],
+                has_captcha=True,
+                error="captcha bypass limit reached",
+            )
+
+        scraper._do_search = _fake_do_search
+
+        result = await scraper.search("OpenAI news", retry_count=2)
+
+        assert result.has_captcha is True
+        assert calls == [
+            "http://127.0.0.1:11119",
+            "http://127.0.0.1:11119",
+            "http://127.0.0.1:11119",
+        ]
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_double_start(self):
