@@ -42,7 +42,13 @@
 {
   "host": "0.0.0.0",
   "port": 18200,
+  "headless": false,
   "proxy_mode": "auto",
+  "browser_channel": "chrome",
+  "browser_executable": "",
+  "use_virtual_display": true,
+  "display_width": 1920,
+  "display_height": 1080,
   "services": [
     {
       "url": "http://127.0.0.1:18200",
@@ -63,6 +69,8 @@
 2. api_token 为空表示该环境不强制校验 /search。
 3. hf-space 项可以不写 url，此时会从 configs/hf_spaces.json 或 WEBU_HF_SPACE_NAME 自动推导域名。
 4. 只有当你真的在用独立远程服务器时，才需要额外添加 remote-server 项。
+5. Google 搜索更稳定的默认值是 headless=false + browser_channel=chrome；如果没有 DISPLAY，则配合 use_virtual_display=true 自动起 Xvfb。
+6. 除非你明确接受更高的 captcha 风险，否则不要把 headless 改成 true。
 
 ## 3. `configs/google_docker.json`
 

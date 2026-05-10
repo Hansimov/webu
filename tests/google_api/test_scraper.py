@@ -46,6 +46,31 @@ class TestGoogleScraper:
         assert self.scraper.timeout == 10
         assert self.scraper.headless is True
 
+    def test_browser_launch_kwargs_prefer_explicit_executable(self):
+        scraper = GoogleScraper(
+            headless=False,
+            verbose=False,
+            browser_channel="chrome",
+            browser_executable="/usr/bin/google-chrome",
+        )
+        kwargs = scraper._build_browser_launch_kwargs()
+        assert kwargs["headless"] is False
+        assert kwargs["executable_path"] == "/usr/bin/google-chrome"
+        assert "channel" not in kwargs
+
+    def test_browser_launch_kwargs_detects_chrome_channel(self):
+        scraper = GoogleScraper(headless=False, verbose=False, browser_channel="")
+        with patch("webu.google_api.scraper.shutil.which", return_value="/usr/bin/google-chrome"):
+            kwargs = scraper._build_browser_launch_kwargs()
+        assert kwargs["channel"] == "chrome"
+
+    def test_browser_launch_kwargs_warns_headless_mode_unchanged(self):
+        scraper = GoogleScraper(headless=True, verbose=False, browser_channel="chrome")
+        with patch("webu.google_api.scraper.shutil.which", return_value="/usr/bin/google-chrome"):
+            kwargs = scraper._build_browser_launch_kwargs()
+        assert kwargs["headless"] is True
+        assert kwargs["channel"] == "chrome"
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_start_stop(self):
@@ -194,6 +219,12 @@ class TestSearchLocaleProfile:
         assert profile.lang == "fr"
         assert profile.locale == "fr-CA"
         assert profile.navigator_languages[0] == "fr-CA"
+
+    def test_english_defaults_align_timezone_and_locale(self):
+        profile = resolve_search_locale_profile("openai")
+        assert profile.lang == "en"
+        assert profile.locale == "en-GB"
+        assert profile.timezone_id == "Europe/London"
 
 
 # ═══════════════════════════════════════════════════════════════

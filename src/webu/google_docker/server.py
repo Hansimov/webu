@@ -30,6 +30,9 @@ class RuntimeInfoResponse(BaseModel):
     port: int = DEFAULT_GOOGLE_API_PORT
     app_port: int = DEFAULT_GOOGLE_API_PORT
     headless: bool = True
+    browser_channel: str = ""
+    browser_executable: str = ""
+    use_virtual_display: bool = True
     proxy_mode: str = "auto"
     proxy_count: int = 0
     service_url: str = ""
@@ -57,6 +60,10 @@ class ConfigResponse(BaseModel):
     port: int = DEFAULT_GOOGLE_API_PORT
     image_name: str = ""
     container_name: str = ""
+    headless: bool = True
+    browser_channel: str = ""
+    browser_executable: str = ""
+    use_virtual_display: bool = True
     proxy_mode: str = "auto"
     proxies: list[dict] = Field(default_factory=list)
     service_url: str = ""
@@ -114,6 +121,9 @@ def create_google_docker_server(
             port=resolved_google.port,
             app_port=resolved_docker.app_port,
             headless=resolved_google.headless,
+            browser_channel=resolved_google.browser_channel,
+            browser_executable=resolved_google.browser_executable,
+            use_virtual_display=resolved_google.use_virtual_display,
             proxy_mode=resolved_google.proxy_mode,
             proxy_count=len(resolved_google.proxies),
             service_url=resolved_google.service_url,
@@ -151,6 +161,10 @@ def create_google_docker_server(
             port=resolved_google.port,
             image_name=resolved_docker.image_name,
             container_name=resolved_docker.container_name,
+            headless=resolved_google.headless,
+            browser_channel=resolved_google.browser_channel,
+            browser_executable=resolved_google.browser_executable,
+            use_virtual_display=resolved_google.use_virtual_display,
             proxy_mode=resolved_google.proxy_mode,
             proxies=resolved_google.proxies,
             service_url=resolved_google.service_url,

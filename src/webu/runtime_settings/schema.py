@@ -40,11 +40,19 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "api_token 为空表示该环境不强制校验 /search。",
             "hf-space 项可以不写 url，此时会从 configs/hf_spaces.json 或 WEBU_HF_SPACE_NAME 自动推导域名。",
             "只有当你真的在用独立远程服务器时，才需要额外添加 remote-server 项。",
+            "Google 搜索更稳定的默认值是 headless=false + browser_channel=chrome；如果没有 DISPLAY，则配合 use_virtual_display=true 自动起 Xvfb。",
+            "除非你明确接受更高的 captcha 风险，否则不要把 headless 改成 true。",
         ],
         "sample": {
             "host": "0.0.0.0",
             "port": DEFAULT_GOOGLE_API_PORT,
+            "headless": False,
             "proxy_mode": "auto",
+            "browser_channel": "chrome",
+            "browser_executable": "",
+            "use_virtual_display": True,
+            "display_width": 1920,
+            "display_height": 1080,
             "services": [
                 {
                     "url": f"http://127.0.0.1:{DEFAULT_GOOGLE_API_PORT}",
@@ -59,10 +67,16 @@ CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
             "properties": {
                 "host": {"type": "string"},
                 "port": {"type": "integer"},
+                "headless": {"type": "boolean"},
                 "proxy_mode": {
                     "type": "string",
                     "enum": ["auto", "enabled", "disabled"],
                 },
+                "browser_channel": {"type": "string"},
+                "browser_executable": {"type": "string"},
+                "use_virtual_display": {"type": "boolean"},
+                "display_width": {"type": "integer"},
+                "display_height": {"type": "integer"},
                 "services": {
                     "type": "array",
                     "items": {

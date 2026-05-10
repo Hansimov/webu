@@ -28,6 +28,22 @@ def test_google_api_settings_disable_proxy_in_hf_space(monkeypatch, tmp_path):
     assert settings.proxies == []
 
 
+def test_google_api_settings_defaults_prefer_headed_chrome(monkeypatch, tmp_path):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    monkeypatch.setenv("WEBU_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("WEBU_RUNTIME_ENV", "local")
+
+    settings = resolve_google_api_settings()
+
+    assert settings.headless is False
+    assert settings.browser_channel == "chrome"
+    assert settings.use_virtual_display is True
+    assert settings.display_width == 1920
+    assert settings.display_height == 1080
+
+
 def test_google_api_settings_rewrite_local_proxy_for_docker(monkeypatch, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()

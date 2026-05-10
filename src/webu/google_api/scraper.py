@@ -28,9 +28,9 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from .constants import (
+    GOOGLE_HOME_URL,
     GOOGLE_SEARCH_URL,
     SEARCH_TIMEOUT,
-    USER_AGENTS,
     VIEWPORT_SIZES,
 )
 from .locale import SearchLocaleProfile, resolve_search_locale_profile
@@ -180,6 +180,11 @@ class GoogleScraper:
         timeout: int = SEARCH_TIMEOUT,
         verbose: bool = True,
         proxy_url: str = None,
+        browser_channel: str = "",
+        browser_executable: str = "",
+        use_virtual_display: bool = True,
+        display_width: int = 1920,
+        display_height: int = 1080,
         profile_dir: str | Path = None,
         screenshot_dir: str | Path = None,
     ):
@@ -191,6 +196,10 @@ class GoogleScraper:
 
         # 指定的固定代理（CLI --proxy 传入时使用）
         self._fixed_proxy = proxy_url
+        self._browser_channel = str(browser_channel or "").strip()
+        self._browser_executable = str(browser_executable or "").strip()
+        self._use_virtual_display = bool(use_virtual_display)
+        self._display_size = (int(display_width), int(display_height))
         # 持久化目录（Cookie / Chrome Profile）
         self._profile_dir = Path(profile_dir) if profile_dir else DEFAULT_PROFILE_DIR
         self._screenshot_dir = (
@@ -201,6 +210,7 @@ class GoogleScraper:
 
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
+        self._display = None
         self._search_count = 0
         self._max_searches_before_restart = 200
 
@@ -217,6 +227,7 @@ class GoogleScraper:
             return
 
         self._bootstrap_profile_dir()
+        self._ensure_display()
 
         self.perf = PerfTimer()
         logger.note("> Starting Playwright browser ...")
@@ -226,25 +237,85 @@ class GoogleScraper:
             logger.mesg(f"  Proxy: via ProxyManager (context-level)")
         else:
             logger.mesg(f"  Proxy: none (direct)")
+        if self.headless:
+            logger.warn("  ⚠ headless=true increases captcha risk on Google")
 
         self.perf.start("browser_launch")
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-features=DnsOverHttps",
-                "--disable-background-networking",
-            ],
-        )
+        launch_kwargs = self._build_browser_launch_kwargs()
+        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
         self._search_count = 0
         self.perf.stop()
         logger.okay("  ✓ Playwright browser started")
 
         if self.verbose:
             logger.mesg(f"\n> Startup timing:\n{self.perf.summary()}\n")
+
+    def _ensure_display(self):
+        if self.headless or os.environ.get("DISPLAY", ""):
+            return
+        if not self._use_virtual_display or self._display is not None:
+            return
+
+        try:
+            from pyvirtualdisplay import Display
+        except ImportError:
+            logger.warn(
+                "  × pyvirtualdisplay is not installed; running headed Chrome without DISPLAY may fail"
+            )
+            return
+
+        self._display = Display(visible=False, size=self._display_size)
+        self._display.start()
+        logger.okay(f"  ✓ Xvfb display started: {os.environ.get('DISPLAY', '')}")
+
+    def _build_browser_launch_kwargs(self) -> dict:
+        launch_kwargs = {
+            "headless": self.headless,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-features=DnsOverHttps",
+                "--disable-background-networking",
+            ],
+        }
+
+        if self._browser_executable:
+            launch_kwargs["executable_path"] = self._browser_executable
+            if self.verbose:
+                logger.mesg(
+                    f"  Browser executable: {logstr.file(self._browser_executable)}"
+                )
+            return launch_kwargs
+
+        channel = self._resolve_browser_channel()
+        if channel:
+            launch_kwargs["channel"] = channel
+            if self.verbose:
+                logger.mesg(f"  Browser channel: {logstr.mesg(channel)}")
+        elif self.verbose:
+            logger.warn("  ⚠ Falling back to bundled Chromium")
+
+        return launch_kwargs
+
+    def _resolve_browser_channel(self) -> str:
+        chrome_candidates = [
+            "google-chrome",
+            "google-chrome-stable",
+        ]
+        if self._browser_channel:
+            if self._browser_channel == "chrome":
+                for candidate in chrome_candidates:
+                    if shutil.which(candidate):
+                        return "chrome"
+                return ""
+            return self._browser_channel
+
+        for candidate in chrome_candidates:
+            if shutil.which(candidate):
+                return "chrome"
+        return ""
 
     def _bootstrap_profile_dir(self):
         bootstrap_archive = resolve_default_bootstrap_archive_path().expanduser()
@@ -293,6 +364,12 @@ class GoogleScraper:
             except Exception:
                 pass
             self._playwright = None
+        if self._display:
+            try:
+                self._display.stop()
+            except Exception:
+                pass
+            self._display = None
         logger.note("> Browser stopped")
 
     async def _ensure_browser(self):
@@ -731,13 +808,12 @@ class GoogleScraper:
         proxy_url: str | None,
         locale_profile: SearchLocaleProfile,
     ):
-        ua = random.choice(USER_AGENTS)
         viewport = random.choice(VIEWPORT_SIZES)
 
         context_opts = {
-            "user_agent": ua,
             "viewport": viewport,
             "locale": locale_profile.locale,
+            "timezone_id": locale_profile.timezone_id,
             "ignore_https_errors": True,
             "extra_http_headers": {
                 "Accept-Language": locale_profile.accept_language_header,
@@ -753,25 +829,6 @@ class GoogleScraper:
         if self.verbose:
             proxy_display = proxy_url or "direct"
             logger.mesg(f"  ◆ Context created (proxy: {logstr.file(proxy_display)})")
-
-        navigator_languages_json = json.dumps(locale_profile.navigator_languages)
-        init_script = """
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-            });
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5],
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => __NAVIGATOR_LANGUAGES__,
-            });
-            window.chrome = {
-                runtime: {},
-            };
-        """.replace(
-            "__NAVIGATOR_LANGUAGES__", navigator_languages_json
-        )
-        await page.add_init_script(init_script)
 
         return context, page
 
@@ -794,6 +851,7 @@ class GoogleScraper:
         if self.verbose:
             logger.mesg(f"  → Navigating: {logstr.file(url[:100])}")
 
+        await self._prime_google_session(page, locale_profile)
         await page.goto(url, timeout=self.timeout * 1000, wait_until="domcontentloaded")
 
         current_url = page.url
@@ -832,6 +890,27 @@ class GoogleScraper:
                 f"in {logstr.mesg(f'{elapsed_ms}ms')}"
             )
         return html, elapsed_ms, page.url
+
+    async def _prime_google_session(
+        self,
+        page,
+        locale_profile: SearchLocaleProfile,
+    ):
+        home_url = f"{GOOGLE_HOME_URL}?hl={locale_profile.lang}"
+        try:
+            await page.goto(
+                home_url,
+                timeout=min(self.timeout, 15) * 1000,
+                wait_until="domcontentloaded",
+            )
+            consent_dismissed = await self._dismiss_consent(page)
+            if consent_dismissed:
+                await asyncio.sleep(1.0)
+            else:
+                await asyncio.sleep(0.5)
+        except Exception as exc:
+            if self.verbose:
+                logger.mesg(f"  ⚠ Google home warmup failed: {str(exc)[:100]}")
 
     # ── Cookie 持久化 ─────────────────────────────────────────
 
@@ -882,7 +961,9 @@ class GoogleScraper:
                 'div[aria-label*="Before you continue"], '
                 'div[aria-label*="before you continue"]'
             )
-            if await dialog.count() == 0:
+            consent_text = await page.locator("body").text_content(timeout=1000)
+            has_inline_consent = "Before you continue to Google" in (consent_text or "")
+            if await dialog.count() == 0 and not has_inline_consent:
                 return False
 
             if self.verbose:

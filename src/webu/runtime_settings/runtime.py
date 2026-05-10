@@ -49,6 +49,11 @@ class GoogleApiSettings:
     port: int
     headless: bool
     proxies: list[dict[str, str]]
+    browser_channel: str
+    browser_executable: str
+    use_virtual_display: bool
+    display_width: int
+    display_height: int
     profile_dir: Path
     screenshot_dir: Path
     data_dir: Path
@@ -494,12 +499,31 @@ def resolve_google_api_settings(
     if resolved_headless is None:
         resolved_headless = _env_bool(
             "WEBU_GOOGLE_HEADLESS",
-            config.get("headless", runtime_env != "local"),
+            config.get("headless", False),
         )
 
     resolved_host = host or os.getenv("WEBU_GOOGLE_HOST", config.get("host", "0.0.0.0"))
     resolved_port = port or _env_int(
         "WEBU_GOOGLE_PORT", int(config.get("port", DEFAULT_GOOGLE_API_PORT))
+    )
+    browser_channel = str(
+        os.getenv("WEBU_GOOGLE_BROWSER_CHANNEL", config.get("browser_channel", "chrome"))
+    ).strip()
+    browser_executable = str(
+        os.getenv(
+            "WEBU_GOOGLE_BROWSER_EXECUTABLE",
+            config.get("browser_executable", ""),
+        )
+    ).strip()
+    use_virtual_display = _env_bool(
+        "WEBU_GOOGLE_USE_VIRTUAL_DISPLAY",
+        config.get("use_virtual_display", True),
+    )
+    display_width = _env_int(
+        "WEBU_GOOGLE_DISPLAY_WIDTH", int(config.get("display_width", 1920))
+    )
+    display_height = _env_int(
+        "WEBU_GOOGLE_DISPLAY_HEIGHT", int(config.get("display_height", 1080))
     )
 
     profile_dir = Path(
@@ -532,6 +556,11 @@ def resolve_google_api_settings(
         port=int(resolved_port),
         headless=bool(resolved_headless),
         proxies=normalized_proxies,
+        browser_channel=browser_channel,
+        browser_executable=browser_executable,
+        use_virtual_display=bool(use_virtual_display),
+        display_width=int(display_width),
+        display_height=int(display_height),
         profile_dir=profile_dir,
         screenshot_dir=screenshot_dir,
         data_dir=data_dir,

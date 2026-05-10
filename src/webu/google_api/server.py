@@ -252,6 +252,11 @@ def create_google_search_server(
         scraper = GoogleScraper(
             proxy_manager=proxy_manager,
             headless=resolved_settings.headless,
+            browser_channel=resolved_settings.browser_channel,
+            browser_executable=resolved_settings.browser_executable,
+            use_virtual_display=resolved_settings.use_virtual_display,
+            display_width=resolved_settings.display_width,
+            display_height=resolved_settings.display_height,
             profile_dir=resolved_settings.profile_dir,
             screenshot_dir=resolved_settings.screenshot_dir,
         )
@@ -541,10 +546,21 @@ def main():
     argparser.add_argument(
         "--port", type=int, default=DEFAULT_GOOGLE_API_PORT, help="Bind port"
     )
-    argparser.add_argument("--no-headless", action="store_true", help="Show browser")
+    headless_group = argparser.add_mutually_exclusive_group()
+    headless_group.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run browser in headless mode (higher captcha risk)",
+    )
+    headless_group.add_argument(
+        "--no-headless",
+        action="store_true",
+        help="Run browser with a visible window or virtual display",
+    )
     args = argparser.parse_args()
 
-    app = create_google_search_server(headless=not args.no_headless)
+    explicit_headless = True if args.headless else False if args.no_headless else None
+    app = create_google_search_server(headless=explicit_headless)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

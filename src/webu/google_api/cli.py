@@ -263,6 +263,7 @@ def cmd_search(args):
 
     async def _run():
         search_start = time.time()
+        settings = resolve_google_api_settings()
 
         # 如果指定了代理，直接使用；否则用 ProxyManager
         if proxy_url:
@@ -277,9 +278,14 @@ def cmd_search(args):
 
         scraper = GoogleScraper(
             proxy_manager=manager,
-            headless=True,
+            headless=settings.headless,
             verbose=True,
             proxy_url=proxy_url,  # 传给 _fixed_proxy，每次搜索 context 级别使用
+            browser_channel=settings.browser_channel,
+            browser_executable=settings.browser_executable,
+            use_virtual_display=settings.use_virtual_display,
+            display_width=settings.display_width,
+            display_height=settings.display_height,
             profile_dir=profile_dir,
         )
         try:
@@ -336,7 +342,16 @@ def cmd_search_test(args):
     logger.note(f"> Search test: query={logstr.mesg(query)}, proxies={len(proxy_list)}")
 
     async def _run():
-        scraper = GoogleScraper(headless=True, verbose=True)
+        settings = resolve_google_api_settings()
+        scraper = GoogleScraper(
+            headless=settings.headless,
+            verbose=True,
+            browser_channel=settings.browser_channel,
+            browser_executable=settings.browser_executable,
+            use_virtual_display=settings.use_virtual_display,
+            display_width=settings.display_width,
+            display_height=settings.display_height,
+        )
         results = []
         try:
             await scraper.start()

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 _LANGUAGE_LOCALE_DEFAULTS = {
     "ar": "ar-SA",
     "de": "de-DE",
-    "en": "en-US",
+    "en": "en-GB",
     "es": "es-ES",
     "fr": "fr-FR",
     "he": "he-IL",
@@ -22,6 +22,27 @@ _LANGUAGE_LOCALE_DEFAULTS = {
     "zh": "zh-CN",
     "zh-cn": "zh-CN",
     "zh-tw": "zh-TW",
+}
+
+_LOCALE_TIMEZONE_DEFAULTS = {
+    "ar-SA": "Asia/Riyadh",
+    "de-DE": "Europe/Berlin",
+    "en-AU": "Australia/Sydney",
+    "en-CA": "America/Toronto",
+    "en-GB": "Europe/London",
+    "en-US": "America/New_York",
+    "es-ES": "Europe/Madrid",
+    "fr-FR": "Europe/Paris",
+    "he-IL": "Asia/Jerusalem",
+    "hi-IN": "Asia/Kolkata",
+    "it-IT": "Europe/Rome",
+    "ja-JP": "Asia/Tokyo",
+    "ko-KR": "Asia/Seoul",
+    "pt-BR": "America/Sao_Paulo",
+    "ru-RU": "Europe/Moscow",
+    "th-TH": "Asia/Bangkok",
+    "zh-CN": "Asia/Shanghai",
+    "zh-TW": "Asia/Taipei",
 }
 
 _SCRIPT_RULES = [
@@ -70,6 +91,7 @@ _LATIN_LANGUAGE_HINTS = {
 class SearchLocaleProfile:
     lang: str
     locale: str
+    timezone_id: str
     navigator_languages: list[str]
     accept_language_header: str
 
@@ -116,6 +138,17 @@ def _build_accept_language_header(locale: str, lang: str) -> str:
     return ", ".join(weighted)
 
 
+def _default_timezone_for_locale(locale: str, lang: str) -> str:
+    normalized_locale = _normalize_token(locale)
+    if normalized_locale in _LOCALE_TIMEZONE_DEFAULTS:
+        return _LOCALE_TIMEZONE_DEFAULTS[normalized_locale]
+    normalized_lang = _normalize_token(lang)
+    return _LOCALE_TIMEZONE_DEFAULTS.get(
+        _default_locale_for_lang(normalized_lang),
+        "UTC",
+    )
+
+
 def _infer_cjk_language(query: str) -> tuple[str, str] | None:
     if not re.search(r"[\u3400-\u9fff]", query):
         return None
@@ -148,7 +181,7 @@ def _infer_latin_language(query: str) -> tuple[str, str] | None:
             if (hint := _LATIN_LANGUAGE_HINTS[best_lang])
             else _default_locale_for_lang(best_lang)
         )
-    return ("en", "en-US")
+    return ("en", "en-GB")
 
 
 def infer_query_language_locale(query: str) -> tuple[str, str]:
@@ -204,6 +237,7 @@ def resolve_search_locale_profile(
     return SearchLocaleProfile(
         lang=final_lang,
         locale=final_locale,
+        timezone_id=_default_timezone_for_locale(final_locale, final_lang),
         navigator_languages=navigator_languages,
         accept_language_header=_build_accept_language_header(final_locale, final_lang),
     )

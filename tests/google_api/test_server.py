@@ -109,7 +109,16 @@ class _FakeGoogleScraper:
     last_raw_call = None
 
     def __init__(
-        self, proxy_manager=None, headless=True, profile_dir=None, screenshot_dir=None
+        self,
+        proxy_manager=None,
+        headless=True,
+        browser_channel="",
+        browser_executable="",
+        use_virtual_display=True,
+        display_width=1920,
+        display_height=1080,
+        profile_dir=None,
+        screenshot_dir=None,
     ):
         self.proxy_manager = proxy_manager
 
