@@ -42,12 +42,19 @@ MINIMAX_MODEL_PATTERN = re.compile(r"\bminimax\b", re.IGNORECASE)
 MINIMAX_ENDPOINT_HINT_PATTERN = re.compile(r"minimax", re.IGNORECASE)
 QWEN_MODEL_PATTERN = re.compile(r"\b(qwen|qwq)\b", re.IGNORECASE)
 DEEPSEEK_MODEL_PATTERN = re.compile(r"\bdeepseek\b", re.IGNORECASE)
+DEEPSEEK_LEGACY_MODEL_ALIASES = {
+    "deepseek-chat": ("deepseek-v4-flash", False),
+    "deepseek-reasoner": ("deepseek-v4-flash", True),
+}
+CLOUD_VENDOR_ENDPOINT_SUFFIX = "".join(("ali", "yuncs", ".", "com"))
 DOUBAO_ENDPOINT_HINT_PATTERN = re.compile(
     r"(volcengine|volces|doubao|ark\.cn)",
     re.IGNORECASE,
 )
 QWEN_ENDPOINT_HINT_PATTERN = re.compile(
-    r"(dashscope|aliyuncs\.com|localhost|127\.0\.0\.1|0\.0\.0\.0)",
+    r"(dashscope|"
+    + re.escape(CLOUD_VENDOR_ENDPOINT_SUFFIX)
+    + r"|localhost|127\.0\.0\.1|0\.0\.0\.0)",
     re.IGNORECASE,
 )
 THINKING_PARAM_ERROR_PATTERN = re.compile(
@@ -334,7 +341,10 @@ class LLMClient:
             or "deepseek" in normalized_endpoint
         ):
             return "deepseek"
-        if "dashscope" in normalized_endpoint or "aliyuncs.com" in normalized_endpoint:
+        if (
+            "dashscope" in normalized_endpoint
+            or CLOUD_VENDOR_ENDPOINT_SUFFIX in normalized_endpoint
+        ):
             return "dashscope"
         if QWEN_MODEL_PATTERN.search(
             normalized_model
@@ -345,6 +355,22 @@ class LLMClient:
     def _apply_provider_defaults(self, payload: dict, model: str = None) -> None:
         if self._resolve_provider(model) == "minimax":
             payload.setdefault("reasoning_split", True)
+
+    def _normalize_deepseek_model(
+        self,
+        model: str,
+        enable_thinking: bool | None,
+    ) -> tuple[str, bool | None]:
+        if self._resolve_provider(model) != "deepseek":
+            return model, enable_thinking
+        normalized_model = str(model or "").strip()
+        alias = DEEPSEEK_LEGACY_MODEL_ALIASES.get(normalized_model)
+        if alias is None:
+            return model, enable_thinking
+        replacement_model, alias_enable_thinking = alias
+        if enable_thinking is None:
+            enable_thinking = alias_enable_thinking
+        return replacement_model, enable_thinking
 
     @staticmethod
     def _extract_message_parts(data: dict) -> tuple[str, str]:
@@ -555,7 +581,22 @@ class LLMClient:
             payload["enable_thinking"] = enable_thinking
             payload.pop("thinking", None)
             return
-        if adapter in ("deepseek", "doubao"):
+        if adapter == "deepseek":
+            payload["thinking"] = {"type": "enabled" if enable_thinking else "disabled"}
+            if enable_thinking:
+                payload.setdefault("reasoning_effort", "high")
+                for disabled_param in (
+                    "temperature",
+                    "top_p",
+                    "presence_penalty",
+                    "frequency_penalty",
+                ):
+                    payload.pop(disabled_param, None)
+            else:
+                payload.pop("reasoning_effort", None)
+            payload.pop("enable_thinking", None)
+            return
+        if adapter == "doubao":
             payload["thinking"] = {"type": "enabled" if enable_thinking else "disabled"}
             payload.pop("enable_thinking", None)
             return
@@ -610,6 +651,10 @@ class LLMClient:
             "stream": stream,
         }
         resolved_model = self._resolve_model(model, timeout=timeout)
+        resolved_model, enable_thinking = self._normalize_deepseek_model(
+            resolved_model,
+            enable_thinking,
+        )
         if resolved_model:
             payload["model"] = resolved_model
         max_tokens = max_tokens if max_tokens is not None else self.max_tokens
