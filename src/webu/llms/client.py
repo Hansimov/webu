@@ -226,6 +226,32 @@ def _extract_message_parts(data: dict) -> tuple[str, str]:
     return reasoning, content
 
 
+def _normalize_deepseek_messages(messages: list) -> list:
+    normalized_messages = deepcopy(messages or [])
+    for message in normalized_messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "developer":
+            message["role"] = "system"
+        if role != "assistant":
+            continue
+
+        content = message.get("content")
+        if content is None:
+            message["content"] = ""
+            continue
+        if not isinstance(content, str) or not _contains_thinking_tags(content):
+            continue
+
+        reasoning, visible_content = _split_thinking_content(content)
+        if reasoning and not message.get("reasoning_content"):
+            message["reasoning_content"] = reasoning
+        message["content"] = visible_content
+
+    return normalized_messages
+
+
 def _consume_stream_text(
     stream_state: dict[str, str],
     key: str,
@@ -382,6 +408,10 @@ class LLMClient:
         stream_state: dict[str, str],
     ) -> dict:
         return _normalize_stream_delta(delta_data, stream_state)
+
+    @staticmethod
+    def _normalize_deepseek_messages(messages: list) -> list:
+        return _normalize_deepseek_messages(messages)
 
     def _build_headers(self) -> dict[str, str]:
         headers = {
@@ -585,6 +615,7 @@ class LLMClient:
             payload["thinking"] = {"type": "enabled" if enable_thinking else "disabled"}
             if enable_thinking:
                 payload.setdefault("reasoning_effort", "high")
+                payload.pop("tool_choice", None)
                 for disabled_param in (
                     "temperature",
                     "top_p",
@@ -672,6 +703,10 @@ class LLMClient:
         if extra_body:
             payload.update(extra_body)
         self.provider = self._resolve_provider(resolved_model)
+        if self.provider == "deepseek":
+            payload["messages"] = self._normalize_deepseek_messages(
+                payload.get("messages") or []
+            )
         self._apply_provider_defaults(payload, resolved_model)
         if stream and self.api_format != "ollama":
             stream_options = payload.get("stream_options", {})
@@ -738,6 +773,9 @@ class LLMClient:
             remove_patterns = [r"^\s*data:\s*", r"^\s*\[DONE\]\s*"]
             for pattern in remove_patterns:
                 line = re.sub(pattern, "", line).strip()
+
+            if not line or line.startswith(":"):
+                continue
 
             if line:
                 try:
