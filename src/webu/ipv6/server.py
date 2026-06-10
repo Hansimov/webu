@@ -84,14 +84,26 @@ class IPv6DBServer:
         self.prefix = self.prefixer.prefix
         self.route_updater = IPv6RouteUpdater(verbose=verbose)
 
-        # Update global db prefix
-        self.global_db.set_prefix(self.prefix)
+        # Load existing mirrors
+        self._load_existing_mirrors()
+
+        # Existing pools are only valid for the current delegated prefix.
+        # Reconcile before serving picks so stale addrs are never distributed.
+        self._reconcile_pools_with_current_prefix()
 
         # Background tasks
         self._route_monitor_task: asyncio.Task = None
+        self._addr_init_task: asyncio.Task = None
 
-        # Load existing mirrors
-        self._load_existing_mirrors()
+    async def startup(self):
+        """Start serving quickly and run slow maintenance in background."""
+        self._addr_init_task = asyncio.create_task(self.init_usable_addrs())
+        self.start_background_tasks()
+
+    async def shutdown(self):
+        """Stop background maintenance and persist current pools."""
+        self.stop_background_tasks()
+        self.save()
 
     def _load_existing_mirrors(self):
         """Load existing mirror databases from disk."""
@@ -293,6 +305,36 @@ class IPv6DBServer:
             for mirror in self.mirrors.values():
                 mirror.sync_from_global(global_addrs)
 
+    def _is_addr_in_current_prefix(self, addr: str) -> bool:
+        """Return whether addr belongs to the current routed prefix."""
+        return addr.startswith(f"{self.prefix}:")
+
+    def _pools_match_current_prefix(self) -> bool:
+        saved_prefix = self.global_db.prefix
+        if saved_prefix and saved_prefix != self.prefix:
+            return False
+        return all(
+            self._is_addr_in_current_prefix(addr)
+            for addr in self.global_db.get_all_addrs()
+        )
+
+    def _reconcile_pools_with_current_prefix(self):
+        """Drop persisted pools when the system IPv6 prefix changed."""
+        saved_prefix = self.global_db.prefix
+        if self._pools_match_current_prefix():
+            self.global_db.set_prefix(self.prefix)
+            self._sync_all_mirrors()
+            return
+
+        if self.verbose:
+            saved_str = logstr.file(saved_prefix or "<unset>")
+            current_str = logstr.okay(self.prefix)
+            logger.warn(
+                f"× IPv6 pool prefix mismatch: saved {saved_str}, current {current_str}; flushing pools"
+            )
+        self.global_db.set_prefix(self.prefix)
+        self.flush()
+
     def pick(self, dbname: str = DBNAME) -> str:
         """Pick idle addr from specific dbname's mirror."""
         mirror = self.get_mirror(dbname)
@@ -393,6 +435,7 @@ class IPv6DBServer:
 
         if old_prefix == new_prefix:
             self.route_updater.run(force_restart_ndppd=force_restart_ndppd)
+            self._reconcile_pools_with_current_prefix()
             return
 
         if self.verbose:
@@ -428,6 +471,7 @@ class IPv6DBServer:
     async def init_usable_addrs(self):
         """Initialize usable_num of addrs in global db at startup."""
         try:
+            await asyncio.to_thread(self.update_route)
             exist_count = len(self.global_db.get_all_addrs())
             if exist_count < self.usable_num:
                 remain_count = self.usable_num - exist_count
@@ -463,6 +507,8 @@ class IPv6DBServer:
         """Stop background tasks."""
         if self._route_monitor_task:
             self._route_monitor_task.cancel()
+        if self._addr_init_task:
+            self._addr_init_task.cancel()
 
     def get_global_stats(self) -> dict:
         """Get global database statistics."""
@@ -843,15 +889,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup
-        server.update_route()
-        await server.init_usable_addrs()
-        server.start_background_tasks()
+        await server.startup()
         if verbose:
             logger.okay("✓ IPv6DBServer started")
         yield
         # Shutdown
-        server.stop_background_tasks()
-        server.save()
+        await server.shutdown()
         if verbose:
             logger.okay("✓ IPv6DBServer stopped")
 

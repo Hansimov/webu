@@ -142,7 +142,7 @@ class GlobalIPv6DB:
 
         self.addrs: dict[str, GlobalAddrInfo] = {}
         self.prefix: str = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         self.load()
 
@@ -225,7 +225,7 @@ class MirrorIPv6DB:
         self.verbose = verbose
 
         self.addrs: dict[str, MirrorAddrInfo] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         self.load()
 

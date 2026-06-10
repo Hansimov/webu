@@ -1,7 +1,9 @@
+import json
+
 import requests
 
 from webu.ipv6 import session as ipv6_session_module
-from webu.ipv6.constants import CHECK_URLS
+from webu.ipv6.constants import CHECK_URLS, GLOBAL_DB_FILE, MIRROR_DB_DIR
 from webu.ipv6.server import IPv6DBServer
 
 
@@ -118,3 +120,100 @@ def test_normalize_check_urls_prefers_custom_urls_without_duplicates():
     assert normalized.count(CHECK_URLS[1]) == 1
     for default_url in CHECK_URLS:
         assert default_url in normalized
+
+
+class FakePrefixer:
+    prefix = "2001:db8:2:1"
+    prefix_bits = 64
+    netint = "eth0"
+
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
+
+    def _addr_suffix(self, addr: str) -> str:
+        return addr
+
+
+class FakeRouteUpdater:
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
+
+    def run(self, force_restart_ndppd: bool = False):
+        return None
+
+
+def write_ipv6_pool(db_root, *, prefix: str, addr: str):
+    global_path = db_root / GLOBAL_DB_FILE
+    global_path.write_text(
+        json.dumps(
+            {
+                "prefix": prefix,
+                "addrs": {
+                    addr: {
+                        "addr": addr,
+                        "created_at": "2026-06-10 00:00:00.000",
+                    }
+                },
+            }
+        )
+    )
+
+    mirror_dir = db_root / MIRROR_DB_DIR
+    mirror_dir.mkdir()
+    (mirror_dir / "video_comments.json").write_text(
+        json.dumps(
+            {
+                "dbname": "video_comments",
+                "addrs": {
+                    addr: {
+                        "addr": addr,
+                        "status": "idle",
+                        "last_used_at": None,
+                        "use_count": 0,
+                    }
+                },
+            }
+        )
+    )
+
+
+def test_server_flushes_persisted_pool_when_saved_prefix_changes(
+    monkeypatch, tmp_path
+):
+    old_addr = "2001:db8:1:1::1234"
+    write_ipv6_pool(tmp_path, prefix="2001:db8:1:1", addr=old_addr)
+
+    monkeypatch.setattr("webu.ipv6.server.IPv6Prefixer", FakePrefixer)
+    monkeypatch.setattr("webu.ipv6.server.IPv6RouteUpdater", FakeRouteUpdater)
+
+    server = IPv6DBServer(db_root=tmp_path, usable_num=0)
+
+    assert server.global_db.prefix == FakePrefixer.prefix
+    assert server.global_db.get_all_addrs() == []
+    assert server.get_mirror_stats("video_comments") == {
+        "dbname": "video_comments",
+        "total": 0,
+        "idle": 0,
+        "using": 0,
+        "bad": 0,
+    }
+
+    saved = json.loads((tmp_path / GLOBAL_DB_FILE).read_text())
+    assert saved["prefix"] == FakePrefixer.prefix
+    assert saved["addrs"] == {}
+
+
+def test_server_flushes_persisted_pool_when_addrs_do_not_match_current_prefix(
+    monkeypatch, tmp_path
+):
+    old_addr = "2001:db8:1:1::1234"
+    write_ipv6_pool(tmp_path, prefix=FakePrefixer.prefix, addr=old_addr)
+
+    monkeypatch.setattr("webu.ipv6.server.IPv6Prefixer", FakePrefixer)
+    monkeypatch.setattr("webu.ipv6.server.IPv6RouteUpdater", FakeRouteUpdater)
+
+    server = IPv6DBServer(db_root=tmp_path, usable_num=0)
+
+    assert server.global_db.prefix == FakePrefixer.prefix
+    assert server.global_db.get_all_addrs() == []
+    assert server.get_mirror_stats("video_comments")["total"] == 0
