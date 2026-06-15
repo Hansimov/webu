@@ -73,7 +73,7 @@ def test_google_api_service_profile_resolves_by_type(monkeypatch, tmp_path):
             {
                 "services": [
                     {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
-                    {"type": "hf-space", "api_token": "hf-token"},
+                    {"type": "hf-space", "api_token": "test-hf-token"},
                 ]
             }
         ),
@@ -85,7 +85,7 @@ def test_google_api_service_profile_resolves_by_type(monkeypatch, tmp_path):
                 "accounts": [
                     {
                         "account": "owner",
-                        "hf_token": "hf_demo",
+                        "hf_token": "test-hf-demo",
                         "spaces": [{"name": "demo-space"}],
                     }
                 ]
@@ -101,7 +101,7 @@ def test_google_api_service_profile_resolves_by_type(monkeypatch, tmp_path):
     )
     assert profile["url"] == "https://owner-demo-space.hf.space"
     assert profile["type"] == "hf-space"
-    assert profile["api_token"] == "hf-token"
+    assert profile["api_token"] == "test-hf-token"
 
 
 def test_google_api_service_profile_resolves_current_space_from_space_host(
@@ -114,7 +114,7 @@ def test_google_api_service_profile_resolves_current_space_from_space_host(
             {
                 "services": [
                     {"url": "http://127.0.0.1:18200", "type": "local", "api_token": ""},
-                    {"type": "hf-space", "api_token": "hf-token"},
+                    {"type": "hf-space", "api_token": "test-hf-token"},
                 ]
             }
         ),
@@ -126,7 +126,7 @@ def test_google_api_service_profile_resolves_current_space_from_space_host(
                 "accounts": [
                     {
                         "account": "owner",
-                        "hf_token": "hf_demo",
+                        "hf_token": "test-hf-demo",
                         "spaces": [{"name": "space1"}, {"name": "space3"}],
                     }
                 ]
@@ -144,7 +144,7 @@ def test_google_api_service_profile_resolves_current_space_from_space_host(
 
     assert profile["url"] == "https://owner-space3.hf.space"
     assert profile["type"] == "hf-space"
-    assert profile["api_token"] == "hf-token"
+    assert profile["api_token"] == "test-hf-token"
 
 
 def test_proxy_helpers_read_local_proxy_config(monkeypatch, tmp_path):
@@ -205,7 +205,7 @@ def test_hf_space_settings_reads_token(monkeypatch, tmp_path):
                 "accounts": [
                     {
                         "account": "owner",
-                        "hf_token": "hf_demo",
+                        "hf_token": "test-hf-demo",
                         "spaces": [{"name": "demo"}],
                     }
                 ]
@@ -217,7 +217,7 @@ def test_hf_space_settings_reads_token(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBU_CONFIG_DIR", str(config_dir))
 
     settings = resolve_hf_space_settings("owner/demo")
-    assert settings.hf_token == "hf_demo"
+    assert settings.hf_token == "test-hf-demo"
     assert settings.space_host == "https://owner-demo.hf.space"
 
 
@@ -230,7 +230,7 @@ def test_hf_space_entries_expand_account_centered_config(monkeypatch, tmp_path):
                 "accounts": [
                     {
                         "account": "owner-a",
-                        "hf_token": "hf_demo_a",
+                        "hf_token": "test-hf-demo-a",
                         "spaces": [
                             {"name": "space1", "enabled": True},
                             {"name": "space2", "enabled": False},
@@ -250,7 +250,7 @@ def test_hf_space_entries_expand_account_centered_config(monkeypatch, tmp_path):
         "owner-a/space1",
         "owner-a/space2",
     ]
-    assert entries[0]["hf_token"] == "hf_demo_a"
+    assert entries[0]["hf_token"] == "test-hf-demo-a"
     assert entries[1]["enabled"] is False
 
 
@@ -333,7 +333,7 @@ def test_google_hub_settings_resolve_backends(monkeypatch, tmp_path):
                 "accounts": [
                     {
                         "account": "owner",
-                        "hf_token": "hf_demo",
+                        "hf_token": "test-hf-demo",
                         "spaces": [
                             {
                                 "name": "space1",
@@ -414,12 +414,12 @@ def test_google_hub_settings_auto_names_owner_prefixed_duplicates(
                 "accounts": [
                     {
                         "account": "owner-a",
-                        "hf_token": "hf_demo",
+                        "hf_token": "test-hf-demo",
                         "spaces": [{"name": "space1", "enabled": True}],
                     },
                     {
                         "account": "owner-b",
-                        "hf_token": "hf_demo2",
+                        "hf_token": "test-hf-demo-2",
                         "spaces": [{"name": "space1", "enabled": True}],
                     },
                 ]

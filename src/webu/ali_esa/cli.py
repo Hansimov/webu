@@ -129,6 +129,7 @@ def cmd_site_record_apply(args):
             proxied=args.proxied,
             biz_name=args.biz_name,
             comment=args.comment,
+            priority=args.priority,
             purge_conflicts=args.purge_conflicts,
             retry_attempts=args.retry_attempts,
             retry_delay_seconds=args.retry_delay_seconds,
@@ -447,6 +448,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     site_record_apply_parser.add_argument("--biz-name", default="")
     site_record_apply_parser.add_argument("--comment", default="")
+    site_record_apply_parser.add_argument(
+        "--priority",
+        type=int,
+        default=None,
+        help="MX priority. Ignored for non-MX records.",
+    )
     site_record_apply_parser.add_argument("--purge-conflicts", action="store_true")
     site_record_apply_parser.add_argument("--retry-attempts", type=int, default=3)
     site_record_apply_parser.add_argument(

@@ -1570,6 +1570,7 @@ def site_record_apply(
     proxied: bool | None = False,
     biz_name: str = "",
     comment: str = "",
+    priority: int | None = None,
     purge_conflicts: bool = False,
     retry_attempts: int = DEFAULT_EXPOSURE_RETRY_ATTEMPTS,
     retry_delay_seconds: float = DEFAULT_EXPOSURE_RETRY_DELAY_SECONDS,
@@ -1589,6 +1590,9 @@ def site_record_apply(
         normalized_record_type,
         _require_text(data_value, "data_value"),
     )
+    data_extra: dict[str, Any] | None = None
+    if normalized_record_type == "MX" and priority is not None:
+        data_extra = {"Priority": int(priority)}
     record_result = _ensure_record(
         context["client"],
         site_id=int(context["site_id"]),
@@ -1599,6 +1603,7 @@ def site_record_apply(
         proxied=proxied,
         biz_name=str(biz_name or "").strip() or None,
         comment=str(comment or "").strip() or None,
+        data_extra=data_extra,
         purge_conflicts=purge_conflicts,
         retry_attempts=retry_attempts,
         retry_delay_seconds=retry_delay_seconds,
@@ -1614,6 +1619,7 @@ def site_record_apply(
         "data_value": normalized_data_value,
         "ttl": max(1, int(ttl or 60)),
         "proxied": proxied,
+        "priority": int(priority) if priority is not None else None,
         "record": _serialize_record_result(record_result),
     }
 

@@ -69,6 +69,7 @@ proxy-api = [
 warp-api = ["psutil", "fastapi", "uvicorn", "pydantic"]
 ipv6 = ["netifaces", "fastapi", "uvicorn", "pydantic"]
 ali-esa = ["alibabacloud_esa20240910"]
+ali-email = ["alibabacloud_dm20151123"]
 all = [
     "DrissionPage",
     "pyvirtualdisplay",
@@ -104,6 +105,8 @@ ggdk = "webu.google_docker.cli:main"
 gghb = "webu.google_hub.cli:main"
 cftn = "webu.cf_tunnel.cli:main"
 aesa = "webu.ali_esa.cli:main"
+alem = "webu.ali_email.cli:main"
+cfem = "webu.cf_email.cli:main"
 wdns = "webu.ddns.cli:main"
 wssh = "webu.ssh.cli:main"
 wfrp = "webu.frp.cli:main"

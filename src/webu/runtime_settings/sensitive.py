@@ -26,6 +26,7 @@ SENSITIVE_TOKEN_KEYS = {
     "tunnel_token",
     "aliyun_access_secret",
     "password",
+    "webhook_secret",
 }
 SENSITIVE_SPACE_KEYS = {"space", "account"}
 SENSITIVE_URL_KEYS = {"base_url", "url"}
@@ -45,6 +46,8 @@ SENSITIVE_IDENTIFIER_KEYS = {
     "tunnel_id",
     "verify_code",
     "zone_id",
+    "sender_account_name",
+    "webhook_url",
 }
 SENSITIVE_STRING_LIST_KEYS = {
     "cloudflare_nameservers",
@@ -83,7 +86,7 @@ def _is_placeholder_value(raw_value: Any) -> bool:
     lowered = value.lower()
     if not value:
         return True
-    if lowered in {"0", "example.com", "dev.example.com"}:
+    if lowered in {"0", "example.com", "dev.example.com", "aliyun", "cloudflare"}:
         return True
     if lowered.startswith(("your-", "your_", "dummy-", "fake-", "mock-")):
         return True
