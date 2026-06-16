@@ -49,18 +49,18 @@ def build_verification_email(
     normalized_code = str(code).strip()
     if not normalized_code:
         raise ValueError("code is required")
-    purpose_label = "registration" if purpose == "register" else "password reset"
-    subject = f"{product_name} {purpose_label} code"
+    purpose_label = "注册" if purpose == "register" else "密码重置"
+    subject = f"{product_name} {purpose_label}验证码"
     text = (
-        f"Your {product_name} {purpose_label} verification code is {normalized_code}.\n"
-        f"It expires in {int(ttl_minutes)} minutes.\n"
-        "If you did not request this code, ignore this email."
+        f"你的 {product_name} {purpose_label}验证码是：{normalized_code}。\n"
+        f"验证码将在 {int(ttl_minutes)} 分钟后过期。\n"
+        "如果这不是你本人操作，请忽略这封邮件。"
     )
     html = (
-        f"<p>Your {product_name} {purpose_label} verification code is "
-        f"<strong>{normalized_code}</strong>.</p>"
-        f"<p>It expires in {int(ttl_minutes)} minutes.</p>"
-        "<p>If you did not request this code, ignore this email.</p>"
+        f"<p>你的 {product_name} {purpose_label}验证码是："
+        f"<strong>{normalized_code}</strong>。</p>"
+        f"<p>验证码将在 {int(ttl_minutes)} 分钟后过期。</p>"
+        "<p>如果这不是你本人操作，请忽略这封邮件。</p>"
     )
     return {"subject": subject, "text_body": text, "html_body": html}
 

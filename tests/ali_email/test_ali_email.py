@@ -81,9 +81,24 @@ def test_build_query_mail_address_payload_filters_by_sendtype():
 def test_build_verification_email_contains_code_and_ttl():
     message = build_verification_email(code="123456", ttl_minutes=7)
 
+    assert message["subject"] == "Account 注册验证码"
     assert "123456" in message["text_body"]
-    assert "7 minutes" in message["text_body"]
+    assert "7 分钟" in message["text_body"]
+    assert "如果这不是你本人操作" in message["text_body"]
     assert "<strong>123456</strong>" in message["html_body"]
+
+
+def test_build_password_reset_email_uses_chinese_purpose_label():
+    message = build_verification_email(
+        code="654321",
+        purpose="password_reset",
+        ttl_minutes=2,
+        product_name="example.com",
+    )
+
+    assert message["subject"] == "example.com 密码重置验证码"
+    assert "密码重置验证码" in message["text_body"]
+    assert "2 分钟" in message["html_body"]
 
 
 def test_resolve_runtime_config_falls_back_to_ali_esa(monkeypatch):
