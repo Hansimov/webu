@@ -30,5 +30,5 @@ alem send-code --to user@example.net --code 123456 --dry-run
 - `sender_account_name` 必须是 DirectMail 已创建且状态正常的发信地址。
 - `address_type` 对普通发信地址使用 `1`。
 - `reply_to_address=true` 只适用于 DirectMail 控制台里已验证通过的回信地址。
-- `blbl-account` 使用该模块时，进程环境要包含 `WEBU_PROJECT_ROOT`/`WEBU_CONFIG_DIR`，否则会找不到本地配置。
+- 业务服务使用该模块时，进程环境要包含 `WEBU_PROJECT_ROOT`/`WEBU_CONFIG_DIR`，否则会找不到本地配置。
 - 不要在生产日志打印验证码、邮件全文、AccessKey 或完整收件人列表。

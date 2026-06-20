@@ -9,10 +9,10 @@ register@example.com
   -> user@example.net
   -> Cloudflare Email Routing
   -> Email Worker
-  -> account/internal webhook
+  -> application webhook
 ```
 
-Worker 会把原始 MIME、发件人、收件人和主题 POST 到内部 webhook。内部服务再解析验证码。
+Worker 会把原始 MIME、发件人、收件人和主题 POST 到应用 webhook。接收服务再解析验证码。
 
 Cloudflare Dashboard 的 Email Routing Activity Log 用于查看路由动作、认证状态和投递结果，不是邮箱收件箱；不要依赖 Dashboard 查看邮件正文。需要人工查看正文时，应把邮件转发到一个已验证的目标邮箱，或让 Worker 把原始 MIME 写入受控存储/内部 webhook。
 
@@ -72,9 +72,9 @@ cfem config-init
   "cf_api_token": "",
   "zone_name": "example.net",
   "zone_id": "",
-  "worker_name": "account-email-inbox",
-  "route_local_part": "user1",
-  "webhook_url": "http://127.0.0.1:14567/api/dev/email/inbound",
+  "worker_name": "email-inbox-worker",
+  "route_local_part": "dev-inbox",
+  "webhook_url": "http://127.0.0.1:14567/email/inbound",
   "webhook_secret": "",
   "webhook_required": true,
   "forward_to": "",
@@ -91,10 +91,13 @@ cfem config-init
 注意：`127.0.0.1` 只能用于本机脚本检查。真实 Cloudflare Worker 无法访问你的本机 loopback 地址。端到端测试时需要：
 
 ```bash
+export EMAIL_WEBHOOK_SECRET='replace-with-local-secret'
 cloudflared tunnel --url http://127.0.0.1:14567
 ```
 
-然后把 `webhook_url` 临时改为 `https://<随机子域>.trycloudflare.com/api/dev/email/inbound`，再部署 Worker。
+然后把 `webhook_url` 临时改为 `https://<随机子域>.trycloudflare.com/email/inbound`，再部署 Worker。
+
+接收端应自行控制开发和生产环境的暴露范围。用于调试的 raw MIME webhook 建议默认关闭，只在开发测试需要自动解析入站邮件时临时开启。
 
 ## Worker 和路由
 
@@ -111,7 +114,7 @@ cfem plan
 cfem worker-deploy
 ```
 
-创建或确认 `user1@example.net -> account-email-inbox` 的 Email Routing rule：
+创建或确认 `dev-inbox@example.net -> email-inbox-worker` 的 Email Routing rule：
 
 ```bash
 cfem ensure-worker-rule --dry-run

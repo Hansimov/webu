@@ -15,7 +15,7 @@ from webu.cf_email.schema import CfEmailRuntimeConfig, resolve_runtime_config
 
 
 RAW_EMAIL = """From: sender@example.com
-To: account-dev@example.com
+To: dev-inbox@example.com
 Subject: Your code is 654321
 Message-ID: <message-1@example.com>
 Content-Type: text/plain; charset=utf-8
@@ -30,9 +30,9 @@ def _runtime() -> CfEmailRuntimeConfig:
         cf_api_token="token-1",
         zone_name="example.com",
         zone_id="zone-1",
-        worker_name="account-email-inbox",
-        route_local_part="account-dev",
-        webhook_url="http://127.0.0.1:14567/api/dev/email/inbound",
+        worker_name="email-inbox-worker",
+        route_local_part="dev-inbox",
+        webhook_url="http://127.0.0.1:14567/email/inbound",
         webhook_secret="secret",
         code_regex=r"\b([0-9]{6})\b",
     )
@@ -44,9 +44,9 @@ def _runtime_with_forward() -> CfEmailRuntimeConfig:
         cf_api_token="token-1",
         zone_name="example.com",
         zone_id="zone-1",
-        worker_name="account-email-inbox",
-        route_local_part="account-dev",
-        webhook_url="http://127.0.0.1:14567/api/dev/email/inbound",
+        worker_name="email-inbox-worker",
+        route_local_part="dev-inbox",
+        webhook_url="http://127.0.0.1:14567/email/inbound",
         webhook_secret="secret",
         code_regex=r"\b([0-9]{6})\b",
         forward_to="inbox@example.net",
@@ -57,7 +57,7 @@ def test_parse_email_message_and_extract_code():
     parsed = parse_email_message(RAW_EMAIL)
 
     assert parsed["from"] == "sender@example.com"
-    assert parsed["to"] == "account-dev@example.com"
+    assert parsed["to"] == "dev-inbox@example.com"
     assert parsed["subject"] == "Your code is 654321"
     assert extract_verification_codes(RAW_EMAIL) == ["654321"]
 
@@ -69,14 +69,14 @@ def test_routing_plan_masks_account_id():
             "cf_api_token": "token-1",
             "zone_name": "example.com",
             "zone_id": "zone-1",
-            "route_local_part": "account-dev",
+            "route_local_part": "dev-inbox",
             "worker_name": "worker-1",
             "webhook_url": "http://127.0.0.1:14567/hook",
         }
     )
 
     assert plan["account_id"] == "***"
-    assert plan["route_address"] == "account-dev@example.com"
+    assert plan["route_address"] == "dev-inbox@example.com"
 
 
 def test_resolve_runtime_config_falls_back_to_cf_tunnel(monkeypatch):
@@ -113,7 +113,7 @@ def test_cloudflare_email_client_builds_rule_payload(monkeypatch):
 
     result = client.create_routing_rule(
         zone_id="zone-1",
-        address="account-dev@example.com",
+        address="dev-inbox@example.com",
         action_type="worker",
         action_values=["worker-1"],
     )
@@ -141,13 +141,13 @@ def test_build_email_routing_token_payload_uses_zone_and_account_scopes():
 
     payload = build_email_routing_token_payload(
         groups=groups,
-        name="cfem-apiw-top-email-routing",
+        name="cfem-example-email-routing",
         account_id="acct-1",
         zone_id="zone-1",
         expires_in_days=None,
     )
 
-    assert payload["name"] == "cfem-apiw-top-email-routing"
+    assert payload["name"] == "cfem-example-email-routing"
     assert "expires_on" not in payload
     assert payload["policies"][0]["resources"] == {"com.cloudflare.api.account.acct-1": "*"}
     assert payload["policies"][1]["resources"] == {"com.cloudflare.api.account.zone.zone-1": "*"}
@@ -214,8 +214,8 @@ def test_deploy_worker_uploads_script_and_secret(monkeypatch):
     assert result["script_id"] == "script-1"
     assert result["secret_set"] is True
     assert calls == [
-        ("upload", "acct-1", "account-email-inbox", True),
-        ("secret", "acct-1", "account-email-inbox", "WEBHOOK_SECRET", True),
+        ("upload", "acct-1", "email-inbox-worker", True),
+        ("secret", "acct-1", "email-inbox-worker", "WEBHOOK_SECRET", True),
     ]
 
 
@@ -242,16 +242,16 @@ def test_deploy_worker_sets_forward_destination_as_secret(monkeypatch):
     assert result["deployed"] is True
     assert result["forward_secret_set"] is True
     assert calls == [
-        ("upload", "acct-1", "account-email-inbox", False),
-        ("secret", "acct-1", "account-email-inbox", "WEBHOOK_SECRET", "secret"),
-        ("secret", "acct-1", "account-email-inbox", "FORWARD_TO", "inbox@example.net"),
+        ("upload", "acct-1", "email-inbox-worker", False),
+        ("secret", "acct-1", "email-inbox-worker", "WEBHOOK_SECRET", "secret"),
+        ("secret", "acct-1", "email-inbox-worker", "FORWARD_TO", "inbox@example.net"),
     ]
 
 
 def test_worker_script_contains_webhook_and_secret_binding():
     script = build_worker_script(_runtime())
 
-    assert "http://127.0.0.1:14567/api/dev/email/inbound" in script
+    assert "http://127.0.0.1:14567/email/inbound" in script
     assert "env.WEBHOOK_SECRET" in script
     assert "env.FORWARD_TO" in script
     assert "message.forward(forwardTo)" in script
@@ -266,5 +266,5 @@ def test_config_init_writes_template(tmp_path, monkeypatch):
 
     path = config_dir / "cf_email.json"
     assert path.exists()
-    assert json.loads(path.read_text())["worker_name"] == "account-email-inbox"
+    assert json.loads(path.read_text())["worker_name"] == "email-inbox-worker"
     assert "route_local_part" in output

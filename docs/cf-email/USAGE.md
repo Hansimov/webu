@@ -31,6 +31,7 @@ Worker 脚本会读取 Cloudflare Email Routing 的 `message.raw`，把原始 MI
 运行注意事项：
 
 - 真实收信时，`webhook_url` 必须能被 Cloudflare Worker 访问；本机 `127.0.0.1` 需要通过 cloudflared tunnel 或正式公网入口暴露。
+- 接收端应默认关闭调试 webhook，只在开发测试自动收信解析时临时开启。
 - Cloudflare Dashboard 的 Activity Log 只能用于看路由结果、认证状态和投递信息；需要查看邮件正文时，请使用 `forward_to` 或把 raw MIME 写入受控存储/内部 webhook。
 - 本地接收端建议使用 `14567` 这类大于 `10000` 的端口。
 - 不要在早期测试把 catch-all 规则指向 Worker，优先使用单独地址。
