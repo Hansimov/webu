@@ -38,6 +38,21 @@ def _runtime() -> CfEmailRuntimeConfig:
     )
 
 
+def _runtime_with_forward() -> CfEmailRuntimeConfig:
+    return CfEmailRuntimeConfig(
+        cf_account_id="acct-1",
+        cf_api_token="token-1",
+        zone_name="example.com",
+        zone_id="zone-1",
+        worker_name="account-email-inbox",
+        route_local_part="account-dev",
+        webhook_url="http://127.0.0.1:14567/api/dev/email/inbound",
+        webhook_secret="secret",
+        code_regex=r"\b([0-9]{6})\b",
+        forward_to="inbox@example.net",
+    )
+
+
 def test_parse_email_message_and_extract_code():
     parsed = parse_email_message(RAW_EMAIL)
 
@@ -204,11 +219,42 @@ def test_deploy_worker_uploads_script_and_secret(monkeypatch):
     ]
 
 
+def test_deploy_worker_sets_forward_destination_as_secret(monkeypatch):
+    runtime = _runtime_with_forward()
+    calls = []
+
+    class FakeClient:
+        def __init__(self, token):
+            assert token == "token-1"
+
+        def upload_worker_script(self, *, account_id, script_name, script):
+            calls.append(("upload", account_id, script_name, "inbox@example.net" in script))
+            return {"id": "script-1"}
+
+        def put_worker_secret(self, *, account_id, script_name, name, text):
+            calls.append(("secret", account_id, script_name, name, text))
+            return {"name": name}
+
+    monkeypatch.setattr("webu.cf_email.operations.CloudflareEmailClient", FakeClient)
+
+    result = deploy_worker(runtime=runtime)
+
+    assert result["deployed"] is True
+    assert result["forward_secret_set"] is True
+    assert calls == [
+        ("upload", "acct-1", "account-email-inbox", False),
+        ("secret", "acct-1", "account-email-inbox", "WEBHOOK_SECRET", "secret"),
+        ("secret", "acct-1", "account-email-inbox", "FORWARD_TO", "inbox@example.net"),
+    ]
+
+
 def test_worker_script_contains_webhook_and_secret_binding():
     script = build_worker_script(_runtime())
 
     assert "http://127.0.0.1:14567/api/dev/email/inbound" in script
     assert "env.WEBHOOK_SECRET" in script
+    assert "env.FORWARD_TO" in script
+    assert "message.forward(forwardTo)" in script
     assert "message.raw" in script
 
 

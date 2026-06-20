@@ -14,6 +14,8 @@ register@example.com
 
 Worker 会把原始 MIME、发件人、收件人和主题 POST 到内部 webhook。内部服务再解析验证码。
 
+Cloudflare Dashboard 的 Email Routing Activity Log 用于查看路由动作、认证状态和投递结果，不是邮箱收件箱；不要依赖 Dashboard 查看邮件正文。需要人工查看正文时，应把邮件转发到一个已验证的目标邮箱，或让 Worker 把原始 MIME 写入受控存储/内部 webhook。
+
 ## 开通与域名
 
 1. 域名接入 Cloudflare。
@@ -74,11 +76,17 @@ cfem config-init
   "route_local_part": "user1",
   "webhook_url": "http://127.0.0.1:14567/api/dev/email/inbound",
   "webhook_secret": "",
+  "webhook_required": true,
+  "forward_to": "",
   "code_regex": "\\b([0-9]{6})\\b"
 }
 ```
 
 本地 webhook 端口使用 `14567` 这类大于 `10000` 的端口，避免和前端、后端、dash 等服务混用。`webhook_secret` 用随机值，且只保存在本地配置或安全密钥系统里。
+
+如果还需要把同一封邮件投递到人工邮箱，把 `forward_to` 设置为 Cloudflare Email Routing 中已经验证过的 Destination Address。该值会通过 Worker secret `FORWARD_TO` 写入，不会出现在 Worker 脚本文本中。
+
+`webhook_required` 默认保持 `true`，这样自动化收信链路不可达时会在 Cloudflare Activity Log 中暴露为 Worker 处理失败。如果某个地址主要用于人工转发，而 webhook 只是临时辅助解析，可设为 `false`，避免 webhook 暂时不可达影响人工收信。
 
 注意：`127.0.0.1` 只能用于本机脚本检查。真实 Cloudflare Worker 无法访问你的本机 loopback 地址。端到端测试时需要：
 
@@ -130,5 +138,6 @@ cfem extract-code .playwright/cf-email-inbound.eml
 
 - Cloudflare Email Routing rules and addresses：https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/
 - Cloudflare Email logs / Activity log：https://developers.cloudflare.com/email-service/observability/logs/
+- Cloudflare Email Workers API：https://developers.cloudflare.com/email-service/api/route-emails/email-handler/
 - Cloudflare Worker multipart upload metadata：https://developers.cloudflare.com/workers/configuration/multipart-upload-metadata/
 - Cloudflare Workers secrets：https://developers.cloudflare.com/workers/configuration/secrets/

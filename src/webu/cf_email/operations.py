@@ -114,6 +114,8 @@ def routing_plan(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         "account_id": "***" if runtime.cf_account_id else "",
         "route_address": runtime.route_address,
         "worker_name": runtime.worker_name,
+        "forward_to_configured": bool(runtime.forward_to),
+        "webhook_required": runtime.webhook_required,
         "required_api_endpoints": [
             "GET /zones/{zone_id}/email/routing",
             "POST /zones/{zone_id}/email/routing/dns",
@@ -330,6 +332,8 @@ def deploy_worker(
             "worker_name": runtime.worker_name,
             "webhook_url": runtime.webhook_url,
             "has_webhook_secret": bool(runtime.webhook_secret),
+            "forward_to_configured": bool(runtime.forward_to),
+            "webhook_required": runtime.webhook_required,
         }
     client = CloudflareEmailClient(runtime.cf_api_token)
     upload = client.upload_worker_script(
@@ -345,11 +349,20 @@ def deploy_worker(
             name="WEBHOOK_SECRET",
             text=runtime.webhook_secret,
         )
+    forward_secret = {}
+    if runtime.forward_to:
+        forward_secret = client.put_worker_secret(
+            account_id=runtime.cf_account_id,
+            script_name=runtime.worker_name,
+            name="FORWARD_TO",
+            text=runtime.forward_to,
+        )
     return {
         "deployed": True,
         "worker_name": runtime.worker_name,
         "script_id": str(upload.get("id") or upload.get("etag") or "").strip(),
         "secret_set": bool(secret) if runtime.webhook_secret else False,
+        "forward_secret_set": bool(forward_secret) if runtime.forward_to else False,
     }
 
 
@@ -358,9 +371,13 @@ def build_worker_script(runtime: CfEmailRuntimeConfig | None = None) -> str:
     payload = {
         "webhookUrl": runtime.webhook_url,
         "secretName": "WEBHOOK_SECRET",
+        "webhookRequired": runtime.webhook_required,
     }
     return f"""export default {{
   async email(message, env, ctx) {{
+    const forwardTo = env.FORWARD_TO || "";
+    const webhookRequired = {json.dumps(payload["webhookRequired"])};
+    const forwardPromise = forwardTo ? message.forward(forwardTo) : Promise.resolve();
     const raw = await new Response(message.raw).text();
     const body = {{
       from: message.from,
@@ -369,14 +386,35 @@ def build_worker_script(runtime: CfEmailRuntimeConfig | None = None) -> str:
       rawSize: message.rawSize,
       subject: message.headers.get("subject") || ""
     }};
-    ctx.waitUntil(fetch({json.dumps(payload["webhookUrl"])}, {{
-      method: "POST",
-      headers: {{
-        "content-type": "application/json",
-        "x-webhook-secret": env.{payload["secretName"]}
-      }},
-      body: JSON.stringify(body)
-    }}));
+    let webhookResponse = null;
+    let webhookError = null;
+    try {{
+      webhookResponse = await fetch({json.dumps(payload["webhookUrl"])}, {{
+        method: "POST",
+        headers: {{
+          "content-type": "application/json",
+          "x-webhook-secret": env.{payload["secretName"]} || ""
+        }},
+        body: JSON.stringify(body)
+      }});
+    }} catch (error) {{
+      webhookError = error;
+    }}
+    await forwardPromise;
+    if (webhookError) {{
+      if (!webhookRequired) {{
+        console.error("Webhook failed", webhookError);
+        return;
+      }}
+      throw webhookError;
+    }}
+    if (!webhookResponse.ok) {{
+      if (!webhookRequired) {{
+        console.error(`Webhook failed: ${{webhookResponse.status}}`);
+        return;
+      }}
+      throw new Error(`Webhook failed: ${{webhookResponse.status}}`);
+    }}
   }}
 }};
 """

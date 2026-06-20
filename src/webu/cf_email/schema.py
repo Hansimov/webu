@@ -33,6 +33,8 @@ CF_EMAIL_CONFIG = ConfigSpec(
         "route_local_part": "account-dev",
         "webhook_url": "http://127.0.0.1:14567/api/dev/email/inbound",
         "webhook_secret": "",
+        "webhook_required": True,
+        "forward_to": "",
         "code_regex": "\\b([0-9]{6})\\b",
     },
     schema={
@@ -47,6 +49,8 @@ CF_EMAIL_CONFIG = ConfigSpec(
             "route_local_part": {"type": "string"},
             "webhook_url": {"type": "string"},
             "webhook_secret": {"type": "string"},
+            "webhook_required": {"type": "boolean"},
+            "forward_to": {"type": "string"},
             "code_regex": {"type": "string"},
         },
     },
@@ -64,6 +68,8 @@ class CfEmailRuntimeConfig:
     webhook_url: str
     webhook_secret: str
     code_regex: str
+    forward_to: str = ""
+    webhook_required: bool = True
 
     @property
     def route_address(self) -> str:
@@ -120,4 +126,6 @@ def resolve_runtime_config(payload: dict[str, Any] | None = None) -> CfEmailRunt
         webhook_url=str(payload.get("webhook_url") or "").strip(),
         webhook_secret=str(payload.get("webhook_secret") or "").strip(),
         code_regex=str(payload.get("code_regex") or r"\b([0-9]{6})\b"),
+        forward_to=str(payload.get("forward_to") or "").strip(),
+        webhook_required=bool(payload.get("webhook_required", True)),
     )
